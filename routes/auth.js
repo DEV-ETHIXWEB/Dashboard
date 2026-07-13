@@ -1,0 +1,57 @@
+'use strict';
+
+const express = require('express');
+const bcrypt = require('bcryptjs');
+const rateLimit = require('express-rate-limit');
+const router = express.Router();
+
+const { db } = require('../db/setup');
+const {
+  SESSION_COOKIE, createSession, destroySession, safeUser,
+  requireAuth, audit, PORTAL_PATH,
+} = require('../middleware/auth');
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again in a few minutes.' },
+});
+
+const COOKIE_OPTS = {
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: process.env.NODE_ENV === 'production',
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  path: '/',
+};
+
+router.post('/login', loginLimiter, (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+
+  const user = db.filter('users', (u) => u.email.toLowerCase() === String(email).toLowerCase())[0];
+  if (!user || !bcrypt.compareSync(password, user.password)) {
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
+
+  const session = createSession(user.id);
+  res.cookie(SESSION_COOKIE, session.id, COOKIE_OPTS);
+  audit(user.id, 'login', 'user', user.id);
+
+  res.json({ user: safeUser(user), csrfToken: session.csrfToken, redirect: PORTAL_PATH[user.role] || '/portal.html' });
+});
+
+router.post('/logout', requireAuth, (req, res) => {
+  audit(req.user.id, 'logout', 'user', req.user.id);
+  destroySession(req);
+  res.clearCookie(SESSION_COOKIE, { path: '/' });
+  res.json({ ok: true });
+});
+
+router.get('/me', requireAuth, (req, res) => {
+  res.json({ user: safeUser(req.user), csrfToken: req.session.csrfToken });
+});
+
+module.exports = router;

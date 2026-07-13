@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EthixWeb CRM — Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="ew" data-theme="light" id="ewRoot">
+  <div class="ew-ambient">
+    <img class="ew-watermark-web ew-watermark-web-tl" src="/assets/spiderweb.svg" alt="" aria-hidden="true">
+    <img class="ew-watermark-web ew-watermark-web-br" src="/assets/spiderweb.svg" alt="" aria-hidden="true">
+  </div>
+
+  <div class="ew-shell">
+    <aside class="ew-sidebar">
+      <div class="ew-brand">
+        <div class="ew-brand-mark"><img src="/assets/emblem-mark.png" alt="EthixWeb"></div>
+        <div>
+          <div class="ew-brand-name">EthixWeb CRM</div>
+          <div class="ew-brand-sub">Internal Operations</div>
+        </div>
+      </div>
+
+      <nav class="ew-nav" id="sideNav"></nav>
+
+      <div class="ew-sidebar-footer">
+        <div class="ew-plan-card">
+          <div class="t" id="navUserName">—</div>
+          <div class="d" id="navUserRole">—</div>
+        </div>
+        <button class="ew-logout-btn" id="logoutBtn">Log out</button>
+      </div>
+    </aside>
+
+    <main class="ew-main">
+      <div class="ew-topbar">
+        <div>
+          <div class="ew-eyebrow">Portal</div>
+          <div class="ew-title" id="pageTitle">Dashboard</div>
+        </div>
+        <div class="ew-topbar-right">
+          <div class="ew-toggle">
+            <button id="darkBtn" aria-label="Dark mode">🌙</button>
+            <button id="lightBtn" class="active" aria-label="Light mode">☀️</button>
+          </div>
+          <div class="ew-avatar-btn" id="avatarBtn">--</div>
+        </div>
+      </div>
+
+      <div id="mainContent"><div class="ew-loading">Loading…</div></div>
+    </main>
+  </div>
+
+  <div id="toastHost"></div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

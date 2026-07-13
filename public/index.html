@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EthixWeb CRM — Sign In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .demo-grid{ display:flex; flex-direction:column; gap:8px; margin-bottom:18px; }
+  .demo-btn{
+    display:flex; align-items:center; gap:10px; width:100%; padding:9px 12px; border-radius:11px;
+    border:1px solid var(--border); background:var(--surface); text-align:left; font-family:inherit;
+  }
+  .demo-btn:hover{ background:var(--surface-hover); border-color:var(--border-strong); }
+  .role-pill{ font-size:10px; font-weight:700; padding:3px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.03em; flex-shrink:0; width:74px; text-align:center; }
+  .r-admin{ background:rgba(var(--red-glow),.14); color:var(--red-500); }
+  .r-sales{ background:rgba(255,176,32,.15); color:var(--amber-500); }
+  .r-pm{ background:rgba(143,168,255,.16); color:var(--blue-500); }
+  .r-employee{ background:rgba(53,214,140,.14); color:var(--green-500); }
+  .r-client{ background:var(--track); color:var(--text-dim); }
+  .demo-name{ font-size:12.5px; font-weight:700; }
+  .demo-email{ font-size:11px; color:var(--text-faint); margin-left:auto; }
+  .divider{ display:flex; align-items:center; gap:12px; margin:18px 0; font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.05em; }
+  .divider::before, .divider::after{ content:""; flex:1; height:1px; background:var(--border); }
+</style>
+</head>
+<body>
+<div class="ew" data-theme="light">
+  <div class="ew-ambient">
+    <img class="ew-watermark-web ew-watermark-web-tl" src="/assets/spiderweb.svg" alt="" aria-hidden="true">
+    <img class="ew-watermark-web ew-watermark-web-br" src="/assets/spiderweb.svg" alt="" aria-hidden="true">
+  </div>
+
+  <div class="ew-login-shell">
+    <div class="ew-card ew-login-card">
+      <div class="ew-login-brand">
+        <div class="ew-brand-mark"><img src="/assets/emblem-mark.png" alt="EthixWeb"></div>
+        <div>
+          <div class="ew-brand-name">EthixWeb CRM</div>
+          <div class="ew-brand-sub">Internal Operations</div>
+        </div>
+      </div>
+
+      <div class="ew-login-title serif">Welcome back</div>
+      <div class="ew-login-sub">Sign in to manage projects, tasks, and client tickets.</div>
+
+      <div class="demo-grid" id="demoButtons">
+        <button type="button" class="demo-btn" data-email="admin@ethixweb.local" data-pw="Admin#2026!">
+          <span class="role-pill r-admin">Admin</span><span class="demo-name">Admin User</span><span class="demo-email">admin@ethixweb.local</span>
+        </button>
+        <button type="button" class="demo-btn" data-email="emily.turner@ethixweb.local" data-pw="Sales#2026!">
+          <span class="role-pill r-sales">Sales</span><span class="demo-name">Emily Turner</span><span class="demo-email">emily.turner@ethixweb.local</span>
+        </button>
+        <button type="button" class="demo-btn" data-email="ryan.coleman@ethixweb.local" data-pw="Manager#2026!">
+          <span class="role-pill r-pm">PM</span><span class="demo-name">Ryan Coleman</span><span class="demo-email">ryan.coleman@ethixweb.local</span>
+        </button>
+        <button type="button" class="demo-btn" data-email="jordan.brooks@ethixweb.local" data-pw="Staff#2026!">
+          <span class="role-pill r-employee">Employee</span><span class="demo-name">Jordan Brooks</span><span class="demo-email">jordan.brooks@ethixweb.local</span>
+        </button>
+        <button type="button" class="demo-btn" data-email="client@brightpath-retail.com" data-pw="Client#2026!">
+          <span class="role-pill r-client">Client</span><span class="demo-name">BrightPath Retail Co.</span><span class="demo-email">client@brightpath-retail.com</span>
+        </button>
+      </div>
+
+      <div class="divider">or sign in manually</div>
+
+      <form id="loginForm" novalidate>
+        <div class="ew-field">
+          <label for="email">Email</label>
+          <input id="email" type="email" placeholder="you@ethixweb.local" required>
+        </div>
+        <div class="ew-field">
+          <label for="password">Password</label>
+          <input id="password" type="password" placeholder="••••••••" required>
+        </div>
+        <div id="loginError" class="ew-field-error" style="display:none; margin-bottom:12px;"></div>
+        <button type="submit" id="loginBtn" class="ew-btn ew-btn-primary ew-btn-block">Sign in</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+const form = document.getElementById('loginForm');
+const emailInput = document.getElementById('email');
+const pwInput = document.getElementById('password');
+const errBox = document.getElementById('loginError');
+const btn = document.getElementById('loginBtn');
+
+document.querySelectorAll('.demo-btn').forEach((b) => {
+  b.addEventListener('click', () => {
+    emailInput.value = b.dataset.email;
+    pwInput.value = b.dataset.pw;
+    doLogin();
+  });
+});
+
+form.addEventListener('submit', (e) => { e.preventDefault(); doLogin(); });
+
+async function doLogin() {
+  const email = emailInput.value.trim();
+  const password = pwInput.value;
+  errBox.style.display = 'none';
+  if (!email || !password) { showErr('Please enter email and password.'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+      credentials: 'same-origin',
+    });
+    const d = await r.json();
+    if (!r.ok) { showErr(d.error || 'Login failed'); return; }
+    window.location.href = d.redirect || '/portal.html';
+  } catch (err) {
+    showErr('Cannot connect to the server. Is it running?');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  }
+}
+
+function showErr(msg) {
+  errBox.textContent = msg;
+  errBox.style.display = 'block';
+}
+</script>
+</body>
+</html>
