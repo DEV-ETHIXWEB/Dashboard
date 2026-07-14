@@ -9,20 +9,25 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <style>
-  .demo-grid{ display:flex; flex-direction:column; gap:8px; margin-bottom:18px; }
+  .ew-login-card{ max-width:440px; }
+  .demo-grid{ display:flex; flex-direction:column; gap:6px; margin-bottom:18px; }
   .demo-btn{
-    display:flex; align-items:center; gap:10px; width:100%; padding:9px 12px; border-radius:11px;
+    display:flex; align-items:center; gap:12px; width:100%; padding:10px 12px; border-radius:11px;
     border:1px solid var(--border); background:var(--surface); text-align:left; font-family:inherit;
   }
   .demo-btn:hover{ background:var(--surface-hover); border-color:var(--border-strong); }
-  .role-pill{ font-size:10px; font-weight:700; padding:3px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.03em; flex-shrink:0; width:74px; text-align:center; }
+  .role-pill{
+    font-size:9.5px; font-weight:700; padding:4px 0; border-radius:20px; text-transform:uppercase;
+    letter-spacing:.03em; flex-shrink:0; width:66px; text-align:center; line-height:1;
+  }
   .r-admin{ background:rgba(var(--red-glow),.14); color:var(--red-500); }
   .r-sales{ background:rgba(255,176,32,.15); color:var(--amber-500); }
   .r-pm{ background:rgba(143,168,255,.16); color:var(--blue-500); }
   .r-employee{ background:rgba(53,214,140,.14); color:var(--green-500); }
   .r-client{ background:var(--track); color:var(--text-dim); }
-  .demo-name{ font-size:12.5px; font-weight:700; }
-  .demo-email{ font-size:11px; color:var(--text-faint); margin-left:auto; }
+  .demo-info{ flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+  .demo-name{ font-size:12.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .demo-email{ font-size:10.5px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .divider{ display:flex; align-items:center; gap:12px; margin:18px 0; font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.05em; }
   .divider::before, .divider::after{ content:""; flex:1; height:1px; background:var(--border); }
 </style>
@@ -49,19 +54,24 @@
 
       <div class="demo-grid" id="demoButtons">
         <button type="button" class="demo-btn" data-email="admin@ethixweb.local" data-pw="Admin#2026!">
-          <span class="role-pill r-admin">Admin</span><span class="demo-name">Admin User</span><span class="demo-email">admin@ethixweb.local</span>
+          <span class="role-pill r-admin">Admin</span>
+          <span class="demo-info"><span class="demo-name">Admin User</span><span class="demo-email">admin@ethixweb.local</span></span>
         </button>
         <button type="button" class="demo-btn" data-email="emily.turner@ethixweb.local" data-pw="Sales#2026!">
-          <span class="role-pill r-sales">Sales</span><span class="demo-name">Emily Turner</span><span class="demo-email">emily.turner@ethixweb.local</span>
+          <span class="role-pill r-sales">Sales</span>
+          <span class="demo-info"><span class="demo-name">Emily Turner</span><span class="demo-email">emily.turner@ethixweb.local</span></span>
         </button>
         <button type="button" class="demo-btn" data-email="ryan.coleman@ethixweb.local" data-pw="Manager#2026!">
-          <span class="role-pill r-pm">PM</span><span class="demo-name">Ryan Coleman</span><span class="demo-email">ryan.coleman@ethixweb.local</span>
+          <span class="role-pill r-pm">PM</span>
+          <span class="demo-info"><span class="demo-name">Ryan Coleman</span><span class="demo-email">ryan.coleman@ethixweb.local</span></span>
         </button>
         <button type="button" class="demo-btn" data-email="jordan.brooks@ethixweb.local" data-pw="Staff#2026!">
-          <span class="role-pill r-employee">Employee</span><span class="demo-name">Jordan Brooks</span><span class="demo-email">jordan.brooks@ethixweb.local</span>
+          <span class="role-pill r-employee">Employee</span>
+          <span class="demo-info"><span class="demo-name">Jordan Brooks</span><span class="demo-email">jordan.brooks@ethixweb.local</span></span>
         </button>
         <button type="button" class="demo-btn" data-email="client@brightpath-retail.com" data-pw="Client#2026!">
-          <span class="role-pill r-client">Client</span><span class="demo-name">BrightPath Retail Co.</span><span class="demo-email">client@brightpath-retail.com</span>
+          <span class="role-pill r-client">Client</span>
+          <span class="demo-info"><span class="demo-name">BrightPath Retail Co.</span><span class="demo-email">client@brightpath-retail.com</span></span>
         </button>
       </div>
 
