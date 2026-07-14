@@ -6,7 +6,9 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "dev:pgmem": "node --watch -r ./scripts/dev-with-pgmem.js server.js",
+    "migrate": "node scripts/migrate-local-data.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -16,6 +18,10 @@
     "express-rate-limit": "^7.2.0",
     "helmet": "^7.1.0",
     "multer": "^2.0.0",
+    "pg": "^8.11.5",
     "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "pg-mem": "^3.0.14"
   }
 }

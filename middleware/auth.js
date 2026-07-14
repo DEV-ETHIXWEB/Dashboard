@@ -6,7 +6,7 @@ const { db } = require('../db/setup');
 const SESSION_COOKIE = 'ew_sid';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-function createSession(userId) {
+async function createSession(userId) {
   const session = {
     id: uuidv4(),
     userId,
@@ -14,25 +14,25 @@ function createSession(userId) {
     createdAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS,
   };
-  db.insert('sessions', session);
+  await db.insert('sessions', session);
   return session;
 }
 
-function getSession(req) {
+async function getSession(req) {
   const sid = req.cookies?.[SESSION_COOKIE];
   if (!sid) return null;
-  const session = db.find('sessions', sid);
+  const session = await db.find('sessions', sid);
   if (!session) return null;
-  if (session.expiresAt < Date.now()) {
-    db.remove('sessions', sid);
+  if (Number(session.expiresAt) < Date.now()) {
+    await db.remove('sessions', sid);
     return null;
   }
   return session;
 }
 
-function destroySession(req) {
+async function destroySession(req) {
   const sid = req.cookies?.[SESSION_COOKIE];
-  if (sid) db.remove('sessions', sid);
+  if (sid) await db.remove('sessions', sid);
 }
 
 function safeUser(user) {
@@ -41,14 +41,18 @@ function safeUser(user) {
   return rest;
 }
 
-function requireAuth(req, res, next) {
-  const session = getSession(req);
-  if (!session) return res.status(401).json({ error: 'Not signed in' });
-  const user = db.find('users', session.userId);
-  if (!user) return res.status(401).json({ error: 'Not signed in' });
-  req.session = session;
-  req.user = user;
-  next();
+async function requireAuth(req, res, next) {
+  try {
+    const session = await getSession(req);
+    if (!session) return res.status(401).json({ error: 'Not signed in' });
+    const user = await db.find('users', session.userId);
+    if (!user) return res.status(401).json({ error: 'Not signed in' });
+    req.session = session;
+    req.user = user;
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 function requireRole(...roles) {
@@ -68,15 +72,15 @@ function requireCSRF(req, res, next) {
   next();
 }
 
-function audit(actorId, action, entity, entityId, meta) {
-  db.insert('activity_log', {
+async function audit(actorId, action, entity, entityId, meta) {
+  await db.insert('activity_log', {
     id: uuidv4(), actorId, action, entity, entityId, meta: meta || null, createdAt: new Date().toISOString(),
   });
 }
 
-function notify(userId, message, type) {
+async function notify(userId, message, type) {
   if (!userId) return;
-  db.insert('notifications', {
+  await db.insert('notifications', {
     id: uuidv4(), userId, message, type: type || 'general', read: false, createdAt: new Date().toISOString(),
   });
 }

@@ -1,27 +1,31 @@
 # EthixWeb CRM
 
 An internal CRM for an IT / mobile / web / digital marketing agency — real
-Express backend, file-based database, session auth with CSRF protection,
-and five roles: **Admin, Sales, Project Manager, Employee, Client**.
-
-Same visual system as the EthixWeb OS client portal (dark/light theme, red
-accent, glassmorphism cards, spiderweb + logo watermark) — but this is a
-genuinely separate, full-stack app: real login, a real server, and data
-that persists across restarts (as JSON files on disk).
+Express backend, real Postgres database, session auth with CSRF
+protection, and five roles: **Admin, Sales, Project Manager, Employee,
+Client**. Fully deployable to Vercel with persistent data.
 
 ## Run it locally
 
 Requires [Node.js](https://nodejs.org) 18+.
 
+### Option A — no database needed yet (quick look around)
+
 ```bash
 npm install
-npm start
+npm run dev:pgmem
 ```
 
-Then open **http://localhost:4000**
+This runs the whole app against an in-memory Postgres emulator, seeded with
+demo data. Great for trying it out, but nothing you do persists between
+restarts.
 
-The database seeds itself automatically on first run (see `db/data/*.json`
-after that — delete that folder any time to reset to the demo data).
+### Option B — a real local Postgres
+
+```bash
+npm install
+DATABASE_URL="postgres://user:pass@localhost:5432/ethixweb" npm start
+```
 
 ## Demo logins
 
@@ -35,6 +39,80 @@ The login page has one-click buttons for all five, or use manually:
 | Employee | Jordan Brooks | jordan.brooks@ethixweb.local | `Staff#2026!` |
 | Client | David Shaw (BrightPath Retail Co.) | client@brightpath-retail.com | `Client#2026!` |
 
+## Deploy to Vercel (step by step)
+
+### 1. Create a Postgres database
+
+Easiest path — Vercel's own integration:
+
+1. Go to your project on [vercel.com](https://vercel.com), open the **Storage** tab
+2. Click **Create Database** → choose **Postgres** (powered by Neon)
+3. Once created, Vercel automatically adds a `DATABASE_URL` environment
+   variable to your project — you don't need to copy/paste anything
+
+(Alternative: create a free database directly at [neon.tech](https://neon.tech)
+or [supabase.com](https://supabase.com) and add the connection string as
+`DATABASE_URL` yourself under Project Settings → Environment Variables.)
+
+### 2. Migrate your local data into it
+
+If you've been running this locally and have real data in `db/data/*.json`
+that you want to keep, copy the connection string from Vercel's Storage tab
+(or Neon/Supabase dashboard) and run, from your own machine:
+
+```bash
+DATABASE_URL="postgres://<paste-the-real-connection-string-here>" npm run migrate
+```
+
+You'll see output like:
+
+```
+- users: migrated 5 / 5 rows
+- projects: migrated 3 / 3 rows
+- tasks: migrated 4 / 4 rows
+...
+Done. Migrated 15 total rows into Postgres.
+```
+
+Your local `db/data/*.json` files are only read, never modified or deleted
+— safe to run once and re-check anytime.
+
+**If you don't have local data yet**, skip this step — the app seeds itself
+with demo data automatically the first time it runs against an empty
+database.
+
+### 3. Deploy
+
+```bash
+npm install -g vercel   # skip if already installed
+vercel login
+vercel --prod
+```
+
+Accept the defaults when asked (it auto-detects everything from
+`vercel.json`). You'll get a live URL like
+`https://ethixweb-crm.vercel.app`.
+
+### 4. Verify
+
+Open the URL, sign in with one of the demo buttons (or your migrated
+account), and confirm your data is there.
+
+## How the Vercel setup works
+
+- `vercel.json` routes `/api/*` requests to a single serverless function
+  (`api/index.js`, which just re-exports the same Express app from
+  `server.js`) and serves everything else as static files straight from
+  `public/`.
+- The database connection (`db/setup.js`) uses the standard `pg` driver
+  against `DATABASE_URL` — this works identically whether that's Vercel
+  Postgres, Neon, Supabase, or a plain self-hosted Postgres box.
+- Sessions are stored in the database too (a `sessions` table), not in
+  memory or on disk — so logins work correctly no matter which serverless
+  instance handles each request, which is what actually makes this
+  deployable to Vercel at all (a flat-file/in-memory approach would not
+  survive serverless's stateless-between-requests model).
+
 ## What each role can actually do
 
 - **Admin** — everything: manage all users, projects, tasks, tickets.
@@ -43,63 +121,58 @@ The login page has one-click buttons for all five, or use manually:
 - **Employee** — sees only tasks/tickets assigned to them, can update their own status only.
 - **Client** — sees only their own projects (read-only progress) and their own tickets; can create new tickets.
 
-This is enforced **on the server**, not just hidden in the UI — every route
-checks `req.user.role` before returning or mutating data (verified with
-curl during development: an Employee gets a real 403 trying to create a
-project or delete a user, a Client only ever sees their own projects, etc).
+This is enforced **on the server**, verified directly with real HTTP
+requests during development: an Employee gets a real 403 trying to create
+a project or delete a user, a Client's project list only ever contains
+their own projects, etc.
 
 ## What's real
 
 - Real password hashing (bcryptjs), real signed session cookies, real CSRF
-  token required on every mutating request (verified: a POST without the
-  `X-CSRF-Token` header gets rejected with 403).
+  token required on every mutating request.
 - Real cascading delete: deleting a project deletes its tasks too.
 - Real notifications: creating a ticket notifies Admin + PMs; changing a
   task/ticket status notifies the relevant person.
-- Data persists in `db/data/*.json` across server restarts — this is a
-  genuine (if simple) database, not in-memory mock data.
+- Real, persistent Postgres storage — verified with an actual migration
+  test (seeded a user with a real bcrypt password hash in the old
+  flat-file format, ran the migration script, then logged in as that exact
+  user through the real HTTP API against the migrated database).
 
-## Honest limitations (by design, for a demo-weight project)
+## Honest limitations (by design, for a project this size)
 
-- **Storage is flat JSON files, not a real database** (SQLite/Postgres/etc).
-  This avoids native-module build issues entirely (no `better-sqlite3`, no
-  `bcrypt` — both need a C++ compiler; this uses pure-JS `bcryptjs`
-  instead), so `npm install` works everywhere without a build toolchain.
-  For production, swap `db/setup.js`'s functions for real SQL queries —
-  every route only talks to `db.find/insert/update/remove`, so the
-  swap is contained to one file.
 - **No file uploads yet** (ticket attachments, project documents) — `multer`
   is installed and ready, just not wired to a route yet.
 - **No email sending** — notifications are in-app only.
 - Rate limiting is applied to `/api/auth/login` (20 attempts / 15 min) but
   not yet to other endpoints.
+- The DB layer fetches a full table then filters in JS for most list
+  queries, rather than hand-written SQL `WHERE` clauses per route. Totally
+  fine at this data scale (dozens to low thousands of rows); if this ever
+  needs to scale to a large multi-tenant dataset, that's the first thing
+  to optimize.
 
 ## Project structure
 
 ```
 ethixweb-crm/
-├── server.js                Express app entrypoint
+├── server.js                Express app (exports `app`; only calls .listen() when run directly)
+├── api/
+│   └── index.js              Vercel serverless entrypoint (just re-exports server.js)
+├── vercel.json               Routes /api/* to the function, everything else to public/
 ├── db/
-│   ├── setup.js              JSON-file database engine + seed data
-│   └── data/                 Generated on first run (gitignored)
+│   ├── setup.js               Postgres layer (async), schema creation, seed data
+│   └── data/                  Local JSON "database" for npm start without a real DB (gitignored)
+├── scripts/
+│   ├── migrate-local-data.js  One-time: copies db/data/*.json into Postgres
+│   └── dev-with-pgmem.js      Dev convenience: run against an in-memory Postgres, no setup needed
 ├── middleware/
-│   └── auth.js               Sessions, CSRF, role guards, audit log, notifications
+│   └── auth.js                Sessions, CSRF, role guards, audit log, notifications
 ├── routes/
 │   ├── auth.js, users.js, projects.js, tasks.js, tickets.js, notifications.js
 └── public/
-    ├── index.html             Login page
-    ├── portal.html            App shell (sidebar/topbar/content mount)
-    ├── app.js                 All frontend logic — views, modals, API calls
-    ├── styles.css             Design system (shared with EthixWeb OS)
-    └── assets/                Logo + spiderweb watermark
+    ├── index.html              Login page
+    ├── portal.html             App shell (sidebar/topbar/content mount)
+    ├── app.js                  All frontend logic — views, modals, API calls
+    ├── styles.css              Design system (shared with EthixWeb OS)
+    └── assets/                 Logo + spiderweb watermark
 ```
-
-## Deploying this (important)
-
-This needs a **Node server host**, not a static host like the plain Vercel
-static hosting used for the EthixWeb OS portal — e.g. Render, Railway,
-Fly.io, or a VPS. Vercel *can* run this via its Node.js serverless
-functions, but the flat-file database won't persist between serverless
-invocations there (each request may hit a different, ephemeral instance) —
-so for Vercel specifically, swap in a real hosted database first (see
-above).

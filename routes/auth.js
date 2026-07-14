@@ -27,27 +27,36 @@ const COOKIE_OPTS = {
   path: '/',
 };
 
-router.post('/login', loginLimiter, (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+router.post('/login', loginLimiter, async (req, res, next) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
 
-  const user = db.filter('users', (u) => u.email.toLowerCase() === String(email).toLowerCase())[0];
-  if (!user || !bcrypt.compareSync(password, user.password)) {
-    return res.status(401).json({ error: 'Invalid email or password' });
+    const users = await db.filter('users', (u) => u.email.toLowerCase() === String(email).toLowerCase());
+    const user = users[0];
+    if (!user || !bcrypt.compareSync(password, user.password)) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const session = await createSession(user.id);
+    res.cookie(SESSION_COOKIE, session.id, COOKIE_OPTS);
+    await audit(user.id, 'login', 'user', user.id);
+
+    res.json({ user: safeUser(user), csrfToken: session.csrfToken, redirect: PORTAL_PATH[user.role] || '/portal.html' });
+  } catch (err) {
+    next(err);
   }
-
-  const session = createSession(user.id);
-  res.cookie(SESSION_COOKIE, session.id, COOKIE_OPTS);
-  audit(user.id, 'login', 'user', user.id);
-
-  res.json({ user: safeUser(user), csrfToken: session.csrfToken, redirect: PORTAL_PATH[user.role] || '/portal.html' });
 });
 
-router.post('/logout', requireAuth, (req, res) => {
-  audit(req.user.id, 'logout', 'user', req.user.id);
-  destroySession(req);
-  res.clearCookie(SESSION_COOKIE, { path: '/' });
-  res.json({ ok: true });
+router.post('/logout', requireAuth, async (req, res, next) => {
+  try {
+    await audit(req.user.id, 'logout', 'user', req.user.id);
+    await destroySession(req);
+    res.clearCookie(SESSION_COOKIE, { path: '/' });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.get('/me', requireAuth, (req, res) => {
