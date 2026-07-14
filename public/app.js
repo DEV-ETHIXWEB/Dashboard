@@ -76,7 +76,7 @@ function openModal(html) {
   overlay.id = 'activeModalOverlay';
   overlay.innerHTML = `<div class="ew-modal" onclick="event.stopPropagation()">${html}</div>`;
   overlay.addEventListener('click', closeModal);
-  document.body.appendChild(overlay);
+  document.getElementById('ewRoot').appendChild(overlay);
 }
 function closeModal() {
   document.getElementById('activeModalOverlay')?.remove();
