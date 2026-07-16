@@ -48,6 +48,12 @@
             <button id="darkBtn" aria-label="Dark mode">🌙</button>
             <button id="lightBtn" class="active" aria-label="Light mode">☀️</button>
           </div>
+          <div class="ew-bell-wrap" id="bellWrap">
+            <button class="ew-bell-btn" id="bellBtn" aria-label="Notifications">
+              🔔<span class="ew-bell-badge ew-hidden" id="bellBadge">0</span>
+            </button>
+            <div class="ew-bell-panel ew-hidden" id="bellPanel"></div>
+          </div>
           <div class="ew-avatar-btn" id="avatarBtn">--</div>
         </div>
       </div>
@@ -60,5 +66,6 @@
 </div>
 
 <script src="/app.js"></script>
+<script src="/accessibility.js"></script>
 </body>
 </html>

@@ -16,6 +16,11 @@ app.use(helmet({
 }));
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
+
+// Stripe webhook needs the raw, untouched request body to verify its
+// signature -- must be mounted before express.json() below.
+app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), require('./routes/billing').webhookHandler);
+
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -28,12 +33,17 @@ app.use((req, res, next) => {
   dbReadyPromise.then(() => next()).catch(next);
 });
 
+app.use('/api/config', require('./routes/config'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/projects', require('./routes/projects'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/domains', require('./routes/domains'));
+app.use('/api/reports', require('./routes/reports'));
+app.use('/api/budget', require('./routes/budget'));
+app.use('/api/billing', require('./routes/billing'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 

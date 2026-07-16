@@ -4,6 +4,7 @@
 let CURRENT_USER = null;
 let CSRF_TOKEN = null;
 let ACTIVE_VIEW = 'Dashboard';
+let APP_CONFIG = {};
 let CACHE = { users: [], projects: [], tasks: [], tickets: [], notifications: [] };
 
 /* ============ API helper ============ */
@@ -34,16 +35,20 @@ const ICONS = {
   Tickets: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="3.5"/></svg>',
   Team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   Notifications: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
+  Domains: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M2.5 12h19M12 2.5c2.6 2.7 4 6 4 9.5s-1.4 6.8-4 9.5c-2.6-2.7-4-6-4-9.5s1.4-6.8 4-9.5z"/></svg>',
+  Reports: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>',
+  Budget: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2.2"/><path d="M2 10h20"/><path d="M6 15h4"/></svg>',
+  Billing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="15" rx="2.2"/><path d="M2 9.5h20"/></svg>',
   Settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
 };
 
 const ROLE_LABEL = { admin: 'Admin', sales: 'Sales', project_manager: 'Project Manager', employee: 'Employee', client: 'Client' };
 const ROLE_NAV = {
-  admin: ['Dashboard', 'Projects', 'Tasks', 'Tickets', 'Team', 'Notifications', 'Settings'],
-  sales: ['Dashboard', 'Projects', 'Tickets', 'Notifications', 'Settings'],
-  project_manager: ['Dashboard', 'Projects', 'Tasks', 'Tickets', 'Notifications', 'Settings'],
-  employee: ['Dashboard', 'Tasks', 'Tickets', 'Notifications', 'Settings'],
-  client: ['Dashboard', 'Projects', 'Tickets', 'Notifications', 'Settings'],
+  admin: ['Dashboard', 'Projects', 'Tasks', 'Tickets', 'Domains', 'Reports', 'Budget', 'Billing', 'Team', 'Settings'],
+  sales: ['Dashboard', 'Projects', 'Tickets', 'Domains', 'Reports', 'Settings'],
+  project_manager: ['Dashboard', 'Projects', 'Tasks', 'Tickets', 'Domains', 'Reports', 'Budget', 'Settings'],
+  employee: ['Dashboard', 'Tasks', 'Tickets', 'Settings'],
+  client: ['Dashboard', 'Projects', 'Tickets', 'Domains', 'Reports', 'Budget', 'Billing', 'Settings'],
 };
 const STATUS_PILL = {
   'On Track': 'pill-ontrack', 'In Review': 'pill-review', 'At Risk': 'pill-atrisk',
@@ -110,12 +115,15 @@ async function bootstrap() {
     return;
   }
 
+  try { APP_CONFIG = await api('GET', '/config'); } catch { APP_CONFIG = {}; }
+
   document.getElementById('navUserName').textContent = CURRENT_USER.name;
   document.getElementById('navUserRole').textContent = ROLE_LABEL[CURRENT_USER.role] || CURRENT_USER.role;
   document.getElementById('avatarBtn').textContent = initials(CURRENT_USER.name);
 
   renderNav();
   bindTopbar();
+  initBell();
   await navigateTo('Dashboard');
 }
 
@@ -141,6 +149,102 @@ function bindTopbar() {
   document.getElementById('lightBtn').addEventListener('click', () => setTheme('light'));
 }
 
+/* ============ Notification bell (topbar, replaces the old Notifications tab) ============ */
+async function initBell() {
+  const btn = document.getElementById('bellBtn');
+  const panel = document.getElementById('bellPanel');
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const isHidden = panel.classList.contains('ew-hidden');
+    if (isHidden) { await refreshBell(true); panel.classList.remove('ew-hidden'); }
+    else panel.classList.add('ew-hidden');
+  });
+  document.addEventListener('click', (e) => {
+    if (!panel.contains(e.target) && e.target !== btn) panel.classList.add('ew-hidden');
+  });
+  await refreshBell(false);
+}
+
+async function refreshBell(openPanel) {
+  const { notifications } = await api('GET', '/notifications');
+  CACHE.notifications = notifications;
+  const unread = notifications.filter((n) => !n.read).length;
+
+  const badge = document.getElementById('bellBadge');
+  badge.textContent = unread > 9 ? '9+' : String(unread);
+  badge.classList.toggle('ew-hidden', unread === 0);
+
+  const panel = document.getElementById('bellPanel');
+  panel.innerHTML = `
+    <div class="ew-bell-panel-head">
+      <span class="t">Notifications</span>
+      <button id="bellMarkAll" ${unread === 0 ? 'disabled' : ''}>Mark all read</button>
+    </div>
+    ${notifications.length === 0
+      ? '<div class="ew-bell-empty">No notifications yet.</div>'
+      : notifications.slice(0, 12).map((n) => `
+        <div class="ew-bell-item">
+          <div style="flex:1">
+            <div class="txt">${escapeHtml(n.message)}</div>
+            <div class="time">${timeAgo(n.createdAt)}</div>
+          </div>
+          ${!n.read ? `<span class="dot"></span>` : ''}
+        </div>
+      `).join('')}
+  `;
+  document.getElementById('bellMarkAll')?.addEventListener('click', async () => {
+    await api('POST', '/notifications/read-all');
+    await refreshBell(true);
+  });
+
+  if (openPanel !== undefined) { /* caller controls visibility */ }
+}
+
+function timeAgo(iso) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/* ============ Card/List view toggle (shared by Projects, Tasks, Tickets, Domains) ============ */
+function getViewMode(key) {
+  try { return localStorage.getItem(`ew_view_${key}`) || 'list'; } catch { return 'list'; }
+}
+function setViewMode(key, mode) {
+  try { localStorage.setItem(`ew_view_${key}`, mode); } catch { /* ignore */ }
+}
+function viewToggleHtml(key) {
+  const mode = getViewMode(key);
+  return `
+    <div class="ew-view-toggle" data-view-key="${key}">
+      <button type="button" data-mode="list" class="${mode === 'list' ? 'active' : ''}" aria-label="List view">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+      </button>
+      <button type="button" data-mode="card" class="${mode === 'card' ? 'active' : ''}" aria-label="Card view">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/><rect x="14" y="14" width="7" height="7" rx="1.2"/></svg>
+      </button>
+    </div>
+  `;
+}
+function bindViewToggle(key, onChange) {
+  document.querySelectorAll(`[data-view-key="${key}"] button`).forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (getViewMode(key) === btn.dataset.mode) return;
+      setViewMode(key, btn.dataset.mode);
+      onChange();
+    });
+  });
+}
+
+/* ============ Tooltip helper ============ */
+function tooltipHtml(text) {
+  return `<span class="ew-tooltip-wrap"><span class="ew-tooltip-icon">?</span><span class="ew-tooltip-bubble">${escapeHtml(text)}</span></span>`;
+}
+
 function setTheme(theme) {
   document.getElementById('ewRoot').setAttribute('data-theme', theme);
   document.documentElement.setAttribute('data-theme', theme);
@@ -161,8 +265,11 @@ async function navigateTo(view) {
     else if (view === 'Projects') await renderProjects(main);
     else if (view === 'Tasks') await renderTasks(main);
     else if (view === 'Tickets') await renderTickets(main);
+    else if (view === 'Domains') await renderDomains(main);
+    else if (view === 'Reports') await renderReports(main);
+    else if (view === 'Budget') await renderBudget(main);
+    else if (view === 'Billing') await renderBilling(main);
     else if (view === 'Team') await renderTeam(main);
-    else if (view === 'Notifications') await renderNotifications(main);
     else if (view === 'Settings') await renderSettings(main);
   } catch (err) {
     main.innerHTML = `<div class="ew-card"><div class="ew-inline-error">${escapeHtml(err.message)}</div></div>`;
@@ -226,18 +333,25 @@ async function renderProjects(main) {
   CACHE.projects = projects; CACHE.users = users;
   const canCreate = ['admin', 'sales', 'project_manager'].includes(CURRENT_USER.role);
   const canDelete = CURRENT_USER.role === 'admin';
+  const mode = getViewMode('projects');
 
   main.innerHTML = `
     <div class="ew-page-head">
       <div><h2>Projects</h2><p>Every active engagement across your account.</p></div>
-      ${canCreate ? `<button class="ew-btn ew-btn-primary" id="addProjectBtn">+ Add Project</button>` : ''}
+      <div style="display:flex;gap:10px;align-items:center">
+        ${viewToggleHtml('projects')}
+        ${canCreate ? `<button class="ew-btn ew-btn-primary" id="addProjectBtn">+ Add Project</button>` : ''}
+      </div>
     </div>
-    <section class="ew-card">
-      ${projects.length === 0 ? emptyState('No projects yet.') : projects.map((p) => projectDetailRow(p, canDelete)).join('')}
-    </section>
+    ${projects.length === 0 ? emptyState('No projects yet.') : (
+      mode === 'card'
+        ? `<div class="ew-card-grid">${projects.map((p) => projectCardHtml(p, canDelete)).join('')}</div>`
+        : `<section class="ew-card">${projects.map((p) => projectDetailRow(p, canDelete)).join('')}</section>`
+    )}
   `;
 
   if (canCreate) document.getElementById('addProjectBtn').addEventListener('click', () => openProjectModal());
+  bindViewToggle('projects', () => renderProjects(main));
   projects.forEach((p) => {
     document.getElementById(`proj-toggle-${p.id}`)?.addEventListener('click', () => {
       document.getElementById(`proj-detail-${p.id}`)?.classList.toggle('ew-hidden');
@@ -255,6 +369,29 @@ async function renderProjects(main) {
       });
     });
   });
+}
+
+function projectCardHtml(p, canDelete) {
+  const pct = p.progress?.pct ?? 0;
+  const client = CACHE.users.find((u) => u.id === p.clientId);
+  const canEdit = ['admin', 'sales', 'project_manager'].includes(CURRENT_USER.role);
+  return `
+    <div class="ew-item-card">
+      <div class="ew-item-card-head">
+        <div><div class="name">${escapeHtml(p.name)}</div><div class="sub">${escapeHtml(p.type)} · ${client ? escapeHtml(client.company || client.name) : '—'}</div></div>
+        <span class="ew-pill ${STATUS_PILL[p.status] || 'pill-todo'}">${escapeHtml(p.status)}</span>
+      </div>
+      <div class="ew-progress-track"><div class="ew-progress-fill" style="width:${pct}%"></div></div>
+      <div class="ew-card-sub" style="margin-top:8px">${p.progress.complete} of ${p.progress.total} tasks complete</div>
+      <div class="ew-item-card-foot">
+        <span class="ew-project-pct">${pct}%</span>
+        <div style="display:flex;gap:8px">
+          ${canEdit ? `<button class="ew-btn ew-btn-ghost ew-btn-sm" id="proj-edit-${p.id}">Edit</button>` : ''}
+          ${canDelete ? `<button class="ew-btn ew-btn-danger ew-btn-sm" id="proj-delete-${p.id}">Delete</button>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function projectDetailRow(p, canDelete) {
@@ -345,23 +482,28 @@ async function renderTasks(main) {
   const [{ tasks }, { projects }, { users }] = await Promise.all([api('GET', '/tasks'), api('GET', '/projects'), api('GET', '/users')]);
   CACHE.tasks = tasks; CACHE.projects = projects; CACHE.users = users;
   const canManage = ['admin', 'project_manager'].includes(CURRENT_USER.role);
+  const mode = getViewMode('tasks');
 
   main.innerHTML = `
     <div class="ew-page-head">
       <div><h2>Tasks</h2><p>Work items linked to your active projects.</p></div>
-      ${canManage ? `<button class="ew-btn ew-btn-primary" id="addTaskBtn">+ Add Task</button>` : ''}
+      <div style="display:flex;gap:10px;align-items:center">
+        ${viewToggleHtml('tasks')}
+        ${canManage ? `<button class="ew-btn ew-btn-primary" id="addTaskBtn">+ Add Task</button>` : ''}
+      </div>
     </div>
-    <section class="ew-card">
-      ${tasks.length === 0 ? emptyState('No tasks yet.') : `
-        <table class="ew-table">
-          <thead><tr><th>Task</th><th>Project</th><th>Assignee</th><th>Priority</th><th>Status</th><th>Due</th>${canManage ? '<th></th>' : ''}</tr></thead>
-          <tbody>${tasks.map((t) => taskRowHtml(t, canManage)).join('')}</tbody>
-        </table>
-      `}
-    </section>
+    ${tasks.length === 0 ? emptyState('No tasks yet.') : (
+      mode === 'card'
+        ? `<div class="ew-card-grid">${tasks.map((t) => taskCardHtml(t, canManage)).join('')}</div>`
+        : `<section class="ew-card"><table class="ew-table">
+            <thead><tr><th>Task</th><th>Project</th><th>Assignee</th><th>Priority</th><th>Status</th><th>Due</th>${canManage ? '<th></th>' : ''}</tr></thead>
+            <tbody>${tasks.map((t) => taskRowHtml(t, canManage)).join('')}</tbody>
+          </table></section>`
+    )}
   `;
 
   if (canManage) document.getElementById('addTaskBtn').addEventListener('click', () => openTaskModal());
+  bindViewToggle('tasks', () => renderTasks(main));
   tasks.forEach((t) => {
     document.getElementById(`task-status-${t.id}`)?.addEventListener('change', async (e) => {
       await api('PUT', `/tasks/${t.id}`, { status: e.target.value });
@@ -377,6 +519,24 @@ async function renderTasks(main) {
       });
     });
   });
+}
+
+function taskCardHtml(t, canManage) {
+  const project = CACHE.projects.find((p) => p.id === t.projectId);
+  const assignee = CACHE.users.find((u) => u.id === t.assigneeId);
+  return `
+    <div class="ew-item-card">
+      <div class="ew-item-card-head">
+        <div><div class="name">${escapeHtml(t.name)}</div><div class="sub">${project ? escapeHtml(project.name) : '—'}</div></div>
+        <span class="ew-pill ${PRIORITY_PILL[t.priority] || 'pill-todo'}">${escapeHtml(t.priority)}</span>
+      </div>
+      ${assignee ? `<div class="ew-assignee"><div class="ew-assignee-avatar" style="background:#ff4438">${initials(assignee.name)}</div>${escapeHtml(assignee.name)}</div>` : '<span class="ew-card-sub">Unassigned</span>'}
+      <div class="ew-item-card-foot">
+        <span class="ew-pill ${STATUS_PILL[t.status] || 'pill-todo'}">${escapeHtml(t.status)}</span>
+        ${canManage ? `<div style="display:flex;gap:8px"><button class="ew-btn ew-btn-ghost ew-btn-sm" id="task-edit-${t.id}">Edit</button><button class="ew-btn ew-btn-danger ew-btn-sm" id="task-delete-${t.id}">Delete</button></div>` : ''}
+      </div>
+    </div>
+  `;
 }
 
 function taskRowHtml(t, canManage) {
@@ -458,19 +618,25 @@ async function renderTickets(main) {
   const [{ tickets }, { users }] = await Promise.all([api('GET', '/tickets'), api('GET', '/users')]);
   CACHE.tickets = tickets; CACHE.users = users;
   const canAssign = ['admin', 'project_manager'].includes(CURRENT_USER.role);
-  const canCreate = true; // everyone can raise a ticket
+  const mode = getViewMode('tickets');
 
   main.innerHTML = `
     <div class="ew-page-head">
       <div><h2>Support Tickets</h2><p>Client requests and internal follow-ups.</p></div>
-      ${canCreate ? `<button class="ew-btn ew-btn-primary" id="addTicketBtn">+ Create Ticket</button>` : ''}
+      <div style="display:flex;gap:10px;align-items:center">
+        ${viewToggleHtml('tickets')}
+        <button class="ew-btn ew-btn-primary" id="addTicketBtn">+ Create Ticket</button>
+      </div>
     </div>
-    <section class="ew-card">
-      ${tickets.length === 0 ? emptyState('No tickets yet.') : tickets.map((t) => ticketRowHtml(t, canAssign)).join('')}
-    </section>
+    ${tickets.length === 0 ? emptyState('No tickets yet.') : (
+      mode === 'card'
+        ? `<div class="ew-card-grid">${tickets.map((t) => ticketCardHtml(t, canAssign)).join('')}</div>`
+        : `<section class="ew-card">${tickets.map((t) => ticketRowHtml(t, canAssign)).join('')}</section>`
+    )}
   `;
 
   document.getElementById('addTicketBtn')?.addEventListener('click', () => openTicketModal());
+  bindViewToggle('tickets', () => renderTickets(main));
   tickets.forEach((t) => {
     document.getElementById(`ticket-status-${t.id}`)?.addEventListener('change', async (e) => {
       await api('PUT', `/tickets/${t.id}`, { status: e.target.value });
@@ -483,6 +649,25 @@ async function renderTickets(main) {
       navigateTo('Tickets');
     });
   });
+}
+
+function ticketCardHtml(t, canAssign) {
+  const client = CACHE.users.find((u) => u.id === t.clientId);
+  const assignee = CACHE.users.find((u) => u.id === t.assigneeId);
+  const canEditStatus = canAssign || (CURRENT_USER.role === 'employee' && t.assigneeId === CURRENT_USER.id);
+  return `
+    <div class="ew-item-card">
+      <div class="ew-item-card-head">
+        <div><div class="name">${escapeHtml(t.id.replace('ticket-', '#'))} · ${escapeHtml(t.subject)}</div><div class="sub">${escapeHtml(t.category)} · ${client ? escapeHtml(client.company || client.name) : '—'}</div></div>
+      </div>
+      ${assignee ? `<div class="ew-card-sub">Assigned to ${escapeHtml(assignee.name)}</div>` : `<div class="ew-card-sub">Unassigned</div>`}
+      <div class="ew-item-card-foot">
+        ${canEditStatus
+          ? `<select class="ew-status-select" id="ticket-status-${t.id}">${['Open', 'In Progress', 'Resolved'].map((s) => `<option value="${s}" ${t.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select>`
+          : `<span class="ew-pill ${STATUS_PILL[t.status] || 'pill-todo'}">${escapeHtml(t.status)}</span>`}
+      </div>
+    </div>
+  `;
 }
 
 function ticketRowHtml(t, canAssign) {
@@ -624,35 +809,378 @@ function openUserModal(user) {
 }
 
 /* ============ Notifications ============ */
-async function renderNotifications(main) {
-  const { notifications } = await api('GET', '/notifications');
-  CACHE.notifications = notifications;
-  const unread = notifications.filter((n) => !n.read).length;
+/* ============ Domains & Website Info ============ */
+const PLATFORM_OPTIONS = ['WordPress', 'Shopify', 'Webflow', 'Squarespace', 'Wix', 'Custom Code', 'Other'];
+
+async function renderDomains(main) {
+  const [{ domains }, { users }] = await Promise.all([api('GET', '/domains'), api('GET', '/users')]);
+  CACHE.domains = domains; CACHE.users = users;
+  const canManage = ['admin', 'sales', 'project_manager'].includes(CURRENT_USER.role);
+  const canDelete = CURRENT_USER.role === 'admin';
+  const mode = getViewMode('domains');
 
   main.innerHTML = `
     <div class="ew-page-head">
-      <div><h2>Notifications</h2><p>${unread > 0 ? `${unread} unread` : "You're all caught up"}</p></div>
-      <div style="display:flex;gap:10px">
-        <button class="ew-btn ew-btn-ghost ew-btn-sm" id="markAllBtn" ${unread === 0 ? 'disabled' : ''}>Mark all read</button>
-        <button class="ew-btn ew-btn-ghost ew-btn-sm" id="clearAllBtn" ${notifications.length === 0 ? 'disabled' : ''}>Clear all</button>
+      <div>
+        <h2>Domains &amp; Website Info${tooltipHtml("A domain is the web address people type to reach a site (like yourbrand.com). This page also shows what platform each site is built on and where it is hosted.")}</h2>
+        <p>Everything about where your site lives — the domain, the platform it runs on, and hosting details.</p>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        ${viewToggleHtml('domains')}
+        ${canManage ? `<button class="ew-btn ew-btn-primary" id="addDomainBtn">+ Add Domain</button>` : ''}
       </div>
     </div>
+    <div id="domainsContainer">${domains.length === 0 ? emptyState('No domains added yet.') : (mode === 'card' ? domainCardGrid(domains, canDelete) : domainList(domains, canDelete))}</div>
+  `;
+
+  if (canManage) document.getElementById('addDomainBtn').addEventListener('click', () => openDomainModal());
+  bindViewToggle('domains', () => renderDomains(main));
+  bindDomainActions(domains, canDelete);
+}
+
+function clientLabel(clientId) {
+  const c = CACHE.users.find((u) => u.id === clientId);
+  return c ? escapeHtml(c.company || c.name) : '—';
+}
+
+function domainList(domains, canDelete) {
+  return `<section class="ew-card">${domains.map((d) => domainRowHtml(d, canDelete)).join('')}</section>`;
+}
+function domainCardGrid(domains, canDelete) {
+  return `<div class="ew-card-grid">${domains.map((d) => domainCardHtml(d, canDelete)).join('')}</div>`;
+}
+
+function domainMetaBlock(d) {
+  return `
+    <div class="ew-domain-row"><span>Platform</span><span class="ew-domain-platform">${escapeHtml(d.platform || 'Custom')}</span></div>
+    <div class="ew-domain-row"><span>Hosting Provider</span><span>${escapeHtml(d.hostingProvider || 'Not set')}${d.hostingRegion ? ` · ${escapeHtml(d.hostingRegion)}` : ''}</span></div>
+    <div class="ew-domain-row"><span>Registrar</span><span>${escapeHtml(d.registrar || '—')}</span></div>
+    <div class="ew-domain-row"><span>SSL Certificate</span><span><span class="ew-status-dot" style="background:${d.sslStatus === 'Valid' ? 'var(--green-500)' : 'var(--amber-500)'}"></span>${escapeHtml(d.sslStatus || 'Unknown')}</span></div>
+    <div class="ew-domain-row"><span>Expires</span><span>${escapeHtml(d.expiresAt || 'Not set')}</span></div>
+    <div class="ew-domain-row"><span>Auto-renew</span><span><span class="ew-status-dot" style="background:${d.autoRenew ? 'var(--green-500)' : 'var(--text-faint)'}"></span>${d.autoRenew ? 'Enabled' : 'Disabled'}</span></div>
+    <div class="ew-domain-row"><span>DNS</span><span><span class="ew-status-dot" style="background:var(--green-500)"></span>${escapeHtml(d.dnsStatus || 'Propagated')}</span></div>
+    ${d.notes ? `<div class="ew-card-sub" style="margin-top:8px">${escapeHtml(d.notes)}</div>` : ''}
+  `;
+}
+
+function domainRowHtml(d, canDelete) {
+  return `
+    <div class="ew-project-row">
+      <div class="ew-project-top">
+        <div><div class="ew-domain-name serif">${escapeHtml(d.domainName)}</div><div class="ew-project-tag">${clientLabel(d.clientId)}</div></div>
+        <span class="ew-pill ${d.sslStatus === 'Valid' ? 'pill-ontrack' : 'pill-atrisk'}">${escapeHtml(d.sslStatus || 'Unknown')}</span>
+      </div>
+      <div style="margin-top:10px">${domainMetaBlock(d)}</div>
+      <div class="ew-project-actions">
+        <button class="ew-btn ew-btn-ghost ew-btn-sm" id="dom-renew-${d.id}"><span>↻</span> Renew for 1 year</button>
+        <button class="ew-btn ew-btn-ghost ew-btn-sm" id="dom-edit-${d.id}">Edit</button>
+        ${canDelete ? `<button class="ew-btn ew-btn-danger ew-btn-sm" id="dom-delete-${d.id}">Delete</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+function domainCardHtml(d, canDelete) {
+  return `
+    <div class="ew-item-card">
+      <div class="ew-item-card-head">
+        <div><div class="name">${escapeHtml(d.domainName)}</div><div class="sub">${clientLabel(d.clientId)}</div></div>
+        <span class="ew-pill ${d.sslStatus === 'Valid' ? 'pill-ontrack' : 'pill-atrisk'}">${escapeHtml(d.sslStatus || 'Unknown')}</span>
+      </div>
+      ${domainMetaBlock(d)}
+      <div class="ew-item-card-foot">
+        <button class="ew-btn ew-btn-ghost ew-btn-sm" id="dom-renew-${d.id}">Renew</button>
+        <div style="display:flex;gap:8px">
+          <button class="ew-btn ew-btn-ghost ew-btn-sm" id="dom-edit-${d.id}">Edit</button>
+          ${canDelete ? `<button class="ew-btn ew-btn-danger ew-btn-sm" id="dom-delete-${d.id}">Delete</button>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function bindDomainActions(domains, canDelete) {
+  domains.forEach((d) => {
+    document.getElementById(`dom-renew-${d.id}`)?.addEventListener('click', async () => {
+      await api('POST', `/domains/${d.id}/renew`);
+      showToast('Domain renewed for 1 year');
+      navigateTo('Domains');
+    });
+    document.getElementById(`dom-edit-${d.id}`)?.addEventListener('click', () => openDomainModal(d));
+    if (canDelete) {
+      document.getElementById(`dom-delete-${d.id}`)?.addEventListener('click', () => {
+        confirmModal({
+          title: 'Delete this domain?',
+          message: `"${d.domainName}" will be permanently removed.`,
+          onConfirm: async () => { await api('DELETE', `/domains/${d.id}`); showToast('Domain deleted'); navigateTo('Domains'); },
+        });
+      });
+    }
+  });
+}
+
+function openDomainModal(domain) {
+  const isEdit = Boolean(domain);
+  const clients = CACHE.users.filter((u) => u.role === 'client');
+  openModal(`
+    <h2>${isEdit ? 'Edit domain' : 'Add a domain'}</h2>
+    <p class="ew-modal-sub">Track the domain, hosting, and platform info for a client's site.</p>
+    <form id="domainForm">
+      <div class="ew-field"><label>Domain name</label><input id="df-name" type="text" placeholder="e.g. mynewsite.com" value="${isEdit ? escapeHtml(domain.domainName) : ''}" required></div>
+      <div class="ew-field"><label>Client</label>
+        <select id="df-client" ${isEdit ? 'disabled' : ''}>
+          ${clients.map((c) => `<option value="${c.id}" ${isEdit && domain.clientId === c.id ? 'selected' : ''}>${escapeHtml(c.company || c.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="ew-field"><label>Platform ${tooltipHtml('What the website itself is built with/on — helps whoever supports it know which tools apply.')}</label>
+        <select id="df-platform">
+          ${PLATFORM_OPTIONS.map((p) => `<option value="${p}" ${isEdit && domain.platform === p ? 'selected' : ''}>${p}</option>`).join('')}
+        </select>
+      </div>
+      <div class="ew-field"><label>Hosting provider</label><input id="df-hosting" type="text" placeholder="e.g. Vercel, SiteGround, AWS…" value="${isEdit ? escapeHtml(domain.hostingProvider || '') : ''}"></div>
+      <div class="ew-field"><label>Hosting region</label><input id="df-region" type="text" placeholder="e.g. US East" value="${isEdit ? escapeHtml(domain.hostingRegion || '') : ''}"></div>
+      <div class="ew-field"><label>Registrar</label><input id="df-registrar" type="text" placeholder="e.g. GoDaddy, Namecheap…" value="${isEdit ? escapeHtml(domain.registrar || '') : ''}"></div>
+      <div class="ew-field"><label>Expiration date</label><input id="df-expires" type="text" placeholder="e.g. Aug 23, 2026" value="${isEdit ? escapeHtml(domain.expiresAt || '') : ''}"></div>
+      <div class="ew-field"><label>Notes</label><textarea id="df-notes">${isEdit ? escapeHtml(domain.notes || '') : ''}</textarea></div>
+      <div class="ew-modal-actions">
+        <button type="button" class="ew-btn ew-btn-ghost" id="df-cancel">Cancel</button>
+        <button type="submit" class="ew-btn ew-btn-primary">${isEdit ? 'Save Changes' : 'Add Domain'}</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('df-cancel').addEventListener('click', closeModal);
+  document.getElementById('domainForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      domainName: document.getElementById('df-name').value.trim(),
+      platform: document.getElementById('df-platform').value,
+      hostingProvider: document.getElementById('df-hosting').value.trim(),
+      hostingRegion: document.getElementById('df-region').value.trim(),
+      registrar: document.getElementById('df-registrar').value.trim(),
+      expiresAt: document.getElementById('df-expires').value.trim(),
+      notes: document.getElementById('df-notes').value.trim(),
+    };
+    if (!isEdit) payload.clientId = document.getElementById('df-client').value;
+    if (!payload.domainName || (!isEdit && !payload.clientId)) return;
+
+    if (isEdit) await api('PUT', `/domains/${domain.id}`, payload);
+    else await api('POST', '/domains', payload);
+
+    closeModal();
+    showToast(isEdit ? 'Domain updated' : 'Domain added');
+    navigateTo('Domains');
+  });
+}
+
+/* ============ Reports ============ */
+async function renderReports(main) {
+  const { reports, driveEnabled } = await api('GET', '/reports');
+  const users = CACHE.users.length ? CACHE.users : (await api('GET', '/users')).users;
+  CACHE.users = users; CACHE.reports = reports;
+  const canUpload = ['admin', 'sales', 'project_manager'].includes(CURRENT_USER.role);
+  const canDelete = ['admin', 'project_manager'].includes(CURRENT_USER.role);
+
+  main.innerHTML = `
+    <div class="ew-page-head">
+      <div><h2>Reports</h2><p>Performance reports and documents shared with your account.</p></div>
+      ${canUpload ? `<button class="ew-btn ew-btn-primary" id="uploadReportBtn">+ Upload Report</button>` : ''}
+    </div>
+    ${!driveEnabled ? `<div class="ew-info-not-configured" style="margin-bottom:16px">⚠️ Google Drive storage isn't connected yet — files are temporarily stored in the database with a 4MB limit per file. See the README to connect Drive for unlimited storage.</div>` : ''}
     <section class="ew-card">
-      ${notifications.length === 0 ? emptyState('No notifications right now.') : notifications.map((n) => `
-        <div class="ew-notif-row" style="align-items:center">
-          <div class="ew-notif-icon">🔔</div>
-          <div style="flex:1"><div class="ew-notif-text">${escapeHtml(n.message)}</div><div class="ew-notif-time">${new Date(n.createdAt).toLocaleString()}</div></div>
-          ${!n.read ? `<button class="ew-btn ew-btn-ghost ew-btn-sm" id="notif-read-${n.id}">Mark read</button>` : `<span class="ew-notif-time">Read</span>`}
+      ${reports.length === 0 ? emptyState('No reports yet.') : reports.map((r) => `
+        <div class="ew-report-row">
+          <div class="ew-report-icon">${r.storageType === 'drive' ? '☁️' : '📄'}</div>
+          <div><div class="ew-report-name">${escapeHtml(r.name)}</div><div class="ew-report-meta">${escapeHtml(r.category)} · ${clientLabel(r.clientId)} · ${(r.sizeBytes / 1024).toFixed(0)} KB</div></div>
+          <button class="ew-icon-btn" id="report-dl-${r.id}">⬇</button>
+          ${canDelete ? `<button class="ew-icon-btn" id="report-del-${r.id}">🗑</button>` : ''}
         </div>
       `).join('')}
     </section>
   `;
 
-  document.getElementById('markAllBtn').addEventListener('click', async () => { await api('POST', '/notifications/read-all'); showToast('All marked as read'); navigateTo('Notifications'); });
-  document.getElementById('clearAllBtn').addEventListener('click', async () => { await api('DELETE', '/notifications'); showToast('Notifications cleared'); navigateTo('Notifications'); });
-  notifications.forEach((n) => {
-    document.getElementById(`notif-read-${n.id}`)?.addEventListener('click', async () => { await api('PATCH', `/notifications/${n.id}/read`); navigateTo('Notifications'); });
+  reports.forEach((r) => {
+    document.getElementById(`report-dl-${r.id}`)?.addEventListener('click', () => { window.open(`/api/reports/${r.id}/download`, '_blank'); });
+    document.getElementById(`report-del-${r.id}`)?.addEventListener('click', () => {
+      confirmModal({
+        title: 'Delete this report?', message: `"${r.name}" will be permanently removed.`,
+        onConfirm: async () => { await api('DELETE', `/reports/${r.id}`); showToast('Report deleted'); navigateTo('Reports'); },
+      });
+    });
   });
+
+  document.getElementById('uploadReportBtn')?.addEventListener('click', () => openReportUploadModal());
+}
+
+function openReportUploadModal() {
+  const clients = CACHE.users.filter((u) => u.role === 'client');
+  openModal(`
+    <h2>Upload a report</h2>
+    <form id="reportForm">
+      <div class="ew-field"><label>Client</label>
+        <select id="rf-client">${clients.map((c) => `<option value="${c.id}">${escapeHtml(c.company || c.name)}</option>`).join('')}</select>
+      </div>
+      <div class="ew-field"><label>Category</label>
+        <select id="rf-category"><option>Performance</option><option>SEO Audit</option><option>Ad Spend</option><option>Strategy</option><option>Other</option></select>
+      </div>
+      <div class="ew-field"><label>Report name (optional)</label><input id="rf-name" type="text" placeholder="Defaults to the file name"></div>
+      <div class="ew-field"><label>File</label><input id="rf-file" type="file" required></div>
+      <div class="ew-modal-actions">
+        <button type="button" class="ew-btn ew-btn-ghost" id="rf-cancel">Cancel</button>
+        <button type="submit" class="ew-btn ew-btn-primary" id="rf-submit">Upload</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('rf-cancel').addEventListener('click', closeModal);
+  document.getElementById('reportForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const file = document.getElementById('rf-file').files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('clientId', document.getElementById('rf-client').value);
+    fd.append('category', document.getElementById('rf-category').value);
+    fd.append('name', document.getElementById('rf-name').value.trim());
+
+    const submitBtn = document.getElementById('rf-submit');
+    submitBtn.disabled = true; submitBtn.textContent = 'Uploading…';
+    try {
+      const res = await fetch('/api/reports', { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': CSRF_TOKEN }, body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      closeModal();
+      showToast('Report uploaded');
+      navigateTo('Reports');
+    } catch (err) {
+      submitBtn.disabled = false; submitBtn.textContent = 'Upload';
+      showToast(err.message);
+    }
+  });
+}
+
+/* ============ Budget ============ */
+async function renderBudget(main) {
+  const isStaff = ['admin', 'sales', 'project_manager'].includes(CURRENT_USER.role);
+  if (isStaff && CACHE.users.length === 0) CACHE.users = (await api('GET', '/users')).users;
+  const clients = isStaff ? CACHE.users.filter((u) => u.role === 'client') : [];
+  const selectedClientId = isStaff ? (CACHE.selectedBudgetClient || clients[0]?.id) : CURRENT_USER.id;
+  CACHE.selectedBudgetClient = selectedClientId;
+
+  const { items } = selectedClientId ? await api('GET', `/budget?clientId=${selectedClientId}`) : { items: [] };
+  const total = items.reduce((sum, i) => sum + i.amount, 0);
+
+  main.innerHTML = `
+    <div class="ew-page-head">
+      <div><h2>Marketing Budget</h2><p>See exactly where ad spend is going, channel by channel.</p></div>
+      ${isStaff ? `<button class="ew-btn ew-btn-primary" id="addBudgetBtn">+ Add Budget Item</button>` : ''}
+    </div>
+    ${isStaff ? `
+      <div class="ew-field ew-budget-client-picker">
+        <label>Client</label>
+        <select id="budgetClientPicker">${clients.map((c) => `<option value="${c.id}" ${c.id === selectedClientId ? 'selected' : ''}>${escapeHtml(c.company || c.name)}</option>`).join('')}</select>
+      </div>
+    ` : ''}
+    <section class="ew-card">
+      <div class="ew-card-head"><div><div class="ew-card-title">This month's allocation</div><div class="ew-card-sub">Total: $${total.toLocaleString()}</div></div></div>
+      ${items.length === 0 ? emptyState('No budget items yet.') : `
+        <div class="ew-budget-stack">
+          ${items.map((i) => `<div class="ew-budget-stack-seg" style="width:${(i.amount / total * 100).toFixed(1)}%;background:${i.color}" title="${escapeHtml(i.label)}: $${i.amount.toLocaleString()}"></div>`).join('')}
+        </div>
+        <div class="ew-legend" style="margin-top:18px">
+          ${items.map((i) => `
+            <div class="ew-legend-row">
+              <div class="ew-legend-left"><span class="ew-dot" style="background:${i.color}"></span>${escapeHtml(i.label)}</div>
+              <span class="ew-legend-amt">$${i.amount.toLocaleString()} · ${((i.amount / total) * 100).toFixed(0)}%</span>
+              ${isStaff ? `<button class="ew-icon-btn" style="margin-left:12px" id="budget-del-${i.id}">🗑</button>` : ''}
+            </div>
+          `).join('')}
+        </div>
+      `}
+    </section>
+  `;
+
+  document.getElementById('budgetClientPicker')?.addEventListener('change', (e) => { CACHE.selectedBudgetClient = e.target.value; navigateTo('Budget'); });
+  document.getElementById('addBudgetBtn')?.addEventListener('click', () => openBudgetModal(selectedClientId));
+  items.forEach((i) => {
+    document.getElementById(`budget-del-${i.id}`)?.addEventListener('click', () => {
+      confirmModal({
+        title: 'Remove this budget item?', message: `"${i.label}" will be removed from this month's allocation.`,
+        onConfirm: async () => { await api('DELETE', `/budget/${i.id}`); showToast('Budget item removed'); navigateTo('Budget'); },
+      });
+    });
+  });
+}
+
+function openBudgetModal(clientId) {
+  openModal(`
+    <h2>Add a budget item</h2>
+    <form id="budgetForm">
+      <div class="ew-field"><label>Channel / category</label><input id="bf-label" type="text" placeholder="e.g. Google Ads, Local Services Ads…" required></div>
+      <div class="ew-field"><label>Monthly amount ($)</label><input id="bf-amount" type="number" min="1" step="1" required></div>
+      <div class="ew-modal-actions">
+        <button type="button" class="ew-btn ew-btn-ghost" id="bf-cancel">Cancel</button>
+        <button type="submit" class="ew-btn ew-btn-primary">Add Item</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('bf-cancel').addEventListener('click', closeModal);
+  document.getElementById('budgetForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const label = document.getElementById('bf-label').value.trim();
+    const amount = document.getElementById('bf-amount').value;
+    if (!label || !amount) return;
+    await api('POST', '/budget', { clientId, label, amount });
+    closeModal();
+    showToast('Budget item added');
+    navigateTo('Budget');
+  });
+}
+
+/* ============ Billing ============ */
+async function renderBilling(main) {
+  const { enabled, billing } = await api('GET', '/billing/status');
+
+  if (CURRENT_USER.role === 'client') {
+    const status = billing?.status || 'no_subscription';
+    main.innerHTML = `
+      <div class="ew-page-head"><div><h2>Billing</h2><p>Manage your subscription.</p></div></div>
+      ${!enabled ? `<div class="ew-info-not-configured">⚠️ Billing isn't connected yet. Ask your account manager to finish Stripe setup.</div>` : `
+        <section class="ew-card ew-billing-plan-card" style="max-width:420px;margin:0 auto">
+          <div class="ew-card-title">Standard Plan</div>
+          <div class="price">$5<span>/month</span></div>
+          <div class="ew-billing-feature">✓ Unlimited support tickets</div>
+          <div class="ew-billing-feature">✓ Monthly performance reports</div>
+          <div class="ew-billing-feature">✓ Live project &amp; task tracking</div>
+          <div style="margin-top:20px">
+            <span class="ew-pill ${status === 'active' ? 'pill-ontrack' : 'pill-todo'}">${status === 'active' ? 'Active' : status.replace('_', ' ')}</span>
+          </div>
+          <button class="ew-btn ew-btn-primary ew-btn-block" id="billingCheckoutBtn" style="margin-top:18px">
+            ${status === 'active' ? 'Manage subscription' : 'Subscribe'}
+          </button>
+        </section>
+      `}
+    `;
+    document.getElementById('billingCheckoutBtn')?.addEventListener('click', async () => {
+      try {
+        const { url } = await api('POST', '/billing/checkout');
+        window.location.href = url;
+      } catch (err) { showToast(err.message); }
+    });
+    return;
+  }
+
+  // Staff view: everyone's billing status
+  if (CACHE.users.length === 0) CACHE.users = (await api('GET', '/users')).users;
+  main.innerHTML = `
+    <div class="ew-page-head"><div><h2>Billing</h2><p>Subscription status across all clients.</p></div></div>
+    ${!enabled ? `<div class="ew-info-not-configured" style="margin-bottom:16px">⚠️ Stripe isn't connected yet — see the README for setup steps.</div>` : ''}
+    <section class="ew-card">
+      ${(billing || []).length === 0 ? emptyState('No billing records yet.') : billing.map((b) => `
+        <div class="ew-settings-member-row">
+          <div class="info"><div class="name">${clientLabel(b.clientId)}</div><div class="role">${escapeHtml(b.plan || 'standard')}</div></div>
+          <span class="ew-pill ${b.status === 'active' ? 'pill-ontrack' : 'pill-todo'}">${escapeHtml(b.status || 'no subscription')}</span>
+        </div>
+      `).join('')}
+    </section>
+  `;
 }
 
 /* ============ Settings ============ */
@@ -684,6 +1212,23 @@ async function renderSettings(main) {
         </div>
       </section>
     </div>
+
+    <section class="ew-card" style="margin-top:20px">
+      <div class="ew-card-head"><div><div class="ew-card-title">Two-Factor Authentication</div><div class="ew-card-sub">Add an extra verification step at login.</div></div></div>
+      ${!APP_CONFIG.firebaseEnabled ? `
+        <div class="ew-info-not-configured">⚠️ Two-factor authentication isn't configured on this server yet. See the README for Firebase setup steps.</div>
+      ` : CURRENT_USER.twoFactorEnabled ? `
+        <div class="ew-settings-row">
+          <div><div class="label">Status</div><div class="desc">Enabled — verifying via ${escapeHtml(CURRENT_USER.twoFactorContact || 'your contact on file')}</div></div>
+          <button class="ew-btn ew-btn-ghost ew-btn-sm" id="disable2faBtn">Disable</button>
+        </div>
+      ` : `
+        <div class="ew-settings-row">
+          <div><div class="label">Status</div><div class="desc">Not enabled</div></div>
+          <button class="ew-btn ew-btn-primary ew-btn-sm" id="enable2faBtn">Set up 2FA</button>
+        </div>
+      `}
+    </section>
   `;
 
   document.getElementById('profileForm').addEventListener('submit', async (e) => {
@@ -701,6 +1246,139 @@ async function renderSettings(main) {
   document.getElementById('settingsLight').addEventListener('click', () => { setTheme('light'); syncSettingsToggle(); });
   document.getElementById('settingsLogout').addEventListener('click', () => document.getElementById('logoutBtn').click());
   syncSettingsToggle();
+
+  document.getElementById('enable2faBtn')?.addEventListener('click', () => open2FASetupModal());
+  document.getElementById('disable2faBtn')?.addEventListener('click', () => {
+    confirmModal({
+      title: 'Disable two-factor authentication?',
+      message: 'Your account will only require a password to sign in.',
+      confirmLabel: 'Disable',
+      onConfirm: async () => {
+        const { user } = await api('POST', '/users/me/2fa/disable');
+        CURRENT_USER = user;
+        showToast('Two-factor authentication disabled');
+        navigateTo('Settings');
+      },
+    });
+  });
+}
+
+function open2FASetupModal() {
+  openModal(`
+    <h2>Set up two-factor authentication</h2>
+    <p class="ew-modal-sub">Choose how you'd like to verify it's you at login.</p>
+    <div class="ew-modal-actions" style="justify-content:center;gap:14px;margin-bottom:6px">
+      <button class="ew-btn ew-btn-ghost" id="setup2faPhone">📱 Phone (SMS code)</button>
+      <button class="ew-btn ew-btn-ghost" id="setup2faEmail">✉️ Email (secure link)</button>
+    </div>
+  `);
+  document.getElementById('setup2faPhone').addEventListener('click', () => open2FAPhoneModal());
+  document.getElementById('setup2faEmail').addEventListener('click', () => open2FAEmailModal());
+}
+
+async function ensureFirebaseLoaded() {
+  if (!APP_CONFIG.firebaseEnabled) throw new Error('Two-factor authentication is not configured on this server yet.');
+  if (!window.EWFirebase2FA) {
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.type = 'module';
+      s.src = '/firebase2fa.js';
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Could not load the verification library.'));
+      document.head.appendChild(s);
+    });
+    await new Promise((r) => setTimeout(r, 50)); // let the module attach window.EWFirebase2FA
+  }
+  await window.EWFirebase2FA.loadFirebase(APP_CONFIG.firebaseConfig);
+}
+
+function open2FAPhoneModal() {
+  openModal(`
+    <h2>Verify your phone</h2>
+    <form id="phoneStep1">
+      <div class="ew-field"><label>Phone number</label><input id="p2fa-phone" type="tel" placeholder="+1 415 555 0148" required></div>
+      <div id="recaptcha-container"></div>
+      <div class="ew-modal-actions">
+        <button type="button" class="ew-btn ew-btn-ghost" id="p2fa-cancel">Cancel</button>
+        <button type="submit" class="ew-btn ew-btn-primary" id="p2fa-send">Send code</button>
+      </div>
+    </form>
+    <div id="phoneStep2" class="ew-hidden">
+      <div class="ew-2fa-code-input">
+        ${[0, 1, 2, 3, 4, 5].map((i) => `<input maxlength="1" inputmode="numeric" data-idx="${i}">`).join('')}
+      </div>
+      <div class="ew-modal-actions">
+        <button type="button" class="ew-btn ew-btn-primary ew-btn-block" id="p2fa-confirm">Confirm code</button>
+      </div>
+    </div>
+  `);
+  document.getElementById('p2fa-cancel').addEventListener('click', closeModal);
+  document.getElementById('phoneStep1').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const sendBtn = document.getElementById('p2fa-send');
+    sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+    try {
+      await ensureFirebaseLoaded();
+      const phone = document.getElementById('p2fa-phone').value.trim();
+      await window.EWFirebase2FA.sendPhoneCode(phone, 'recaptcha-container');
+      document.getElementById('phoneStep1').classList.add('ew-hidden');
+      document.getElementById('phoneStep2').classList.remove('ew-hidden');
+      document.querySelector('#phoneStep2 input')?.focus();
+    } catch (err) {
+      showToast(err.message);
+      sendBtn.disabled = false; sendBtn.textContent = 'Send code';
+    }
+  });
+  const codeInputs = () => Array.from(document.querySelectorAll('#phoneStep2 input'));
+  codeInputs().forEach((input, i) => {
+    input.addEventListener('input', () => { if (input.value && codeInputs()[i + 1]) codeInputs()[i + 1].focus(); });
+  });
+  document.getElementById('p2fa-confirm').addEventListener('click', async () => {
+    const code = codeInputs().map((i) => i.value).join('');
+    if (code.length !== 6) { showToast('Enter the full 6-digit code'); return; }
+    try {
+      const firebaseIdToken = await window.EWFirebase2FA.confirmPhoneCode(code);
+      const { user } = await api('POST', '/users/me/2fa/enable', { firebaseIdToken });
+      CURRENT_USER = user;
+      closeModal();
+      showToast('Two-factor authentication enabled');
+      navigateTo('Settings');
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+}
+
+function open2FAEmailModal() {
+  openModal(`
+    <h2>Verify your email</h2>
+    <p class="ew-modal-sub">We'll send a secure sign-in link to your email — click it there to finish setup.</p>
+    <form id="emailStep1">
+      <div class="ew-field"><label>Email address</label><input id="e2fa-email" type="email" value="${escapeHtml(CURRENT_USER.email)}" required></div>
+      <div class="ew-modal-actions">
+        <button type="button" class="ew-btn ew-btn-ghost" id="e2fa-cancel">Cancel</button>
+        <button type="submit" class="ew-btn ew-btn-primary" id="e2fa-send">Send link</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('e2fa-cancel').addEventListener('click', closeModal);
+  document.getElementById('emailStep1').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('e2fa-send');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      await ensureFirebaseLoaded();
+      await window.EWFirebase2FA.sendEmailSignInLink(document.getElementById('e2fa-email').value.trim());
+      document.querySelector('.ew-modal').innerHTML = `
+        <h2>Check your email</h2>
+        <p class="ew-modal-sub">Click the link we just sent you, then come back — it'll finish setting up 2FA automatically.</p>
+        <div class="ew-modal-actions"><button class="ew-btn ew-btn-ghost" onclick="closeModal()">Close</button></div>
+      `;
+    } catch (err) {
+      showToast(err.message);
+      btn.disabled = false; btn.textContent = 'Send link';
+    }
+  });
 }
 function syncSettingsToggle() {
   const theme = document.getElementById('ewRoot').getAttribute('data-theme');

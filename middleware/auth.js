@@ -6,16 +6,21 @@ const { db } = require('../db/setup');
 const SESSION_COOKIE = 'ew_sid';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-async function createSession(userId) {
+async function createSession(userId, { pending = false } = {}) {
   const session = {
     id: uuidv4(),
     userId,
     csrfToken: uuidv4(),
     createdAt: Date.now(),
-    expiresAt: Date.now() + SESSION_TTL_MS,
+    expiresAt: Date.now() + (pending ? 10 * 60 * 1000 : SESSION_TTL_MS), // pending sessions expire in 10 min
+    pending,
   };
   await db.insert('sessions', session);
   return session;
+}
+
+async function promoteSession(sessionId) {
+  return db.update('sessions', sessionId, { pending: false, expiresAt: Date.now() + SESSION_TTL_MS });
 }
 
 async function getSession(req) {
@@ -44,7 +49,7 @@ function safeUser(user) {
 async function requireAuth(req, res, next) {
   try {
     const session = await getSession(req);
-    if (!session) return res.status(401).json({ error: 'Not signed in' });
+    if (!session || session.pending) return res.status(401).json({ error: 'Not signed in' });
     const user = await db.find('users', session.userId);
     if (!user) return res.status(401).json({ error: 'Not signed in' });
     req.session = session;
@@ -95,7 +100,7 @@ const PORTAL_PATH = {
 
 module.exports = {
   SESSION_COOKIE,
-  createSession, getSession, destroySession, safeUser,
+  createSession, getSession, destroySession, promoteSession, safeUser,
   requireAuth, requireRole, requireCSRF,
   audit, notify, PORTAL_PATH,
 };

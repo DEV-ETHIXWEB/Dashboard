@@ -30,6 +30,7 @@
   .demo-email{ font-size:10.5px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .divider{ display:flex; align-items:center; gap:12px; margin:18px 0; font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.05em; }
   .divider::before, .divider::after{ content:""; flex:1; height:1px; background:var(--border); }
+  #googleBtnContainer{ display:flex; justify-content:center; margin-bottom:6px; }
 </style>
 </head>
 <body>
@@ -40,7 +41,7 @@
   </div>
 
   <div class="ew-login-shell">
-    <div class="ew-card ew-login-card">
+    <div class="ew-card ew-login-card" id="loginCard">
       <div class="ew-login-brand">
         <div class="ew-brand-mark"><img src="/assets/emblem-mark.png" alt="EthixWeb"></div>
         <div>
@@ -49,56 +50,130 @@
         </div>
       </div>
 
-      <div class="ew-login-title serif">Welcome back</div>
-      <div class="ew-login-sub">Sign in to manage projects, tasks, and client tickets.</div>
+      <div id="step1">
+        <div class="ew-login-title serif">Welcome back</div>
+        <div class="ew-login-sub">Sign in to manage projects, tasks, and client tickets.</div>
 
-      <div class="demo-grid" id="demoButtons">
-        <button type="button" class="demo-btn" data-email="admin@ethixweb.local" data-pw="Admin#2026!">
-          <span class="role-pill r-admin">Admin</span>
-          <span class="demo-info"><span class="demo-name">Admin User</span><span class="demo-email">admin@ethixweb.local</span></span>
-        </button>
-        <button type="button" class="demo-btn" data-email="emily.turner@ethixweb.local" data-pw="Sales#2026!">
-          <span class="role-pill r-sales">Sales</span>
-          <span class="demo-info"><span class="demo-name">Emily Turner</span><span class="demo-email">emily.turner@ethixweb.local</span></span>
-        </button>
-        <button type="button" class="demo-btn" data-email="ryan.coleman@ethixweb.local" data-pw="Manager#2026!">
-          <span class="role-pill r-pm">PM</span>
-          <span class="demo-info"><span class="demo-name">Ryan Coleman</span><span class="demo-email">ryan.coleman@ethixweb.local</span></span>
-        </button>
-        <button type="button" class="demo-btn" data-email="jordan.brooks@ethixweb.local" data-pw="Staff#2026!">
-          <span class="role-pill r-employee">Employee</span>
-          <span class="demo-info"><span class="demo-name">Jordan Brooks</span><span class="demo-email">jordan.brooks@ethixweb.local</span></span>
-        </button>
-        <button type="button" class="demo-btn" data-email="client@brightpath-retail.com" data-pw="Client#2026!">
-          <span class="role-pill r-client">Client</span>
-          <span class="demo-info"><span class="demo-name">BrightPath Retail Co.</span><span class="demo-email">client@brightpath-retail.com</span></span>
-        </button>
+        <div id="googleBtnWrap" class="ew-hidden">
+          <div id="googleBtnContainer"></div>
+          <div class="ew-or-divider">or</div>
+        </div>
+
+        <div class="demo-grid" id="demoButtons">
+          <button type="button" class="demo-btn" data-email="admin@ethixweb.local" data-pw="Admin#2026!">
+            <span class="role-pill r-admin">Admin</span>
+            <span class="demo-info"><span class="demo-name">Admin User</span><span class="demo-email">admin@ethixweb.local</span></span>
+          </button>
+          <button type="button" class="demo-btn" data-email="emily.turner@ethixweb.local" data-pw="Sales#2026!">
+            <span class="role-pill r-sales">Sales</span>
+            <span class="demo-info"><span class="demo-name">Emily Turner</span><span class="demo-email">emily.turner@ethixweb.local</span></span>
+          </button>
+          <button type="button" class="demo-btn" data-email="ryan.coleman@ethixweb.local" data-pw="Manager#2026!">
+            <span class="role-pill r-pm">PM</span>
+            <span class="demo-info"><span class="demo-name">Ryan Coleman</span><span class="demo-email">ryan.coleman@ethixweb.local</span></span>
+          </button>
+          <button type="button" class="demo-btn" data-email="jordan.brooks@ethixweb.local" data-pw="Staff#2026!">
+            <span class="role-pill r-employee">Employee</span>
+            <span class="demo-info"><span class="demo-name">Jordan Brooks</span><span class="demo-email">jordan.brooks@ethixweb.local</span></span>
+          </button>
+          <button type="button" class="demo-btn" data-email="client@brightpath-retail.com" data-pw="Client#2026!">
+            <span class="role-pill r-client">Client</span>
+            <span class="demo-info"><span class="demo-name">BrightPath Retail Co.</span><span class="demo-email">client@brightpath-retail.com</span></span>
+          </button>
+        </div>
+
+        <div class="divider">or sign in manually</div>
+
+        <form id="loginForm" novalidate>
+          <div class="ew-field">
+            <label for="email">Email</label>
+            <input id="email" type="email" placeholder="you@ethixweb.local" required>
+          </div>
+          <div class="ew-field">
+            <label for="password">Password</label>
+            <input id="password" type="password" placeholder="••••••••" required>
+          </div>
+          <div id="loginError" class="ew-field-error" style="display:none; margin-bottom:12px;"></div>
+          <button type="submit" id="loginBtn" class="ew-btn ew-btn-primary ew-btn-block">Sign in</button>
+        </form>
       </div>
 
-      <div class="divider">or sign in manually</div>
+      <div id="step2fa" class="ew-hidden">
+        <div class="ew-login-title serif">Verify it's you</div>
+        <div class="ew-login-sub" id="twofaDesc">Extra verification step for your account.</div>
 
-      <form id="loginForm" novalidate>
-        <div class="ew-field">
-          <label for="email">Email</label>
-          <input id="email" type="email" placeholder="you@ethixweb.local" required>
+        <div id="twofaPhoneBlock" class="ew-hidden">
+          <div id="recaptcha-container"></div>
+          <button class="ew-btn ew-btn-ghost ew-btn-block" id="sendPhoneCodeBtn" style="margin:12px 0">Send SMS code</button>
+          <div class="ew-2fa-code-input" id="codeInputsWrap">
+            <input maxlength="1" inputmode="numeric" data-idx="0">
+            <input maxlength="1" inputmode="numeric" data-idx="1">
+            <input maxlength="1" inputmode="numeric" data-idx="2">
+            <input maxlength="1" inputmode="numeric" data-idx="3">
+            <input maxlength="1" inputmode="numeric" data-idx="4">
+            <input maxlength="1" inputmode="numeric" data-idx="5">
+          </div>
+          <button class="ew-btn ew-btn-primary ew-btn-block" id="confirmPhoneCodeBtn">Confirm code</button>
         </div>
-        <div class="ew-field">
-          <label for="password">Password</label>
-          <input id="password" type="password" placeholder="••••••••" required>
+
+        <div id="twofaEmailBlock" class="ew-hidden">
+          <button class="ew-btn ew-btn-primary ew-btn-block" id="sendEmailLinkBtn">Email me a verification link</button>
+          <p class="ew-login-sub" id="emailSentMsg" style="display:none;margin-top:12px">Check your inbox and click the link — it'll bring you right back here signed in.</p>
         </div>
-        <div id="loginError" class="ew-field-error" style="display:none; margin-bottom:12px;"></div>
-        <button type="submit" id="loginBtn" class="ew-btn ew-btn-primary ew-btn-block">Sign in</button>
-      </form>
+
+        <div id="twofaError" class="ew-field-error" style="display:none;margin-top:12px"></div>
+        <button class="ew-btn ew-btn-ghost ew-btn-block" id="backToLoginBtn" style="margin-top:14px">Back to sign in</button>
+      </div>
     </div>
   </div>
 </div>
 
+<script src="/firebase2fa.js" type="module"></script>
 <script>
+let CONFIG = {};
+let PENDING_CSRF = null;
+let PENDING_CONTACT_IS_EMAIL = false;
+
+const step1 = document.getElementById('step1');
+const step2fa = document.getElementById('step2fa');
 const form = document.getElementById('loginForm');
 const emailInput = document.getElementById('email');
 const pwInput = document.getElementById('password');
 const errBox = document.getElementById('loginError');
 const btn = document.getElementById('loginBtn');
+
+(async function init() {
+  try {
+    CONFIG = await (await fetch('/api/config')).json();
+  } catch { CONFIG = {}; }
+
+  if (CONFIG.googleSignInEnabled) {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.onload = () => {
+      google.accounts.id.initialize({ client_id: CONFIG.googleClientId, callback: handleGoogleCredential });
+      document.getElementById('googleBtnWrap').classList.remove('ew-hidden');
+      google.accounts.id.renderButton(document.getElementById('googleBtnContainer'), { theme: 'outline', size: 'large', width: 376 });
+    };
+    document.head.appendChild(s);
+  }
+})();
+
+async function handleGoogleCredential(response) {
+  errBox.style.display = 'none';
+  try {
+    const r = await fetch('/api/auth/google', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken: response.credential }),
+    });
+    const d = await r.json();
+    if (!r.ok) { showErr(d.error || 'Google sign-in failed'); return; }
+    await handleLoginResponse(d);
+  } catch {
+    showErr('Cannot connect to the server. Is it running?');
+  }
+}
 
 document.querySelectorAll('.demo-btn').forEach((b) => {
   b.addEventListener('click', () => {
@@ -127,7 +202,7 @@ async function doLogin() {
     });
     const d = await r.json();
     if (!r.ok) { showErr(d.error || 'Login failed'); return; }
-    window.location.href = d.redirect || '/portal.html';
+    await handleLoginResponse(d);
   } catch (err) {
     showErr('Cannot connect to the server. Is it running?');
   } finally {
@@ -135,6 +210,79 @@ async function doLogin() {
     btn.textContent = 'Sign in';
   }
 }
+
+async function handleLoginResponse(d) {
+  if (d.requires2FA) {
+    PENDING_CSRF = d.csrfToken;
+    sessionStorage.setItem('ew_pending_csrf', PENDING_CSRF);
+    PENDING_CONTACT_IS_EMAIL = (d.twoFactorContact || '').includes('@');
+    document.getElementById('twofaDesc').textContent = `We'll verify it's you via ${d.twoFactorContact}.`;
+    document.getElementById('twofaPhoneBlock').classList.toggle('ew-hidden', PENDING_CONTACT_IS_EMAIL);
+    document.getElementById('twofaEmailBlock').classList.toggle('ew-hidden', !PENDING_CONTACT_IS_EMAIL);
+    step1.classList.add('ew-hidden');
+    step2fa.classList.remove('ew-hidden');
+    return;
+  }
+  window.location.href = d.redirect || '/portal.html';
+}
+
+document.getElementById('backToLoginBtn').addEventListener('click', () => {
+  step2fa.classList.add('ew-hidden');
+  step1.classList.remove('ew-hidden');
+});
+
+document.getElementById('sendPhoneCodeBtn')?.addEventListener('click', async () => {
+  const twofaErr = document.getElementById('twofaError');
+  twofaErr.style.display = 'none';
+  const phone = prompt('Enter the phone number on file for this account (e.g. +14155550148):');
+  if (!phone) return;
+  try {
+    await window.EWFirebase2FA.loadFirebase(CONFIG.firebaseConfig);
+    await window.EWFirebase2FA.sendPhoneCode(phone, 'recaptcha-container');
+  } catch (err) {
+    twofaErr.textContent = err.message;
+    twofaErr.style.display = 'block';
+  }
+});
+
+document.getElementById('confirmPhoneCodeBtn')?.addEventListener('click', async () => {
+  const twofaErr = document.getElementById('twofaError');
+  twofaErr.style.display = 'none';
+  const code = Array.from(document.querySelectorAll('#codeInputsWrap input')).map((i) => i.value).join('');
+  if (code.length !== 6) { twofaErr.textContent = 'Enter the full 6-digit code'; twofaErr.style.display = 'block'; return; }
+  try {
+    const firebaseIdToken = await window.EWFirebase2FA.confirmPhoneCode(code);
+    const r = await fetch('/api/auth/verify-2fa', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': PENDING_CSRF },
+      body: JSON.stringify({ firebaseIdToken }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Verification failed');
+    window.location.href = d.redirect || '/portal.html';
+  } catch (err) {
+    twofaErr.textContent = err.message;
+    twofaErr.style.display = 'block';
+  }
+});
+
+document.querySelectorAll('#codeInputsWrap input').forEach((input, i, all) => {
+  input.addEventListener('input', () => { if (input.value && all[i + 1]) all[i + 1].focus(); });
+});
+
+document.getElementById('sendEmailLinkBtn')?.addEventListener('click', async () => {
+  const twofaErr = document.getElementById('twofaError');
+  twofaErr.style.display = 'none';
+  try {
+    await window.EWFirebase2FA.loadFirebase(CONFIG.firebaseConfig);
+    await window.EWFirebase2FA.sendEmailSignInLink(emailInput.value.trim());
+    document.getElementById('sendEmailLinkBtn').classList.add('ew-hidden');
+    document.getElementById('emailSentMsg').style.display = 'block';
+  } catch (err) {
+    twofaErr.textContent = err.message;
+    twofaErr.style.display = 'block';
+  }
+});
 
 function showErr(msg) {
   errBox.textContent = msg;

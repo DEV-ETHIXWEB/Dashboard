@@ -9,6 +9,40 @@ const { requireAuth, requireRole, requireCSRF, safeUser, audit } = require('../m
 
 router.use(requireAuth);
 
+const { isFirebaseAdminConfigured, verifyFirebaseIdToken } = require('../utils/firebaseAdmin');
+
+// Enable 2FA -- requires proving control of the phone/email first via a
+// Firebase-verified ID token, so you can't lock someone else's account.
+router.post('/me/2fa/enable', requireCSRF, async (req, res, next) => {
+  try {
+    if (!isFirebaseAdminConfigured()) {
+      return res.status(503).json({ error: 'Two-factor authentication is not configured on the server yet.' });
+    }
+    const { firebaseIdToken } = req.body || {};
+    if (!firebaseIdToken) return res.status(400).json({ error: 'firebaseIdToken is required' });
+
+    const decoded = await verifyFirebaseIdToken(firebaseIdToken);
+    const contact = decoded.phone_number || decoded.email;
+    if (!contact) return res.status(400).json({ error: 'Could not determine a verified phone or email from that token.' });
+
+    const updated = await db.update('users', req.user.id, { twoFactorEnabled: true, twoFactorContact: contact });
+    await audit(req.user.id, 'update', 'user', req.user.id, { action: '2fa_enabled' });
+    res.json({ user: safeUser(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/me/2fa/disable', requireCSRF, async (req, res, next) => {
+  try {
+    const updated = await db.update('users', req.user.id, { twoFactorEnabled: false, twoFactorContact: null });
+    await audit(req.user.id, 'update', 'user', req.user.id, { action: '2fa_disabled' });
+    res.json({ user: safeUser(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Self-service profile update — must come before the admin-only /:id route.
 router.put('/me', requireCSRF, async (req, res, next) => {
   try {
