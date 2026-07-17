@@ -260,7 +260,7 @@ function timeAgo(iso) {
 
 /* ============ Card/List view toggle (shared by Projects, Tasks, Tickets, Domains) ============ */
 function getViewMode(key) {
-  try { return localStorage.getItem(`ew_view_${key}`) || 'list'; } catch { return 'list'; }
+  try { return localStorage.getItem(`ew_view_${key}`) || 'card'; } catch { return 'card'; }
 }
 function setViewMode(key, mode) {
   try { localStorage.setItem(`ew_view_${key}`, mode); } catch { /* ignore */ }

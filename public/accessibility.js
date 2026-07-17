@@ -49,7 +49,7 @@
     btn.id = 'ewA11yBtn';
     btn.setAttribute('aria-label', 'Accessibility options');
     btn.className = 'ew-a11y-fab';
-    btn.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="4" r="1.6" fill="white" stroke="none"/><path d="M12 7v6M12 9.5H7M12 9.5h5M9 13l-2.5 7M15 13l2.5 7M9.5 17h5"/></svg>';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="4" r="1.8" fill="white" stroke="none"/><path d="M12 7v6M7 9.5h10M12 13L8.5 20M12 13l3.5 7"/></svg>';
 
     const panel = document.createElement('div');
     panel.id = 'ewA11yPanel';
@@ -73,9 +73,12 @@
     document.body.appendChild(btn);
     document.body.appendChild(panel);
 
-    btn.addEventListener('click', () => panel.classList.toggle('ew-hidden'));
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      panel.classList.toggle('ew-hidden');
+    });
     document.addEventListener('click', (e) => {
-      if (!panel.contains(e.target) && e.target !== btn) panel.classList.add('ew-hidden');
+      if (!panel.contains(e.target) && !btn.contains(e.target)) panel.classList.add('ew-hidden');
     });
 
     panel.querySelectorAll('input[data-pref]').forEach((input) => {
