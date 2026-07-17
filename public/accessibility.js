@@ -49,7 +49,7 @@
     btn.id = 'ewA11yBtn';
     btn.setAttribute('aria-label', 'Accessibility options');
     btn.className = 'ew-a11y-fab';
-    btn.innerHTML = '♿';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="4" r="1.6" fill="white" stroke="none"/><path d="M12 7v6M12 9.5H7M12 9.5h5M9 13l-2.5 7M15 13l2.5 7M9.5 17h5"/></svg>';
 
     const panel = document.createElement('div');
     panel.id = 'ewA11yPanel';

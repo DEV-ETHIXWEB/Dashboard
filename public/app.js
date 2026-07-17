@@ -326,38 +326,157 @@ async function navigateTo(view) {
 
 /* ============ Dashboard ============ */
 async function renderDashboard(main) {
-  const [{ projects }, { tasks }, { tickets }, { notifications }] = await Promise.all([
+  const isStaff = ['admin', 'sales', 'project_manager'].includes(CURRENT_USER.role);
+  const [{ projects }, { tasks }, { tickets }, { notifications }, { domains }, { reports }, { items: budgetItems }, { users }] = await Promise.all([
     api('GET', '/projects'), api('GET', '/tasks'), api('GET', '/tickets'), api('GET', '/notifications'),
+    api('GET', '/domains'), api('GET', '/reports'), api('GET', '/budget'), api('GET', '/users'),
   ]);
+  let billingInfo = { enabled: false, billing: null };
+  try { billingInfo = await api('GET', '/billing/status'); } catch { /* ignore */ }
+
   CACHE.projects = projects; CACHE.tasks = tasks; CACHE.tickets = tickets; CACHE.notifications = notifications;
+  CACHE.domains = domains; CACHE.reports = reports; CACHE.users = users;
 
   const openTickets = tickets.filter((t) => t.status !== 'Resolved').length;
   const activeTasks = tasks.filter((t) => t.status !== 'Complete').length;
   const unread = notifications.filter((n) => !n.read).length;
+  const budgetTotal = budgetItems.reduce((sum, i) => sum + i.amount, 0);
+  const expiringSoon = domains.filter((d) => d.sslStatus !== 'Valid').length;
 
   main.innerHTML = `
     <section class="ew-card ew-welcome">
       <div>
         <h1 class="serif">Welcome back, ${escapeHtml(CURRENT_USER.name.split(' ')[0])} 👋</h1>
-        <p>${projects.length} projects, ${openTickets} open ticket(s), and ${unread} unread notification(s) need your attention.</p>
+        <p>${projects.length} project(s), ${openTickets} open ticket(s), ${domains.length} domain(s), and ${unread} unread notification(s) need your attention.</p>
+      </div>
+      <div class="ew-qa">
+        <button class="ew-btn ew-btn-primary" id="qaCreateTicket">+ Create Ticket</button>
+        <button class="ew-btn ew-btn-ghost" id="qaViewReports">${PILL_SVG.download} View Reports</button>
+        <button class="ew-btn ew-btn-ghost" id="qaViewDomains">${PILL_SVG.cloud} View Domains</button>
       </div>
     </section>
+
     <section class="ew-kpi-grid">
       ${kpi('Projects', projects.length)}
       ${kpi('Active Tasks', activeTasks)}
       ${kpi('Open Tickets', openTickets)}
-      ${kpi('Unread Alerts', unread)}
+      ${kpi('Domains', domains.length, expiringSoon > 0 ? `${expiringSoon} need attention` : null)}
+      ${kpi('Reports', reports.length)}
+      ${kpi('Monthly Budget', `$${(budgetTotal / 1000).toFixed(1)}k`)}
     </section>
-    <section class="ew-card">
-      <div class="ew-card-head"><div class="ew-card-title">Recent Projects</div></div>
-      ${projects.length === 0 ? emptyState('No projects yet.') : projects.slice(0, 5).map(projectRowHtml).join('')}
-    </section>
+
+    <div class="ew-grid-main">
+      <div class="ew-col-left">
+        <section class="ew-card" style="margin-bottom:22px">
+          <div class="ew-card-head">
+            <div class="ew-card-title">Projects</div>
+            <button class="ew-card-link" id="dashViewProjects">View all →</button>
+          </div>
+          ${projects.length === 0 ? emptyState('No projects yet.') : projects.slice(0, 5).map(projectRowHtml).join('')}
+        </section>
+
+        <section class="ew-card" style="margin-bottom:22px">
+          <div class="ew-card-head">
+            <div class="ew-card-title">Tasks</div>
+            <button class="ew-card-link" id="dashViewTasks">View all →</button>
+          </div>
+          ${tasks.length === 0 ? emptyState('No tasks yet.') : `
+            <table class="ew-table">
+              <thead><tr><th>Task</th><th>Assignee</th><th>Priority</th><th>Status</th><th>Due</th></tr></thead>
+              <tbody>${tasks.slice(0, 5).map((t) => {
+                const assignee = users.find((u) => u.id === t.assigneeId);
+                return `<tr><td>${escapeHtml(t.name)}</td><td>${assignee ? escapeHtml(assignee.name) : '—'}</td><td><span class="ew-pill ${PRIORITY_PILL[t.priority] || 'pill-todo'}">${escapeHtml(t.priority)}</span></td><td><span class="ew-pill ${STATUS_PILL[t.status] || 'pill-todo'}">${escapeHtml(t.status)}</span></td><td>${t.due ? new Date(t.due).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td></tr>`;
+              }).join('')}</tbody>
+            </table>
+          `}
+        </section>
+
+        <section class="ew-card">
+          <div class="ew-card-head">
+            <div class="ew-card-title">Support Tickets</div>
+            <button class="ew-card-link" id="dashViewTickets">View all →</button>
+          </div>
+          ${tickets.length === 0 ? emptyState('No tickets yet.') : tickets.slice(0, 4).map((t) => `
+            <div class="ew-ticket-row">
+              <div class="ew-ticket-id">${shortTicketId(t.id)}</div>
+              <div style="flex:1;min-width:200px">
+                <div class="ew-ticket-subject">${escapeHtml(t.subject)}</div>
+                <div class="ew-ticket-meta">${escapeHtml(t.category)}</div>
+              </div>
+              <span class="ew-pill ${STATUS_PILL[t.status] || 'pill-todo'}">${escapeHtml(t.status)}</span>
+            </div>
+          `).join('')}
+        </section>
+      </div>
+
+      <aside class="ew-aside-col">
+        <section class="ew-card">
+          <div class="ew-card-head">
+            <div class="ew-card-title">Domains</div>
+            <button class="ew-card-link" id="dashViewDomains2">View all →</button>
+          </div>
+          ${domains.length === 0 ? emptyState('No domains yet.') : domains.slice(0, 2).map((d) => `
+            <div class="ew-domain-row" style="flex-direction:column;align-items:flex-start;gap:4px;padding:10px 0">
+              <div style="display:flex;justify-content:space-between;width:100%">
+                <span class="ew-domain-name serif" style="font-size:14px">${escapeHtml(d.domainName)}</span>
+                <span class="ew-pill ${d.sslStatus === 'Valid' ? 'pill-ontrack' : 'pill-atrisk'}">${escapeHtml(d.sslStatus)}</span>
+              </div>
+              <span class="ew-card-sub">${escapeHtml(d.platform)} · Expires ${escapeHtml(d.expiresAt || 'n/a')}</span>
+            </div>
+          `).join('')}
+        </section>
+
+        <section class="ew-card">
+          <div class="ew-card-head"><div class="ew-card-title">Marketing Budget</div></div>
+          <div class="ew-card-sub" style="margin-bottom:10px">Total this month: $${budgetTotal.toLocaleString()}</div>
+          ${budgetItems.length === 0 ? emptyState('No budget items yet.') : `
+            <div class="ew-budget-stack" style="height:22px">
+              ${budgetItems.map((i) => `<div class="ew-budget-stack-seg" style="width:${(i.amount / budgetTotal * 100).toFixed(1)}%;background:${i.color}" title="${escapeHtml(i.label)}"></div>`).join('')}
+            </div>
+          `}
+        </section>
+
+        <section class="ew-card">
+          <div class="ew-card-head"><div class="ew-card-title">Reports</div><button class="ew-card-link" id="dashViewReports2">View all →</button></div>
+          ${reports.length === 0 ? emptyState('No reports yet.') : reports.slice(0, 3).map((r) => `
+            <div class="ew-report-row">
+              <div class="ew-report-icon">${r.storageType === 'drive' ? PILL_SVG.cloud : PILL_SVG.file}</div>
+              <div><div class="ew-report-name">${escapeHtml(r.name)}</div><div class="ew-report-meta">${escapeHtml(r.category)}</div></div>
+            </div>
+          `).join('')}
+        </section>
+
+        ${CURRENT_USER.role === 'client' ? `
+          <section class="ew-card">
+            <div class="ew-card-head"><div class="ew-card-title">Billing</div></div>
+            <div class="ew-card-sub" style="margin-bottom:8px">Standard Plan · $5/mo</div>
+            <span class="ew-pill ${billingInfo.billing?.status === 'active' ? 'pill-ontrack' : 'pill-todo'}">${escapeHtml(billingInfo.billing?.status || 'no subscription')}</span>
+          </section>
+        ` : ''}
+      </aside>
+    </div>
   `;
+
+  document.getElementById('qaCreateTicket').addEventListener('click', () => openTicketModal());
+  document.getElementById('qaViewReports').addEventListener('click', () => navigateTo('Reports'));
+  document.getElementById('qaViewDomains').addEventListener('click', () => navigateTo('Domains'));
+  document.getElementById('dashViewProjects').addEventListener('click', () => navigateTo('Projects'));
+  document.getElementById('dashViewTasks')?.addEventListener('click', () => navigateTo('Tasks'));
+  document.getElementById('dashViewTickets').addEventListener('click', () => navigateTo('Tickets'));
+  document.getElementById('dashViewDomains2').addEventListener('click', () => navigateTo('Domains'));
+  document.getElementById('dashViewReports2').addEventListener('click', () => navigateTo('Reports'));
 }
-function kpi(label, value) {
-  return `<div class="ew-card ew-kpi"><div class="ew-kpi-value">${value}</div><div class="ew-kpi-label">${escapeHtml(label)}</div></div>`;
+function kpi(label, value, subtext) {
+  return `<div class="ew-card ew-kpi"><div class="ew-kpi-value">${value}</div><div class="ew-kpi-label">${escapeHtml(label)}</div>${subtext ? `<div class="ew-card-sub" style="margin-top:4px;color:var(--amber-500)">${escapeHtml(subtext)}</div>` : ''}</div>`;
 }
 function emptyState(msg) { return `<div class="ew-empty">${escapeHtml(msg)}</div>`; }
+function shortTicketId(id) {
+  // New tickets get a real short sequential id (#1003, #1004...); older
+  // seed data already uses "ticket-1001" style ids.
+  if (id.startsWith('ticket-')) return '#' + id.replace('ticket-', '');
+  if (/^\d+$/.test(id)) return '#' + id;
+  return '#' + id.slice(0, 4);
+}
 
 function projectRowHtml(p) {
   const pct = p.progress?.pct ?? 0;
@@ -373,6 +492,7 @@ function projectRowHtml(p) {
       <div class="ew-progress-track"><div class="ew-progress-fill" style="width:${pct}%"></div></div>
     </div>
   `;
+
 }
 
 /* ============ Projects ============ */
@@ -706,7 +826,7 @@ function ticketCardHtml(t, canAssign) {
   return `
     <div class="ew-item-card">
       <div class="ew-item-card-head">
-        <div><div class="name">${escapeHtml(t.id.replace('ticket-', '#'))} · ${escapeHtml(t.subject)}</div><div class="sub">${escapeHtml(t.category)} · ${client ? escapeHtml(client.company || client.name) : '—'}</div></div>
+        <div><div class="name">${escapeHtml(shortTicketId(t.id))} · ${escapeHtml(t.subject)}</div><div class="sub">${escapeHtml(t.category)} · ${client ? escapeHtml(client.company || client.name) : '—'}</div></div>
       </div>
       ${assignee ? `<div class="ew-card-sub">Assigned to ${escapeHtml(assignee.name)}</div>` : `<div class="ew-card-sub">Unassigned</div>`}
       <div class="ew-item-card-foot">
@@ -725,7 +845,7 @@ function ticketRowHtml(t, canAssign) {
   const canEditStatus = canAssign || (CURRENT_USER.role === 'employee' && t.assigneeId === CURRENT_USER.id);
   return `
     <div class="ew-ticket-row">
-      <div class="ew-ticket-id">${escapeHtml(t.id.replace('ticket-', '#'))}</div>
+      <div class="ew-ticket-id">${escapeHtml(shortTicketId(t.id))}</div>
       <div style="flex:1;min-width:200px">
         <div class="ew-ticket-subject">${escapeHtml(t.subject)}</div>
         <div class="ew-ticket-meta">${escapeHtml(t.category)} · ${client ? escapeHtml(client.company || client.name) : '—'}${assignee ? ` · Assigned to ${escapeHtml(assignee.name)}` : ''}</div>
@@ -746,10 +866,17 @@ function ticketRowHtml(t, canAssign) {
 }
 
 function openTicketModal() {
+  const isStaff = ['admin', 'sales', 'project_manager', 'employee'].includes(CURRENT_USER.role);
+  const clients = isStaff ? CACHE.users.filter((u) => u.role === 'client') : [];
   openModal(`
     <h2>Create a support ticket</h2>
     <p class="ew-modal-sub">Your team typically responds within one business day.</p>
     <form id="ticketForm">
+      ${isStaff ? `
+        <div class="ew-field"><label>Client</label>
+          <select id="tkf-client">${clients.map((c) => `<option value="${c.id}">${escapeHtml(c.company || c.name)}</option>`).join('')}</select>
+        </div>
+      ` : ''}
       <div class="ew-field"><label>Subject</label><input id="tkf-subject" type="text" required></div>
       <div class="ew-field"><label>Category</label>
         <select id="tkf-category">
@@ -757,9 +884,10 @@ function openTicketModal() {
         </select>
       </div>
       <div class="ew-field"><label>Description</label><textarea id="tkf-desc"></textarea></div>
+      <div id="tkf-error" class="ew-field-error ew-hidden"></div>
       <div class="ew-modal-actions">
         <button type="button" class="ew-btn ew-btn-ghost" id="tkf-cancel">Cancel</button>
-        <button type="submit" class="ew-btn ew-btn-primary">Submit Ticket</button>
+        <button type="submit" class="ew-btn ew-btn-primary" id="tkf-submit">Submit Ticket</button>
       </div>
     </form>
   `);
@@ -768,13 +896,25 @@ function openTicketModal() {
     e.preventDefault();
     const subject = document.getElementById('tkf-subject').value.trim();
     if (!subject) return;
-    await api('POST', '/tickets', {
-      subject, category: document.getElementById('tkf-category').value,
-      description: document.getElementById('tkf-desc').value.trim(),
-    });
-    closeModal();
-    showToast('Ticket created');
-    navigateTo('Tickets');
+    const errBox = document.getElementById('tkf-error');
+    const submitBtn = document.getElementById('tkf-submit');
+    errBox.classList.add('ew-hidden');
+    submitBtn.disabled = true;
+    try {
+      const payload = {
+        subject, category: document.getElementById('tkf-category').value,
+        description: document.getElementById('tkf-desc').value.trim(),
+      };
+      if (isStaff) payload.clientId = document.getElementById('tkf-client').value;
+      await api('POST', '/tickets', payload);
+      closeModal();
+      showToast('Ticket created');
+      navigateTo('Tickets');
+    } catch (err) {
+      errBox.textContent = err.message;
+      errBox.classList.remove('ew-hidden');
+      submitBtn.disabled = false;
+    }
   });
 }
 

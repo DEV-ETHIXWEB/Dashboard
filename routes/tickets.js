@@ -32,7 +32,14 @@ router.post('/', requireCSRF, async (req, res, next) => {
     const clientId = req.user.role === 'client' ? req.user.id : req.body.clientId;
     if (!clientId) return res.status(400).json({ error: 'clientId is required' });
 
+    const allTickets = await db.all('tickets');
+    const numbers = allTickets
+      .map((t) => parseInt(String(t.id).replace('ticket-', ''), 10))
+      .filter((n) => !isNaN(n));
+    const nextNumber = (numbers.length ? Math.max(...numbers) : 1000) + 1;
+
     const ticket = await db.insert('tickets', {
+      id: `ticket-${nextNumber}`,
       subject, category: category || 'General', clientId, assigneeId: null,
       status: 'Open', description: description || '', createdAt: new Date().toISOString(),
     });
