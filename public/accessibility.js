@@ -8,6 +8,18 @@
   const STORAGE_KEY = 'ethixweb_a11y_prefs';
   const DEFAULTS = { fontScale: 1, highContrast: false, dyslexiaFont: false, reduceMotion: false, underlineLinks: false };
 
+  // Loaded once, lazily, only if someone actually turns on the dyslexia
+  // toggle -- avoids paying for a font nobody asked for.
+  let dyslexiaFontLoaded = false;
+  function ensureDyslexiaFontLoaded() {
+    if (dyslexiaFontLoaded) return;
+    dyslexiaFontLoaded = true;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap';
+    document.head.appendChild(link);
+  }
+
   function loadPrefs() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -23,6 +35,7 @@
   let prefs = loadPrefs();
 
   function applyPrefs() {
+    if (prefs.dyslexiaFont) ensureDyslexiaFontLoaded();
     const root = document.documentElement;
     root.style.setProperty('--ew-a11y-font-scale', prefs.fontScale);
     root.classList.toggle('ew-a11y-high-contrast', prefs.highContrast);

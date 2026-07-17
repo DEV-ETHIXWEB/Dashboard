@@ -42,6 +42,24 @@ const ICONS = {
   Settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
 };
 
+const PILL_SVG = {
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.2M12 19.8V22M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2 12h2.2M19.8 12H22M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"/></svg>',
+  moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.5 15A9 9 0 1 1 19 5.6L23 10"/></svg>',
+  checkCircle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"/><path d="M22 4L12 14.01l-3-3"/></svg>',
+  warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>',
+  cloud: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a5 5 0 1 1 1.7-9.7 6 6 0 0 1 11.3 3A4.5 4.5 0 0 1 21 19h-3.5z"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-6-5z"/><path d="M13 3v5h5"/></svg>',
+  phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 18h.01"/></svg>',
+  mail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2.2"/><path d="M22 6.5l-10 7L2 6.5"/></svg>',
+  barChart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>',
+  pieChart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.2 15.3A10 10 0 1 1 12 2v10z"/></svg>',
+};
+
 const ROLE_LABEL = { admin: 'Admin', sales: 'Sales', project_manager: 'Project Manager', employee: 'Employee', client: 'Client' };
 const ROLE_NAV = {
   admin: ['Dashboard', 'Projects', 'Tasks', 'Tickets', 'Domains', 'Reports', 'Budget', 'Billing', 'Team', 'Settings'],
@@ -68,7 +86,7 @@ function escapeHtml(str) {
 /* ============ Toast ============ */
 function showToast(msg) {
   const host = document.getElementById('toastHost');
-  host.innerHTML = `<div class="ew-toast">✓ ${escapeHtml(msg)}</div>`;
+  host.innerHTML = `<div class="ew-toast">${PILL_SVG.checkCircle} ${escapeHtml(msg)}</div>`;
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => { host.innerHTML = ''; }, 2600);
 }
@@ -147,6 +165,36 @@ function bindTopbar() {
   });
   document.getElementById('darkBtn').addEventListener('click', () => setTheme('dark'));
   document.getElementById('lightBtn').addEventListener('click', () => setTheme('light'));
+
+  const avatarBtn = document.getElementById('avatarBtn');
+  const avatarMenu = document.getElementById('avatarMenu');
+  avatarBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (avatarMenu.classList.contains('ew-hidden')) {
+      avatarMenu.innerHTML = `
+        <div class="who">
+          <div class="name">${escapeHtml(CURRENT_USER.name)}</div>
+          <div class="email">${escapeHtml(CURRENT_USER.email)}</div>
+        </div>
+        <button id="avatarSettingsBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Profile &amp; Settings
+        </button>
+        <button id="avatarLogoutBtn" class="danger">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+          Log out
+        </button>
+      `;
+      document.getElementById('avatarSettingsBtn').addEventListener('click', () => { avatarMenu.classList.add('ew-hidden'); navigateTo('Settings'); });
+      document.getElementById('avatarLogoutBtn').addEventListener('click', () => document.getElementById('logoutBtn').click());
+      avatarMenu.classList.remove('ew-hidden');
+    } else {
+      avatarMenu.classList.add('ew-hidden');
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (!avatarMenu.contains(e.target) && e.target !== avatarBtn) avatarMenu.classList.add('ew-hidden');
+  });
 }
 
 /* ============ Notification bell (topbar, replaces the old Notifications tab) ============ */
@@ -557,7 +605,7 @@ function taskRowHtml(t, canManage) {
         ` : `<span class="ew-pill ${STATUS_PILL[t.status] || 'pill-todo'}">${escapeHtml(t.status)}</span>`}
       </td>
       <td>${t.due ? new Date(t.due).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
-      ${canManage ? `<td style="display:flex;gap:6px"><button class="ew-icon-btn" style="margin-left:0" id="task-edit-${t.id}">✎</button><button class="ew-icon-btn" id="task-delete-${t.id}">🗑</button></td>` : ''}
+      ${canManage ? `<td style="display:flex;gap:6px"><button class="ew-icon-btn" style="margin-left:0" id="task-edit-${t.id}">${PILL_SVG.edit}</button><button class="ew-icon-btn" id="task-delete-${t.id}">${PILL_SVG.trash}</button></td>` : ''}
     </tr>
   `;
 }
@@ -745,8 +793,8 @@ async function renderTeam(main) {
         <div class="ew-settings-member-row">
           <div class="ew-assignee-avatar" style="background:#ff4438">${initials(u.name)}</div>
           <div class="info"><div class="name">${escapeHtml(u.name)}${u.company ? ` · ${escapeHtml(u.company)}` : ''}</div><div class="role">${escapeHtml(ROLE_LABEL[u.role] || u.role)} · ${escapeHtml(u.email)}</div></div>
-          <button class="ew-icon-btn" style="margin-left:0" id="user-edit-${u.id}">✎</button>
-          ${u.id !== CURRENT_USER.id ? `<button class="ew-icon-btn" id="user-delete-${u.id}">🗑</button>` : ''}
+          <button class="ew-icon-btn" style="margin-left:0" id="user-edit-${u.id}">${PILL_SVG.edit}</button>
+          ${u.id !== CURRENT_USER.id ? `<button class="ew-icon-btn" id="user-delete-${u.id}">${PILL_SVG.trash}</button>` : ''}
         </div>
       `).join('')}
     </section>
@@ -872,7 +920,7 @@ function domainRowHtml(d, canDelete) {
       </div>
       <div style="margin-top:10px">${domainMetaBlock(d)}</div>
       <div class="ew-project-actions">
-        <button class="ew-btn ew-btn-ghost ew-btn-sm" id="dom-renew-${d.id}"><span>↻</span> Renew for 1 year</button>
+        <button class="ew-btn ew-btn-ghost ew-btn-sm" id="dom-renew-${d.id}">${PILL_SVG.refresh} Renew for 1 year</button>
         <button class="ew-btn ew-btn-ghost ew-btn-sm" id="dom-edit-${d.id}">Edit</button>
         ${canDelete ? `<button class="ew-btn ew-btn-danger ew-btn-sm" id="dom-delete-${d.id}">Delete</button>` : ''}
       </div>
@@ -984,14 +1032,14 @@ async function renderReports(main) {
       <div><h2>Reports</h2><p>Performance reports and documents shared with your account.</p></div>
       ${canUpload ? `<button class="ew-btn ew-btn-primary" id="uploadReportBtn">+ Upload Report</button>` : ''}
     </div>
-    ${!driveEnabled ? `<div class="ew-info-not-configured" style="margin-bottom:16px">⚠️ Google Drive storage isn't connected yet — files are temporarily stored in the database with a 4MB limit per file. See the README to connect Drive for unlimited storage.</div>` : ''}
+    ${!driveEnabled ? `<div class="ew-info-not-configured" style="margin-bottom:16px">${PILL_SVG.warning} Google Drive storage isn't connected yet — files are temporarily stored in the database with a 4MB limit per file. See the README to connect Drive for unlimited storage.</div>` : ''}
     <section class="ew-card">
       ${reports.length === 0 ? emptyState('No reports yet.') : reports.map((r) => `
         <div class="ew-report-row">
-          <div class="ew-report-icon">${r.storageType === 'drive' ? '☁️' : '📄'}</div>
+          <div class="ew-report-icon">${r.storageType === 'drive' ? PILL_SVG.cloud : PILL_SVG.file}</div>
           <div><div class="ew-report-name">${escapeHtml(r.name)}</div><div class="ew-report-meta">${escapeHtml(r.category)} · ${clientLabel(r.clientId)} · ${(r.sizeBytes / 1024).toFixed(0)} KB</div></div>
-          <button class="ew-icon-btn" id="report-dl-${r.id}">⬇</button>
-          ${canDelete ? `<button class="ew-icon-btn" id="report-del-${r.id}">🗑</button>` : ''}
+          <button class="ew-icon-btn" id="report-dl-${r.id}">${PILL_SVG.download}</button>
+          ${canDelete ? `<button class="ew-icon-btn" id="report-del-${r.id}">${PILL_SVG.trash}</button>` : ''}
         </div>
       `).join('')}
     </section>
@@ -1066,11 +1114,18 @@ async function renderBudget(main) {
 
   const { items } = selectedClientId ? await api('GET', `/budget?clientId=${selectedClientId}`) : { items: [] };
   const total = items.reduce((sum, i) => sum + i.amount, 0);
+  const chartMode = getViewMode('budget-chart') === 'card' ? 'pie' : 'bar'; // reuse list/card storage as bar/pie
 
   main.innerHTML = `
     <div class="ew-page-head">
       <div><h2>Marketing Budget</h2><p>See exactly where ad spend is going, channel by channel.</p></div>
-      ${isStaff ? `<button class="ew-btn ew-btn-primary" id="addBudgetBtn">+ Add Budget Item</button>` : ''}
+      <div style="display:flex;gap:10px;align-items:center">
+        <div class="ew-view-toggle" data-view-key="budget-chart">
+          <button type="button" data-mode="list" class="${chartMode === 'bar' ? 'active' : ''}" aria-label="Bar chart">${PILL_SVG.barChart}</button>
+          <button type="button" data-mode="card" class="${chartMode === 'pie' ? 'active' : ''}" aria-label="Pie chart">${PILL_SVG.pieChart}</button>
+        </div>
+        ${isStaff ? `<button class="ew-btn ew-btn-primary" id="addBudgetBtn">+ Add Budget Item</button>` : ''}
+      </div>
     </div>
     ${isStaff ? `
       <div class="ew-field ew-budget-client-picker">
@@ -1081,15 +1136,17 @@ async function renderBudget(main) {
     <section class="ew-card">
       <div class="ew-card-head"><div><div class="ew-card-title">This month's allocation</div><div class="ew-card-sub">Total: $${total.toLocaleString()}</div></div></div>
       ${items.length === 0 ? emptyState('No budget items yet.') : `
-        <div class="ew-budget-stack">
-          ${items.map((i) => `<div class="ew-budget-stack-seg" style="width:${(i.amount / total * 100).toFixed(1)}%;background:${i.color}" title="${escapeHtml(i.label)}: $${i.amount.toLocaleString()}"></div>`).join('')}
-        </div>
+        ${chartMode === 'pie' ? budgetPieHtml(items, total) : `
+          <div class="ew-budget-stack">
+            ${items.map((i) => `<div class="ew-budget-stack-seg" style="width:${(i.amount / total * 100).toFixed(1)}%;background:${i.color}" title="${escapeHtml(i.label)}: $${i.amount.toLocaleString()}"></div>`).join('')}
+          </div>
+        `}
         <div class="ew-legend" style="margin-top:18px">
           ${items.map((i) => `
             <div class="ew-legend-row">
               <div class="ew-legend-left"><span class="ew-dot" style="background:${i.color}"></span>${escapeHtml(i.label)}</div>
               <span class="ew-legend-amt">$${i.amount.toLocaleString()} · ${((i.amount / total) * 100).toFixed(0)}%</span>
-              ${isStaff ? `<button class="ew-icon-btn" style="margin-left:12px" id="budget-del-${i.id}">🗑</button>` : ''}
+              ${isStaff ? `<button class="ew-icon-btn" style="margin-left:12px" id="budget-del-${i.id}">${PILL_SVG.trash}</button>` : ''}
             </div>
           `).join('')}
         </div>
@@ -1097,6 +1154,7 @@ async function renderBudget(main) {
     </section>
   `;
 
+  bindViewToggle('budget-chart', () => renderBudget(main));
   document.getElementById('budgetClientPicker')?.addEventListener('change', (e) => { CACHE.selectedBudgetClient = e.target.value; navigateTo('Budget'); });
   document.getElementById('addBudgetBtn')?.addEventListener('click', () => openBudgetModal(selectedClientId));
   items.forEach((i) => {
@@ -1107,6 +1165,26 @@ async function renderBudget(main) {
       });
     });
   });
+}
+
+function budgetPieHtml(items, total) {
+  let offset = 25;
+  const arcs = items.map((i) => {
+    const pct = total > 0 ? (i.amount / total) * 100 : 0;
+    const el = `<circle cx="21" cy="21" r="15.9" fill="transparent" stroke="${i.color}" stroke-width="5" stroke-dasharray="${pct} ${100 - pct}" stroke-dashoffset="${offset}" stroke-linecap="round"/>`;
+    offset -= pct;
+    return el;
+  }).join('');
+  return `
+    <div style="display:flex;justify-content:center;padding:10px 0 4px">
+      <svg width="180" height="180" viewBox="0 0 42 42">
+        <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="var(--track)" stroke-width="5"/>
+        ${arcs}
+        <text x="21" y="20" text-anchor="middle" font-size="5.2" fill="var(--text)" font-weight="600" font-family="Fraunces, serif">$${(total / 1000).toFixed(1)}k</text>
+        <text x="21" y="25" text-anchor="middle" font-size="2.4" fill="var(--text-faint)">total spend</text>
+      </svg>
+    </div>
+  `;
 }
 
 function openBudgetModal(clientId) {
@@ -1142,7 +1220,7 @@ async function renderBilling(main) {
     const status = billing?.status || 'no_subscription';
     main.innerHTML = `
       <div class="ew-page-head"><div><h2>Billing</h2><p>Manage your subscription.</p></div></div>
-      ${!enabled ? `<div class="ew-info-not-configured">⚠️ Billing isn't connected yet. Ask your account manager to finish Stripe setup.</div>` : `
+      ${!enabled ? `<div class="ew-info-not-configured">${PILL_SVG.warning} Billing isn't connected yet. Ask your account manager to finish Stripe setup.</div>` : `
         <section class="ew-card ew-billing-plan-card" style="max-width:420px;margin:0 auto">
           <div class="ew-card-title">Standard Plan</div>
           <div class="price">$5<span>/month</span></div>
@@ -1171,7 +1249,7 @@ async function renderBilling(main) {
   if (CACHE.users.length === 0) CACHE.users = (await api('GET', '/users')).users;
   main.innerHTML = `
     <div class="ew-page-head"><div><h2>Billing</h2><p>Subscription status across all clients.</p></div></div>
-    ${!enabled ? `<div class="ew-info-not-configured" style="margin-bottom:16px">⚠️ Stripe isn't connected yet — see the README for setup steps.</div>` : ''}
+    ${!enabled ? `<div class="ew-info-not-configured" style="margin-bottom:16px">${PILL_SVG.warning} Stripe isn't connected yet — see the README for setup steps.</div>` : ''}
     <section class="ew-card">
       ${(billing || []).length === 0 ? emptyState('No billing records yet.') : billing.map((b) => `
         <div class="ew-settings-member-row">
@@ -1216,7 +1294,7 @@ async function renderSettings(main) {
     <section class="ew-card" style="margin-top:20px">
       <div class="ew-card-head"><div><div class="ew-card-title">Two-Factor Authentication</div><div class="ew-card-sub">Add an extra verification step at login.</div></div></div>
       ${!APP_CONFIG.firebaseEnabled ? `
-        <div class="ew-info-not-configured">⚠️ Two-factor authentication isn't configured on this server yet. See the README for Firebase setup steps.</div>
+        <div class="ew-info-not-configured">${PILL_SVG.warning} Two-factor authentication isn't configured on this server yet. See the README for Firebase setup steps.</div>
       ` : CURRENT_USER.twoFactorEnabled ? `
         <div class="ew-settings-row">
           <div><div class="label">Status</div><div class="desc">Enabled — verifying via ${escapeHtml(CURRENT_USER.twoFactorContact || 'your contact on file')}</div></div>
@@ -1268,8 +1346,8 @@ function open2FASetupModal() {
     <h2>Set up two-factor authentication</h2>
     <p class="ew-modal-sub">Choose how you'd like to verify it's you at login.</p>
     <div class="ew-modal-actions" style="justify-content:center;gap:14px;margin-bottom:6px">
-      <button class="ew-btn ew-btn-ghost" id="setup2faPhone">📱 Phone (SMS code)</button>
-      <button class="ew-btn ew-btn-ghost" id="setup2faEmail">✉️ Email (secure link)</button>
+      <button class="ew-btn ew-btn-ghost" id="setup2faPhone">${PILL_SVG.phone} Phone (SMS code)</button>
+      <button class="ew-btn ew-btn-ghost" id="setup2faEmail">${PILL_SVG.mail} Email (secure link)</button>
     </div>
   `);
   document.getElementById('setup2faPhone').addEventListener('click', () => open2FAPhoneModal());
