@@ -215,77 +215,92 @@ function daysFromNow(n) {
 
 async function seed() {
   await initSchema();
-  const existing = await db.all('users');
-  if (existing.length > 0) return; // already seeded (or migrated from local data)
 
   const hash = (pw) => bcrypt.hashSync(pw, 10);
+  const usersEmpty = (await db.all('users')).length === 0;
 
-  await Promise.all([
-    db.insert('users', { id: 'u-admin', name: 'Admin User', email: 'admin@ethixweb.local', role: 'admin', password: hash('Admin#2026!') }),
-    db.insert('users', { id: 'u-sales', name: 'Emily Turner', email: 'emily.turner@ethixweb.local', role: 'sales', password: hash('Sales#2026!') }),
-    db.insert('users', { id: 'u-pm', name: 'Ryan Coleman', email: 'ryan.coleman@ethixweb.local', role: 'project_manager', password: hash('Manager#2026!') }),
-    db.insert('users', { id: 'u-employee', name: 'Jordan Brooks', email: 'jordan.brooks@ethixweb.local', role: 'employee', password: hash('Staff#2026!') }),
-    db.insert('users', { id: 'u-client', name: 'David Shaw', email: 'client@brightpath-retail.com', role: 'client', company: 'BrightPath Retail Co.', password: hash('Client#2026!') }),
-  ]);
+  if (usersEmpty) {
+    await Promise.all([
+      db.insert('users', { id: 'u-admin', name: 'Admin User', email: 'admin@ethixweb.local', role: 'admin', password: hash('Admin#2026!') }),
+      db.insert('users', { id: 'u-sales', name: 'Emily Turner', email: 'emily.turner@ethixweb.local', role: 'sales', password: hash('Sales#2026!') }),
+      db.insert('users', { id: 'u-pm', name: 'Ryan Coleman', email: 'ryan.coleman@ethixweb.local', role: 'project_manager', password: hash('Manager#2026!') }),
+      db.insert('users', { id: 'u-employee', name: 'Jordan Brooks', email: 'jordan.brooks@ethixweb.local', role: 'employee', password: hash('Staff#2026!') }),
+      db.insert('users', { id: 'u-client', name: 'David Shaw', email: 'client@brightpath-retail.com', role: 'client', company: 'BrightPath Retail Co.', password: hash('Client#2026!') }),
+    ]);
+  }
 
-  await Promise.all([
-    db.insert('projects', { id: 'proj-1', name: 'BrightPath Website Redesign', type: 'Website', clientId: 'u-client', assignedPmId: 'u-pm', status: 'In Progress', description: 'Full marketing site redesign with new booking flow.', createdAt: new Date().toISOString() }),
-    db.insert('projects', { id: 'proj-2', name: 'BrightPath Mobile App', type: 'Mobile App', clientId: 'u-client', assignedPmId: 'u-pm', status: 'On Track', description: 'iOS/Android app for loyalty rewards and in-store pickup.', createdAt: new Date().toISOString() }),
-    db.insert('projects', { id: 'proj-3', name: 'Q3 Paid Social Campaign', type: 'Digital Marketing', clientId: 'u-client', assignedPmId: 'u-pm', status: 'On Track', description: 'Meta + Google Ads campaign for the fall product launch.', createdAt: new Date().toISOString() }),
-  ]);
+  if ((await db.all('projects')).length === 0) {
+    await Promise.all([
+      db.insert('projects', { id: 'proj-1', name: 'BrightPath Website Redesign', type: 'Website', clientId: 'u-client', assignedPmId: 'u-pm', status: 'In Progress', description: 'Full marketing site redesign with new booking flow.', createdAt: new Date().toISOString() }),
+      db.insert('projects', { id: 'proj-2', name: 'BrightPath Mobile App', type: 'Mobile App', clientId: 'u-client', assignedPmId: 'u-pm', status: 'On Track', description: 'iOS/Android app for loyalty rewards and in-store pickup.', createdAt: new Date().toISOString() }),
+      db.insert('projects', { id: 'proj-3', name: 'Q3 Paid Social Campaign', type: 'Digital Marketing', clientId: 'u-client', assignedPmId: 'u-pm', status: 'On Track', description: 'Meta + Google Ads campaign for the fall product launch.', createdAt: new Date().toISOString() }),
+    ]);
+  }
 
-  await Promise.all([
-    db.insert('tasks', { id: 'task-1', projectId: 'proj-1', name: 'Homepage hero redesign', assigneeId: 'u-employee', status: 'In Progress', priority: 'High', due: daysFromNow(5) }),
-    db.insert('tasks', { id: 'task-2', projectId: 'proj-1', name: 'Booking flow wireframes', assigneeId: 'u-employee', status: 'To Do', priority: 'Medium', due: daysFromNow(10) }),
-    db.insert('tasks', { id: 'task-3', projectId: 'proj-2', name: 'App store listing assets', assigneeId: 'u-employee', status: 'In Review', priority: 'High', due: daysFromNow(3) }),
-    db.insert('tasks', { id: 'task-4', projectId: 'proj-3', name: 'Ad creative — carousel set', assigneeId: 'u-employee', status: 'Complete', priority: 'Low', due: daysFromNow(-2) }),
-  ]);
+  if ((await db.all('tasks')).length === 0) {
+    await Promise.all([
+      db.insert('tasks', { id: 'task-1', projectId: 'proj-1', name: 'Homepage hero redesign', assigneeId: 'u-employee', status: 'In Progress', priority: 'High', due: daysFromNow(5) }),
+      db.insert('tasks', { id: 'task-2', projectId: 'proj-1', name: 'Booking flow wireframes', assigneeId: 'u-employee', status: 'To Do', priority: 'Medium', due: daysFromNow(10) }),
+      db.insert('tasks', { id: 'task-3', projectId: 'proj-2', name: 'App store listing assets', assigneeId: 'u-employee', status: 'In Review', priority: 'High', due: daysFromNow(3) }),
+      db.insert('tasks', { id: 'task-4', projectId: 'proj-3', name: 'Ad creative — carousel set', assigneeId: 'u-employee', status: 'Complete', priority: 'Low', due: daysFromNow(-2) }),
+    ]);
+  }
 
-  await Promise.all([
-    db.insert('tickets', { id: 'ticket-1001', subject: 'Homepage CTA button not linking correctly', category: 'Website', clientId: 'u-client', assigneeId: 'u-employee', status: 'Open', createdAt: new Date().toISOString(), description: 'The "Book Now" button on mobile leads to a 404 page.' }),
-    db.insert('tickets', { id: 'ticket-1002', subject: 'Request to add new landing page for fall promo', category: 'Marketing', clientId: 'u-client', assigneeId: 'u-pm', status: 'In Progress', createdAt: new Date().toISOString(), description: 'Need a dedicated landing page for the fall promo campaign.' }),
-  ]);
+  if ((await db.all('tickets')).length === 0) {
+    await Promise.all([
+      db.insert('tickets', { id: 'ticket-1001', subject: 'Homepage CTA button not linking correctly', category: 'Website', clientId: 'u-client', assigneeId: 'u-employee', status: 'Open', createdAt: new Date().toISOString(), description: 'The "Book Now" button on mobile leads to a 404 page.' }),
+      db.insert('tickets', { id: 'ticket-1002', subject: 'Request to add new landing page for fall promo', category: 'Marketing', clientId: 'u-client', assigneeId: 'u-pm', status: 'In Progress', createdAt: new Date().toISOString(), description: 'Need a dedicated landing page for the fall promo campaign.' }),
+    ]);
+  }
 
-  await Promise.all([
-    db.insert('notifications', { id: uuidv4(), userId: 'u-employee', message: 'You were assigned a new task: "Homepage hero redesign"', type: 'task', read: false, createdAt: new Date().toISOString() }),
-    db.insert('notifications', { id: uuidv4(), userId: 'u-pm', message: 'New ticket opened: "Homepage CTA button not linking correctly"', type: 'ticket', read: false, createdAt: new Date().toISOString() }),
-    db.insert('notifications', { id: uuidv4(), userId: 'u-client', message: 'Your project "BrightPath Website Redesign" moved to In Progress', type: 'project', read: true, createdAt: new Date().toISOString() }),
-  ]);
+  if ((await db.all('notifications')).length === 0) {
+    await Promise.all([
+      db.insert('notifications', { id: uuidv4(), userId: 'u-employee', message: 'You were assigned a new task: "Homepage hero redesign"', type: 'task', read: false, createdAt: new Date().toISOString() }),
+      db.insert('notifications', { id: uuidv4(), userId: 'u-pm', message: 'New ticket opened: "Homepage CTA button not linking correctly"', type: 'ticket', read: false, createdAt: new Date().toISOString() }),
+      db.insert('notifications', { id: uuidv4(), userId: 'u-client', message: 'Your project "BrightPath Website Redesign" moved to In Progress', type: 'project', read: true, createdAt: new Date().toISOString() }),
+    ]);
+  }
 
-  await Promise.all([
-    db.insert('domains', {
-      id: 'dom-1', clientId: 'u-client', domainName: 'brightpath-retail.com', platform: 'WordPress',
-      hostingProvider: 'EthixWeb Managed Hosting', hostingRegion: 'Washington, D.C., USA (East)',
-      registrar: 'Registered with EthixWeb', sslStatus: 'Valid', expiresAt: 'Aug 23, 2026',
-      autoRenew: true, dnsStatus: 'Propagated', notes: 'Primary storefront domain.',
-    }),
-    db.insert('domains', {
-      id: 'dom-2', clientId: 'u-client', domainName: 'shop.brightpath-retail.com', platform: 'Shopify',
-      hostingProvider: 'Shopify', hostingRegion: 'Global CDN',
-      registrar: 'Registered externally', sslStatus: 'Valid', expiresAt: 'Oct 4, 2026',
-      autoRenew: true, dnsStatus: 'Propagated', notes: 'Online storefront subdomain.',
-    }),
-  ]);
+  if ((await db.all('domains')).length === 0) {
+    await Promise.all([
+      db.insert('domains', {
+        id: 'dom-1', clientId: 'u-client', domainName: 'brightpath-retail.com', platform: 'WordPress',
+        hostingProvider: 'EthixWeb Managed Hosting', hostingRegion: 'Washington, D.C., USA (East)',
+        registrar: 'Registered with EthixWeb', sslStatus: 'Valid', expiresAt: 'Aug 23, 2026',
+        autoRenew: true, dnsStatus: 'Propagated', notes: 'Primary storefront domain.',
+      }),
+      db.insert('domains', {
+        id: 'dom-2', clientId: 'u-client', domainName: 'shop.brightpath-retail.com', platform: 'Shopify',
+        hostingProvider: 'Shopify', hostingRegion: 'Global CDN',
+        registrar: 'Registered externally', sslStatus: 'Valid', expiresAt: 'Oct 4, 2026',
+        autoRenew: true, dnsStatus: 'Propagated', notes: 'Online storefront subdomain.',
+      }),
+    ]);
+  }
 
-  await Promise.all([
-    db.insert('reports', {
-      id: 'rep-1', clientId: 'u-client', name: 'June Performance Report', category: 'Performance',
-      storageType: 'database', mimeType: 'application/pdf', sizeBytes: 2100000,
-      uploadedBy: 'u-pm', createdAt: new Date().toISOString(),
-    }),
-    db.insert('reports', {
-      id: 'rep-2', clientId: 'u-client', name: 'SEO Audit — Q2 2026', category: 'SEO',
-      storageType: 'database', mimeType: 'application/pdf', sizeBytes: 4600000,
-      uploadedBy: 'u-pm', createdAt: new Date().toISOString(),
-    }),
-  ]);
+  if ((await db.all('reports')).length === 0) {
+    await Promise.all([
+      db.insert('reports', {
+        id: 'rep-1', clientId: 'u-client', name: 'June Performance Report', category: 'Performance',
+        storageType: 'database', mimeType: 'application/pdf', sizeBytes: 2100000,
+        uploadedBy: 'u-pm', createdAt: new Date().toISOString(),
+      }),
+      db.insert('reports', {
+        id: 'rep-2', clientId: 'u-client', name: 'SEO Audit — Q2 2026', category: 'SEO',
+        storageType: 'database', mimeType: 'application/pdf', sizeBytes: 4600000,
+        uploadedBy: 'u-pm', createdAt: new Date().toISOString(),
+      }),
+    ]);
+  }
 
-  const thisMonth = new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-  await Promise.all([
-    db.insert('budget_items', { id: 'bud-1', clientId: 'u-client', label: 'Google Ads', amount: 3520, color: '#ff4438', month: thisMonth }),
-    db.insert('budget_items', { id: 'bud-2', clientId: 'u-client', label: 'Local Services Ads', amount: 1600, color: '#ffb020', month: thisMonth }),
-    db.insert('budget_items', { id: 'bud-3', clientId: 'u-client', label: 'Social Media Ads', amount: 1280, color: '#ff9d90', month: thisMonth }),
-  ]);
+  if ((await db.all('budget_items')).length === 0) {
+    const thisMonth = new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    await Promise.all([
+      db.insert('budget_items', { id: 'bud-1', clientId: 'u-client', label: 'Google Ads', amount: 3520, color: '#ff4438', month: thisMonth }),
+      db.insert('budget_items', { id: 'bud-2', clientId: 'u-client', label: 'Local Services Ads', amount: 1600, color: '#ffb020', month: thisMonth }),
+      db.insert('budget_items', { id: 'bud-3', clientId: 'u-client', label: 'Social Media Ads', amount: 1280, color: '#ff9d90', month: thisMonth }),
+    ]);
+  }
 }
 
 module.exports = { db, seed, initSchema, getPool, SCHEMAS };
