@@ -3,5 +3,15 @@
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/", "destination": "/public/index.html" },
     { "source": "/((?!api/).*)", "destination": "/public/$1" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*).js",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, must-revalidate" }]
+    },
+    {
+      "source": "/(.*).css",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, must-revalidate" }]
+    }
   ]
 }
