@@ -8,7 +8,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "dev:pgmem": "node --watch -r ./scripts/dev-with-pgmem.js server.js",
-    "migrate": "node scripts/migrate-local-data.js"
+    "migrate": "node scripts/migrate-local-data.js",
+    "build": "node scripts/build-frontend.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
