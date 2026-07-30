@@ -199,6 +199,14 @@ raw queries:
 - `db.insert(collection, obj)` — `obj.id` defaults to a new UUID if omitted.
 - `db.update(collection, id, patch)` — partial update, returns the new row.
 - `db.remove(collection, id)` / `db.removeWhere(collection, predicate)`.
+- `db.recent(collection, limit)` — like `all()`, but sorts/limits in SQL
+  (`ORDER BY created_at DESC LIMIT`) instead of fetching everything into
+  JS first. Use this instead of `all()` for anything read on a tight
+  polling interval, like the OTP monitor.
+- `db.incrementIfBelow(collection, id, field, max)` — atomically increments
+  a counter only if it's still under `max`, in one SQL statement, and
+  returns the updated row (or `null` if already at the cap). Used for the
+  OTP attempt counter, where a plain read-then-write would race.
 
 `collection` must be a key in `SCHEMAS`; any object key not listed in that
 collection's column array is silently dropped on insert/update, so adding a
@@ -266,9 +274,11 @@ npm run dev:frontend-only  # in frontend/
 - List endpoints generally read a full table and filter in application
   code rather than using SQL `WHERE` clauses. This is fine at the current
   scale; revisit if the dataset grows significantly.
-- Rate limiting: `/api/auth/login`, `/api/auth/google`, and
-  `/api/auth/verify-otp` have a strict limit (20 attempts / 15 min per IP).
-  The rest of the API has a general limit (600 requests / 15 min per IP) —
+- Rate limiting: `/api/auth/login` and `/api/auth/google` share a strict
+  limit (20 attempts / 15 min per IP). `/api/auth/verify-otp` has its own,
+  separate limit (30 attempts / 15 min per IP) — kept apart so retyping a
+  mistyped code can't lock someone out of the password step itself. The
+  rest of the API has a general limit (600 requests / 15 min per IP) —
   generous enough not to affect normal use, but bounded.
 - The self-service 2FA toggle in Settings (`users.js`'s `/me/2fa/enable` /
   `/me/2fa/disable`, backed by `users.two_factor_enabled` /

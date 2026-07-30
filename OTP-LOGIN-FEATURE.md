@@ -17,9 +17,11 @@ What was asked for instead: every login should require a second step where the p
 6 digit code. But this code should not be sent automatically by SMS or
 email. Instead, it should be generated the moment the password is accepted,
 and shown to an admin on a dedicated page, along with who is trying to log
-in (name, email) and where from (IP address). The code stays hidden behind
-a click to reveal button so an admin has to consciously choose to look at
-it. The admin then reads that code out to the person over some other
+in (name, email) and where from (IP address). The code itself is never
+sent to the browser until an admin explicitly asks for it -- clicking the
+reveal button makes a real, audit-logged request for that one code, rather
+than just un-hiding something already downloaded to the page. The admin
+then reads that code out to the person over some other
 channel, like a phone call or a chat message, and that person types it in
 to finish logging in.
 
@@ -70,9 +72,9 @@ client) goes through the OTP step.
    admin sidebar called "Login Codes" (`/portal/otp-monitor`). This page
    lists every code that has been generated recently: who requested it
    (name and email), what IP address they came from, when it was
-   requested, whether it's still active, expired, or already used, and the
-   code itself, hidden behind dots until the admin clicks the eye icon next
-   to it.
+   requested, whether it's still active, expired, or already used, and how
+   many wrong guesses it's already had. The code itself isn't in that list
+   at all -- clicking the eye icon fetches it from the server on demand.
 
 7. The admin finds the right row (usually the most recent one, or matched
    by name/email), reveals the code, and tells the person who's trying to
@@ -107,45 +109,56 @@ This is where most of the logic lives.
   role instead. Admins get logged in immediately. Everyone else gets a
   pending session plus a freshly generated OTP code saved to the database.
 - The old `POST /verify-2fa` route (which checked a Firebase ID token) has
-  been replaced with `POST /verify-otp`, which checks the plain 6 digit
-  code against what's stored in `otp_codes`, enforces the expiry and the
-  attempt limit, and promotes the session on success.
+  been replaced with `POST /verify-otp`, which checks the submitted code
+  against what's stored in `otp_codes`, enforces the expiry and the
+  attempt limit atomically (see "Hardening" below), and promotes the
+  session on success.
 - A new route, `GET /otp-logs`, is admin only and returns the list of
   recent codes joined with the requester's name and email, for the Login
-  Codes page to display.
+  Codes page to display. It does not include the code itself.
+- Another new route, `POST /otp-logs/:id/reveal`, is also admin only and
+  is the only way to actually get a code's value. Every call is written
+  to `activity_log` via the existing `audit()` helper, so there's a real
+  record of which admin looked at which code and when.
 
 ### Frontend
 
 **`src/pages/Login.tsx`**
 Removed all the old Firebase phone and email verification UI (the
 recaptcha box, the "send SMS code" button, the "email me a link" button).
-Replaced it with a simple screen: six boxes for the code, a confirm
-button, and a note telling the person to ask their admin for the code.
+Replaced it with a simple screen: six boxes for the code, a live countdown
+showing time left before it expires, a confirm button, and a note telling
+the person to ask their admin for the code. Digit entry supports pasting
+a full 6-digit code (e.g. copied from a chat message) and backspace
+correctly moves back to the previous box when the current one is empty.
 Also gave the surrounding background of the page (not the actual card or
 form, just everything around it) a more polished look: layered gradients,
 soft glowing shapes, a subtle grid pattern, and a couple of small trust
 signals on the left panel like "every login is verified with a second
-step." The email and password inputs and the OTP boxes themselves were
-left structurally the same, this was a visual pass, not a functional one.
+step."
 
 **`src/pages/OtpMonitor.tsx`** (new file)
 The admin facing Login Codes page. Shows each generated code as a row with
-the person's name, email, IP address, when it was requested, a status
-badge (Active, Expired, or Used), and the code itself masked with dots
-until you click the eye icon to reveal it. Refreshes automatically every
-5 seconds so new requests show up without a manual refresh.
+the person's name, email, IP address, when it was requested, how many
+attempts it's had, and a status badge (Active, Expired, or Used). The code
+itself is masked with dots by default; clicking the eye icon calls
+`POST /otp-logs/:id/reveal` and shows the real value only after that
+request succeeds. Refreshes automatically every 5 seconds so new requests
+show up without a manual refresh.
 
 **`src/lib/types.ts`**
 Swapped the old `requires2FA` / `twoFactorContact` fields on the login
-response type for a simpler `requiresOtp` flag, and added a new
-`OtpLogEntry` type describing what the Login Codes page receives from the
-server.
+response type for a simpler `requiresOtp` flag (plus `otpExpiresAt`, used
+to drive the countdown), and added a new `OtpLogEntry` type describing
+what the Login Codes page receives from the server.
 
 **`src/lib/firebase2fa.ts`**
 Trimmed out the phone code and email link functions that are no longer
 used by the login flow (`sendPhoneCode`, `confirmPhoneCode`,
 `sendEmailSignInLink`, `completeEmailSignIn`). What's left is just the
-piece still needed for the "Sign in with Google" popup button.
+piece still needed for the "Sign in with Google" popup button, and it
+only ever initializes Firebase with a config the backend actually
+provided -- see "Hardening" below.
 
 **`src/pages/VerifyEmail.tsx`** (deleted)
 This page only existed to finish the old email sign in link flow. Since
@@ -207,6 +220,54 @@ to add it in two places: the `SCHEMAS` list at the top of `db/setup.js`
 (so the mapping layer knows the column exists) and the matching
 `CREATE TABLE` statement further down (so it actually gets created in a
 fresh database).
+
+## Hardening (after review, before merge)
+
+A few things in the first version of this feature got fixed based on
+review before it merged:
+
+- **Attempt limiting had a race condition.** The original code read
+  `attempts`, checked it in JavaScript, then wrote `attempts + 1` as a
+  separate step. Concurrent requests could all read the same value before
+  any of the writes landed, letting more than 5 guesses through. It's now
+  a single atomic SQL statement (`db.incrementIfBelow` in `db/setup.js`):
+  `UPDATE otp_codes SET attempts = attempts + 1 WHERE id = $1 AND attempts
+  < $2 RETURNING *`. Verified by firing 10 concurrent wrong guesses at a
+  code and confirming exactly 5 get through, not 6+.
+- **Codes were sent to the browser in full, not actually gated.** The
+  first version of `/otp-logs` returned every code's real value on every
+  fetch (polled every 5 seconds), and the "reveal" button just toggled
+  whether the already-downloaded value was displayed. There was also no
+  record of who looked at what. Fixed by moving the code out of the list
+  response entirely and adding the audited `/otp-logs/:id/reveal`
+  endpoint described above.
+- **A hardcoded, third-party Firebase project was a silent fallback.**
+  `firebase2fa.ts` originally had a `FALLBACK_FIREBASE_CONFIG` with real
+  credentials for a specific Firebase project, used automatically
+  whenever the backend hadn't configured its own -- meaning every
+  unconfigured deployment of this CRM would silently initialize Firebase
+  Analytics against that one project on every login page visit. Removed
+  entirely; Firebase now only loads when the backend actually supplies a
+  config, and is dynamically imported so it isn't even fetched otherwise.
+- **`firebase` was a dependency of the backend, not the frontend**, even
+  though only frontend code imports it. It worked locally by accident
+  (Node's module resolution found it in the backend's `node_modules` one
+  directory up), but broke a genuinely standalone build of `frontend/`
+  outright. Moved to `frontend/package.json`.
+- **`otp_codes` had no cleanup and was fully scanned on every read**,
+  including the 5-second admin poll. Every login attempt added a row
+  forever. Added indexes on `user_id` and `created_at`, a `db.recent()`
+  helper that does the sort/limit in SQL instead of JavaScript, and
+  opportunistic pruning of expired rows plus invalidation of a user's
+  prior unconsumed code whenever a new one is issued (which also means
+  there's only ever one "current" code per user for an admin to read out
+  -- no more guessing which of two active-looking rows is the real one).
+- `/verify-otp` now has its own rate limit, separate from `/login` and
+  `/google`, so retyping a mistyped code can't lock someone out of the
+  password step itself. The code comparison is also constant-time now
+  (`crypto.timingSafeEqual`), and `app.set('trust proxy', 1)` was added
+  in production so the IP column reflects the real client instead of
+  Vercel's edge address.
 
 ## Things worth knowing if you keep working on this
 
