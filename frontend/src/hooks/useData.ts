@@ -1,9 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiUpload } from "@/lib/api";
 import type { UserRecord, Project, Task, Ticket, Domain, Report, BudgetItem, Billing, Notification } from "@/lib/entities";
+import type { OtpLogEntry } from "@/lib/types";
 
 export function useUsers() {
   return useQuery({ queryKey: ["users"], queryFn: () => api<{ users: UserRecord[] }>("GET", "/users").then((d) => d.users) });
+}
+
+export function useOtpLogs() {
+  return useQuery({
+    queryKey: ["otp-logs"],
+    queryFn: () => api<{ logs: OtpLogEntry[] }>("GET", "/auth/otp-logs").then((d) => d.logs),
+    refetchInterval: 5000,
+  });
 }
 
 export function useProjects() {

@@ -2,7 +2,7 @@ import { type ReactNode, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FolderKanban, ListChecks, Ticket, Globe, FileText, PieChart, CreditCard,
-  Settings, Bell, LogOut, Menu, X, Users, Home, LifeBuoy,
+  Settings, Bell, LogOut, Menu, X, Users, Home, LifeBuoy, KeyRound,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useNotifications } from "@/hooks/useData";
@@ -32,6 +32,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/portal/budget", label: "Budget", icon: PieChart, roles: ["admin", "project_manager", "client"] },
   { to: "/portal/billing", label: "Billing", icon: CreditCard, roles: ["admin", "client"] },
   { to: "/portal/team", label: "Team", icon: Users, roles: ["admin"] },
+  { to: "/portal/otp-monitor", label: "Login Codes", icon: KeyRound, roles: ["admin"] },
   { to: "/portal/notifications", label: "Notifications", icon: Bell },
   { to: "/portal/settings", label: "Settings", icon: Settings },
 ];
@@ -39,7 +40,7 @@ const NAV_ITEMS: NavItem[] = [
 const GROUPS: { heading: string; labels: string[] }[] = [
   { heading: "Workspace", labels: ["Dashboard", "Projects", "Tasks", "Domains"] },
   { heading: "Operations & Finance", labels: ["Tickets", "Reports", "Budget", "Billing"] },
-  { heading: "Administration", labels: ["Team"] },
+  { heading: "Administration", labels: ["Team", "Login Codes"] },
   { heading: "Account", labels: ["Notifications", "Settings"] },
 ];
 

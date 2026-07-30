@@ -47,6 +47,7 @@ const SCHEMAS = {
   ],
   budget_items: ['id', 'client_id', 'label', 'amount', 'color', 'month'],
   billing: ['id', 'client_id', 'stripe_customer_id', 'stripe_subscription_id', 'plan', 'status', 'updated_at'],
+  otp_codes: ['id', 'user_id', 'code', 'ip_address', 'created_at', 'expires_at', 'consumed', 'attempts'],
 };
 
 function toSnake(str) { return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`); }
@@ -185,6 +186,10 @@ async function initSchema() {
     `CREATE TABLE IF NOT EXISTS billing (
       id TEXT PRIMARY KEY, client_id TEXT UNIQUE, stripe_customer_id TEXT,
       stripe_subscription_id TEXT, plan TEXT, status TEXT, updated_at TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS otp_codes (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, code TEXT NOT NULL, ip_address TEXT,
+      created_at TEXT, expires_at BIGINT, consumed BOOLEAN DEFAULT FALSE, attempts INTEGER DEFAULT 0
     )`,
   ];
   for (const sql of statements) await p.query(sql);

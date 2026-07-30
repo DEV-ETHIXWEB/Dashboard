@@ -1,53 +1,60 @@
 
+import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
 import type { PublicConfig } from "./types";
 
-let firebaseApp: unknown = null;
+const FALLBACK_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAkLML1YyzTcLjfzo-ZvcjTYyEyS_wJDdE",
+  authDomain: "dashboard-56287.firebaseapp.com",
+  projectId: "dashboard-56287",
+  storageBucket: "dashboard-56287.firebasestorage.app",
+  messagingSenderId: "900652063620",
+  appId: "1:900652063620:web:8829b3f68f01ba02869bd1",
+  measurementId: "G-ECREFF5W3X",
+};
+
+let firebaseApp: ReturnType<typeof initializeApp> | null = null;
 
 let firebaseAuthMod: any = null;
 
-let confirmationResult: any = null;
-
-let recaptchaVerifier: any = null;
-
-export async function loadFirebase(config: NonNullable<PublicConfig["firebaseConfig"]>) {
-  if (firebaseApp) return;
-  const { initializeApp } = await import(
-     "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js"
-  );
-  firebaseAuthMod = await import(
-     "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js"
-  );
-  firebaseApp = initializeApp(config);
+export function getDefaultFirebaseConfig() {
+  return FALLBACK_FIREBASE_CONFIG;
 }
 
-export async function sendPhoneCode(phoneNumber: string, recaptchaContainerId: string) {
-  const auth = firebaseAuthMod.getAuth(firebaseApp);
-  if (!recaptchaVerifier) {
-    recaptchaVerifier = new firebaseAuthMod.RecaptchaVerifier(auth, recaptchaContainerId, { size: "normal" });
+export async function loadFirebase(config?: NonNullable<PublicConfig["firebaseConfig"]> | null) {
+  if (firebaseApp) return firebaseApp;
+
+  const mergedConfig = {
+    ...FALLBACK_FIREBASE_CONFIG,
+    ...(config ?? {}),
+  };
+
+  firebaseApp = initializeApp(mergedConfig as any);
+
+  try {
+    getAnalytics(firebaseApp);
+  } catch (err) {
+    console.warn("Firebase analytics could not be initialized:", err);
   }
-  confirmationResult = await firebaseAuthMod.signInWithPhoneNumber(auth, phoneNumber, recaptchaVerifier);
+
+  firebaseAuthMod = await import("firebase/auth");
+  return firebaseApp;
 }
 
-export async function confirmPhoneCode(code: string): Promise<string> {
-  if (!confirmationResult) throw new Error("Request a code first.");
-  const result = await confirmationResult.confirm(code);
-  return result.user.getIdToken();
+export function isFirebaseInitialized(): boolean {
+  return firebaseApp !== null;
 }
 
-export async function sendEmailSignInLink(email: string) {
-  const auth = firebaseAuthMod.getAuth(firebaseApp);
-  const actionCodeSettings = { url: `${window.location.origin}/verify-email`, handleCodeInApp: true };
-  await firebaseAuthMod.sendSignInLinkToEmail(auth, email, actionCodeSettings);
-  window.localStorage.setItem("ew_2fa_email", email);
-}
-
-export async function completeEmailSignIn(): Promise<string> {
-  const auth = firebaseAuthMod.getAuth(firebaseApp);
-  if (!firebaseAuthMod.isSignInWithEmailLink(auth, window.location.href)) {
-    throw new Error("This does not look like a valid sign-in link.");
+export async function signInWithGoogleFirebase(config?: NonNullable<PublicConfig["firebaseConfig"]>): Promise<string> {
+  if (config) {
+    await loadFirebase(config);
   }
-  const email = window.localStorage.getItem("ew_2fa_email");
-  if (!email) throw new Error("Could not find the email this link was sent to. Please request a new one from the same browser.");
-  const result = await firebaseAuthMod.signInWithEmailLink(auth, email, window.location.href);
-  return result.user.getIdToken();
+  if (!firebaseApp || !firebaseAuthMod) {
+    throw new Error("Firebase is not initialized. Please configure Firebase settings.");
+  }
+  const auth = firebaseAuthMod.getAuth(firebaseApp);
+  const provider = new firebaseAuthMod.GoogleAuthProvider();
+  const userCredential = await firebaseAuthMod.signInWithPopup(auth, provider);
+  return userCredential.user.getIdToken();
 }
+

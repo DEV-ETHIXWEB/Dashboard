@@ -2,16 +2,19 @@
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const router = express.Router();
 
 const { db } = require('../db/setup');
 const {
   SESSION_COOKIE, createSession, promoteSession, destroySession, safeUser,
-  requireAuth, audit, PORTAL_PATH,
+  requireAuth, requireRole, audit, PORTAL_PATH,
 } = require('../middleware/auth');
 const { isGoogleSignInConfigured, verifyGoogleIdToken } = require('../utils/googleAuth');
-const { isFirebaseAdminConfigured, verifyFirebaseIdToken } = require('../utils/firebaseAdmin');
+
+const OTP_TTL_MS = 5 * 60 * 1000;
+const MAX_OTP_ATTEMPTS = 5;
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -29,29 +32,35 @@ const COOKIE_OPTS = {
   path: '/',
 };
 
+// Every non-admin login requires a second step: an admin-issued OTP. As
+// soon as the password check succeeds we generate a 6-digit code and log
+// it (with the requester's name/email/IP) for an admin to read out to the
+// client over another channel -- there is no automatic SMS/email delivery.
+// Admins themselves skip this step: they're the only ones who can see the
+// OTP panel, so gating their own login behind it would lock them out.
 async function finishLogin(req, res, user) {
-  if (user.twoFactorEnabled) {
-    const pendingSession = await createSession(user.id, { pending: true });
-    res.cookie(SESSION_COOKIE, pendingSession.id, COOKIE_OPTS);
-    return res.json({
-      requires2FA: true,
-      twoFactorContact: maskContact(user.twoFactorContact),
-      csrfToken: pendingSession.csrfToken,
-    });
+  if (user.role === 'admin') {
+    const session = await createSession(user.id);
+    res.cookie(SESSION_COOKIE, session.id, COOKIE_OPTS);
+    await audit(user.id, 'login', 'user', user.id);
+    return res.json({ user: safeUser(user), csrfToken: session.csrfToken, redirect: PORTAL_PATH[user.role] || '/portal.html' });
   }
-  const session = await createSession(user.id);
-  res.cookie(SESSION_COOKIE, session.id, COOKIE_OPTS);
-  await audit(user.id, 'login', 'user', user.id);
-  res.json({ user: safeUser(user), csrfToken: session.csrfToken, redirect: PORTAL_PATH[user.role] || '/portal.html' });
-}
 
-function maskContact(contact) {
-  if (!contact) return null;
-  if (contact.includes('@')) {
-    const [name, domain] = contact.split('@');
-    return `${name.slice(0, 2)}***@${domain}`;
-  }
-  return `***${contact.slice(-4)}`;
+  const pendingSession = await createSession(user.id, { pending: true });
+  res.cookie(SESSION_COOKIE, pendingSession.id, COOKIE_OPTS);
+
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  await db.insert('otp_codes', {
+    userId: user.id,
+    code,
+    ipAddress: req.ip,
+    createdAt: new Date().toISOString(),
+    expiresAt: Date.now() + OTP_TTL_MS,
+    consumed: false,
+    attempts: 0,
+  });
+
+  res.json({ requiresOtp: true, csrfToken: pendingSession.csrfToken });
 }
 
 router.post('/login', loginLimiter, async (req, res, next) => {
@@ -94,36 +103,70 @@ router.post('/google', loginLimiter, async (req, res, next) => {
   }
 });
 
-// Step 2 of login when the account has 2FA enabled. The client verifies a
-// phone or email code via the Firebase client SDK, then sends us the
-// resulting Firebase ID token to confirm here.
-router.post('/verify-2fa', loginLimiter, async (req, res, next) => {
+// Step 2 of login: the client submits the 6-digit code an admin read out
+// to them from the /otp-logs panel.
+router.post('/verify-otp', loginLimiter, async (req, res, next) => {
   try {
-    const sid = req.cookies?.[require('../middleware/auth').SESSION_COOKIE];
+    const sid = req.cookies?.[SESSION_COOKIE];
     if (!sid) return res.status(401).json({ error: 'No pending login found. Please sign in again.' });
     const session = await db.find('sessions', sid);
     if (!session || !session.pending || Number(session.expiresAt) < Date.now()) {
       return res.status(401).json({ error: 'Your verification step expired. Please sign in again.' });
     }
 
-    if (!isFirebaseAdminConfigured()) {
-      return res.status(503).json({ error: '2FA verification is not configured on the server yet.' });
-    }
-    const { firebaseIdToken } = req.body || {};
-    if (!firebaseIdToken) return res.status(400).json({ error: 'firebaseIdToken is required' });
+    const { code } = req.body || {};
+    if (!code) return res.status(400).json({ error: 'code is required' });
 
     const user = await db.find('users', session.userId);
     if (!user) return res.status(401).json({ error: 'Not signed in' });
 
-    const decoded = await verifyFirebaseIdToken(firebaseIdToken);
-    const verifiedContact = decoded.phone_number || decoded.email;
-    if (!verifiedContact || verifiedContact.toLowerCase() !== String(user.twoFactorContact || '').toLowerCase()) {
-      return res.status(403).json({ error: 'That verification does not match the contact on file for this account.' });
+    const otps = await db.filter('otp_codes', (o) => o.userId === user.id && !o.consumed);
+    const otp = otps.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+    if (!otp || Number(otp.expiresAt) < Date.now()) {
+      return res.status(403).json({ error: 'That code has expired. Please sign in again to get a new one.' });
+    }
+    if (otp.attempts >= MAX_OTP_ATTEMPTS) {
+      return res.status(403).json({ error: 'Too many incorrect attempts. Please sign in again to get a new code.' });
+    }
+    if (String(code) !== otp.code) {
+      await db.update('otp_codes', otp.id, { attempts: otp.attempts + 1 });
+      return res.status(403).json({ error: 'Incorrect code.' });
     }
 
+    await db.update('otp_codes', otp.id, { consumed: true });
     const promoted = await promoteSession(session.id);
-    await audit(user.id, 'login', 'user', user.id, { via: '2fa' });
+    await audit(user.id, 'login', 'user', user.id, { via: 'otp' });
     res.json({ user: safeUser(user), csrfToken: promoted.csrfToken, redirect: PORTAL_PATH[user.role] || '/portal.html' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin-only feed of recently generated login OTPs, so an admin can read a
+// code out to the client requesting it. Codes are returned in full -- the
+// frontend keeps them masked until the admin clicks to reveal.
+router.get('/otp-logs', requireAuth, requireRole('admin'), async (req, res, next) => {
+  try {
+    const [otps, users] = await Promise.all([db.all('otp_codes'), db.all('users')]);
+    const usersById = new Map(users.map((u) => [u.id, u]));
+    const logs = otps
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 100)
+      .map((o) => {
+        const u = usersById.get(o.userId);
+        return {
+          id: o.id,
+          userId: o.userId,
+          name: u?.name || 'Unknown user',
+          email: u?.email || '—',
+          ipAddress: o.ipAddress,
+          code: o.code,
+          createdAt: o.createdAt,
+          expiresAt: Number(o.expiresAt),
+          consumed: o.consumed,
+        };
+      });
+    res.json({ logs });
   } catch (err) {
     next(err);
   }
