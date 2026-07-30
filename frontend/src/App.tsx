@@ -5,10 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { RoleRoute } from "@/components/RoleRoute";
 import { GuestRoute } from "@/components/GuestRoute";
 
-// Route-level code splitting: each page becomes its own chunk, loaded on
-// first visit instead of all being bundled into one large initial download.
 const Login = lazy(() => import("@/pages/Login"));
-const VerifyEmail = lazy(() => import("@/pages/VerifyEmail"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Projects = lazy(() => import("@/pages/Projects"));
 const Tasks = lazy(() => import("@/pages/Tasks"));
@@ -18,6 +15,7 @@ const Reports = lazy(() => import("@/pages/Reports"));
 const Budget = lazy(() => import("@/pages/Budget"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const Team = lazy(() => import("@/pages/Team"));
+const OtpMonitor = lazy(() => import("@/pages/OtpMonitor"));
 const Settings = lazy(() => import("@/pages/Settings"));
 const Notifications = lazy(() => import("@/pages/Notifications"));
 
@@ -42,15 +40,6 @@ function App() {
               </GuestRoute>
             }
           />
-          <Route
-            path="/verify-email"
-            element={
-              <GuestRoute>
-                <VerifyEmail />
-              </GuestRoute>
-            }
-          />
-
           <Route path="/portal" element={<RoleRoute><Dashboard /></RoleRoute>} />
           <Route
             path="/portal/projects"
@@ -106,6 +95,14 @@ function App() {
             element={
               <RoleRoute roles={["admin"]}>
                 <Team />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/portal/otp-monitor"
+            element={
+              <RoleRoute roles={["admin"]}>
+                <OtpMonitor />
               </RoleRoute>
             }
           />

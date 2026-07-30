@@ -1,53 +1,47 @@
-
 import type { PublicConfig } from "./types";
 
 let firebaseApp: unknown = null;
 
 let firebaseAuthMod: any = null;
 
-let confirmationResult: any = null;
+// Only ever initializes Firebase with a config the backend actually
+// provided (i.e. the operator configured their own Firebase project via
+// env vars). There is intentionally no hardcoded fallback project here --
+// silently initializing analytics/auth against someone else's Firebase
+// project by default would send every visitor's login-page activity to a
+// third party the CRM's operator never agreed to, for every deployment
+// that hasn't configured its own Firebase.
+export async function loadFirebase(config?: NonNullable<PublicConfig["firebaseConfig"]> | null) {
+  if (!config) return null;
+  if (firebaseApp) return firebaseApp;
 
-let recaptchaVerifier: any = null;
-
-export async function loadFirebase(config: NonNullable<PublicConfig["firebaseConfig"]>) {
-  if (firebaseApp) return;
-  const { initializeApp } = await import(
-     "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js"
-  );
-  firebaseAuthMod = await import(
-     "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js"
-  );
+  const { initializeApp } = await import("firebase/app");
   firebaseApp = initializeApp(config);
-}
 
-export async function sendPhoneCode(phoneNumber: string, recaptchaContainerId: string) {
-  const auth = firebaseAuthMod.getAuth(firebaseApp);
-  if (!recaptchaVerifier) {
-    recaptchaVerifier = new firebaseAuthMod.RecaptchaVerifier(auth, recaptchaContainerId, { size: "normal" });
+  try {
+    const { getAnalytics } = await import("firebase/analytics");
+    getAnalytics(firebaseApp as never);
+  } catch (err) {
+    console.warn("Firebase analytics could not be initialized:", err);
   }
-  confirmationResult = await firebaseAuthMod.signInWithPhoneNumber(auth, phoneNumber, recaptchaVerifier);
+
+  firebaseAuthMod = await import("firebase/auth");
+  return firebaseApp;
 }
 
-export async function confirmPhoneCode(code: string): Promise<string> {
-  if (!confirmationResult) throw new Error("Request a code first.");
-  const result = await confirmationResult.confirm(code);
-  return result.user.getIdToken();
+export function isFirebaseInitialized(): boolean {
+  return firebaseApp !== null;
 }
 
-export async function sendEmailSignInLink(email: string) {
-  const auth = firebaseAuthMod.getAuth(firebaseApp);
-  const actionCodeSettings = { url: `${window.location.origin}/verify-email`, handleCodeInApp: true };
-  await firebaseAuthMod.sendSignInLinkToEmail(auth, email, actionCodeSettings);
-  window.localStorage.setItem("ew_2fa_email", email);
-}
-
-export async function completeEmailSignIn(): Promise<string> {
-  const auth = firebaseAuthMod.getAuth(firebaseApp);
-  if (!firebaseAuthMod.isSignInWithEmailLink(auth, window.location.href)) {
-    throw new Error("This does not look like a valid sign-in link.");
+export async function signInWithGoogleFirebase(
+  config?: NonNullable<PublicConfig["firebaseConfig"]> | null,
+): Promise<string> {
+  if (config) await loadFirebase(config);
+  if (!firebaseApp || !firebaseAuthMod) {
+    throw new Error("Firebase is not configured. Ask your admin to set it up first.");
   }
-  const email = window.localStorage.getItem("ew_2fa_email");
-  if (!email) throw new Error("Could not find the email this link was sent to. Please request a new one from the same browser.");
-  const result = await firebaseAuthMod.signInWithEmailLink(auth, email, window.location.href);
-  return result.user.getIdToken();
+  const auth = firebaseAuthMod.getAuth(firebaseApp);
+  const provider = new firebaseAuthMod.GoogleAuthProvider();
+  const userCredential = await firebaseAuthMod.signInWithPopup(auth, provider);
+  return userCredential.user.getIdToken();
 }

@@ -20,6 +20,9 @@ export interface PublicConfig {
     authDomain: string;
     projectId: string;
     appId: string;
+    measurementId?: string;
+    storageBucket?: string;
+    messagingSenderId?: string;
   } | null;
   stripeEnabled: boolean;
   stripePublishableKey: string | null;
@@ -31,6 +34,18 @@ export interface LoginResponse {
   user?: User;
   csrfToken: string;
   redirect?: string;
-  requires2FA?: boolean;
-  twoFactorContact?: string;
+  requiresOtp?: boolean;
+  otpExpiresAt?: number;
+}
+
+export interface OtpLogEntry {
+  id: string;
+  userId: string;
+  name: string;
+  email: string;
+  ipAddress: string;
+  createdAt: string;
+  expiresAt: number;
+  consumed: boolean;
+  attempts: number;
 }
