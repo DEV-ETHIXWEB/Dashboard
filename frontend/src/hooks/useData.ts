@@ -15,6 +15,16 @@ export function useOtpLogs() {
   });
 }
 
+// Codes are never included in the list response -- each reveal is its own
+// audited request, so there's a real record of which admin looked at which
+// code and when, instead of every code sitting in the browser's memory the
+// instant the page loads.
+export function useRevealOtpCode() {
+  return useMutation({
+    mutationFn: (id: string) => api<{ code: string }>("POST", `/auth/otp-logs/${id}/reveal`).then((d) => d.code),
+  });
+}
+
 export function useProjects() {
   return useQuery({ queryKey: ["projects"], queryFn: () => api<{ projects: Project[] }>("GET", "/projects").then((d) => d.projects) });
 }

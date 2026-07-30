@@ -103,6 +103,14 @@ const db = {
     const rows = await db.all(collection);
     return rows.filter(predicate);
   },
+  // Like all(), but sorts and limits in SQL instead of fetching the whole
+  // table into JS first -- with an index on created_at, cost stays bounded
+  // regardless of how large the table grows. Use this for anything read on
+  // a tight polling interval (e.g. the OTP monitor) instead of all()+slice().
+  async recent(collection, limit = 100) {
+    const res = await getPool().query(`SELECT * FROM ${collection} ORDER BY created_at DESC LIMIT $1`, [limit]);
+    return res.rows.map((row) => rowToCamel(row, collection));
+  },
   async insert(collection, obj) {
     const row = { id: obj.id || uuidv4(), ...obj };
     const entries = objToSnakeEntries(collection, row);
@@ -134,6 +142,35 @@ const db = {
     const rows = await db.filter(collection, predicate);
     for (const row of rows) await db.remove(collection, row.id);
     return rows.length;
+  },
+  // Atomic "increment a counter only if it's still below a cap" -- used for
+  // OTP attempt-limiting. A plain read-then-write (read attempts, check in
+  // JS, write attempts+1) has a race: concurrent requests can all read the
+  // same pre-increment value and all pass the check before any write lands,
+  // letting more than `max` guesses through. This does the check and the
+  // increment in one statement, so Postgres's row lock makes it atomic.
+  async incrementIfBelow(collection, id, field, max) {
+    const col = toSnake(field);
+    const res = await getPool().query(
+      `UPDATE ${collection} SET ${col} = ${col} + 1 WHERE id = $1 AND ${col} < $2 RETURNING *`,
+      [id, max]
+    );
+    return rowToCamel(res.rows[0], collection) || null;
+  },
+  // Deletes rows past their expiry (regardless of consumed/attempts state --
+  // once expired they have no further value). Called opportunistically
+  // whenever a new OTP is issued, so the table never grows unbounded even
+  // without a separate cron/scheduled job.
+  async pruneExpiredOtps() {
+    await getPool().query(`DELETE FROM otp_codes WHERE expires_at < $1`, [Date.now()]);
+  },
+  // Only one OTP should ever be "live" for a given user -- issuing a new one
+  // (e.g. the user went back and logged in again) immediately retires any
+  // still-unconsumed prior code, so an admin can never accidentally read out
+  // a stale code that verify-otp would silently reject anyway (it only ever
+  // checks the newest).
+  async invalidateUserOtps(userId) {
+    await getPool().query(`DELETE FROM otp_codes WHERE user_id = $1 AND consumed = FALSE`, [userId]);
   },
 };
 
@@ -191,6 +228,8 @@ async function initSchema() {
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, code TEXT NOT NULL, ip_address TEXT,
       created_at TEXT, expires_at BIGINT, consumed BOOLEAN DEFAULT FALSE, attempts INTEGER DEFAULT 0
     )`,
+    `CREATE INDEX IF NOT EXISTS idx_otp_codes_user_id ON otp_codes(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_otp_codes_created_at ON otp_codes(created_at DESC)`,
   ];
   for (const sql of statements) await p.query(sql);
 

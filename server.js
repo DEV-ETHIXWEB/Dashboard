@@ -12,6 +12,13 @@ const { seed } = require('./db/setup');
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// Deployed behind a reverse proxy (Vercel) in production -- without this,
+// req.ip reflects the proxy's address instead of the real client for every
+// request, which silently breaks both rate-limit accuracy and the OTP
+// login log's IP column (the whole point of which is showing admins where
+// a login attempt actually came from).
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
+
 app.use(helmet({
   contentSecurityPolicy: false, // keep simple for local/demo use; tighten before real production use
 }));

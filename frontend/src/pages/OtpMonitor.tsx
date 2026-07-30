@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { KeyRound, Eye, EyeOff, Mail, Globe, Clock } from "lucide-react";
-import { useOtpLogs } from "@/hooks/useData";
+import { toast } from "sonner";
+import { KeyRound, Eye, EyeOff, Mail, Globe, Clock, Loader2 } from "lucide-react";
+import { useOtpLogs, useRevealOtpCode } from "@/hooks/useData";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
@@ -15,14 +16,26 @@ function statusBadge(expiresAt: number, consumed: boolean) {
 
 export default function OtpMonitor() {
   const { data: logs, isLoading, isError, error, refetch } = useOtpLogs();
-  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const revealCode = useRevealOtpCode();
+  const [revealed, setRevealed] = useState<Map<string, string>>(new Map());
+  const [revealingId, setRevealingId] = useState<string | null>(null);
 
   function toggleReveal(id: string) {
-    setRevealed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+    if (revealed.has(id)) {
+      setRevealed((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      return;
+    }
+    setRevealingId(id);
+    revealCode.mutate(id, {
+      onSuccess: (code) => {
+        setRevealed((prev) => new Map(prev).set(id, code));
+      },
+      onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to reveal code"),
+      onSettled: () => setRevealingId(null),
     });
   }
 
@@ -51,7 +64,8 @@ export default function OtpMonitor() {
         <div className="flex flex-col gap-2">
           {logs.map((log) => {
             const badge = statusBadge(log.expiresAt, log.consumed);
-            const isRevealed = revealed.has(log.id);
+            const revealedCode = revealed.get(log.id);
+            const isRevealing = revealingId === log.id;
             return (
               <div
                 key={log.id}
@@ -63,6 +77,11 @@ export default function OtpMonitor() {
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] border ${badge.className}`}>
                       {badge.label}
                     </span>
+                    {log.attempts > 0 && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {log.attempts} attempt{log.attempts === 1 ? "" : "s"}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
                     <span className="flex items-center gap-1 truncate">
@@ -82,16 +101,23 @@ export default function OtpMonitor() {
 
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="font-mono text-lg tracking-[0.3em] text-foreground min-w-[7ch] text-center">
-                    {isRevealed ? log.code : "••••••"}
+                    {revealedCode ?? "••••••"}
                   </span>
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    aria-label={isRevealed ? "Hide code" : "Reveal code"}
+                    aria-label={revealedCode ? "Hide code" : "Reveal code"}
                     onClick={() => toggleReveal(log.id)}
+                    disabled={isRevealing}
                     className="hover:bg-primary/10 hover:text-primary transition-colors"
                   >
-                    {isRevealed ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                    {isRevealing ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : revealedCode ? (
+                      <EyeOff className="size-3.5" />
+                    ) : (
+                      <Eye className="size-3.5" />
+                    )}
                   </Button>
                 </div>
               </div>

@@ -33,7 +33,18 @@ export default function Login() {
   const [otpError, setOtpError] = useState<string | null>(null);
   const [otpBusy, setOtpBusy] = useState(false);
   const [code, setCode] = useState(["", "", "", "", "", ""]);
+  const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const codeRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    if (step !== "otp" || !otpExpiresAt) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [step, otpExpiresAt]);
+
+  const secondsLeft = otpExpiresAt ? Math.max(0, Math.round((otpExpiresAt - now) / 1000)) : null;
+  const otpExpired = secondsLeft === 0;
 
   const googleBtnRef = useRef<HTMLDivElement>(null);
 
@@ -80,6 +91,10 @@ export default function Login() {
 
   async function handleLoginResponse(d: LoginResponse) {
     if (d.requiresOtp) {
+      setCode(["", "", "", "", "", ""]);
+      setOtpError(null);
+      setOtpExpiresAt(d.otpExpiresAt ?? null);
+      setNow(Date.now());
       setStep("otp");
       return;
     }
@@ -136,6 +151,8 @@ export default function Login() {
       navigate("/portal");
     } catch (err) {
       setOtpError(err instanceof ApiError ? err.message : "Verification failed");
+      setCode(["", "", "", "", "", ""]);
+      codeRefs.current[0]?.focus();
     } finally {
       setOtpBusy(false);
     }
@@ -387,20 +404,45 @@ export default function Login() {
                           ref={(el) => {
                             codeRefs.current[i] = el;
                           }}
+                          aria-label={`Digit ${i + 1} of 6`}
                           maxLength={1}
                           inputMode="numeric"
-                          className="h-12 w-11 text-center text-lg font-bold bg-background text-foreground border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all"
+                          disabled={otpExpired}
+                          className="h-12 w-11 text-center text-lg font-bold bg-background text-foreground border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all disabled:opacity-50"
                           value={digit}
                           onChange={(e) => {
-                            const v = e.target.value.replace(/\D/g, "");
+                            const v = e.target.value.replace(/\D/g, "").slice(-1);
                             const next = [...code];
                             next[i] = v;
                             setCode(next);
                             if (v && codeRefs.current[i + 1]) codeRefs.current[i + 1]?.focus();
                           }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Backspace" && !code[i] && i > 0) {
+                              codeRefs.current[i - 1]?.focus();
+                            }
+                          }}
+                          onPaste={(e) => {
+                            const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+                            if (!pasted) return;
+                            e.preventDefault();
+                            const next = ["", "", "", "", "", ""];
+                            for (let j = 0; j < pasted.length; j++) next[j] = pasted[j];
+                            setCode(next);
+                            const lastIndex = Math.min(pasted.length, 6) - 1;
+                            codeRefs.current[Math.max(lastIndex, 0)]?.focus();
+                          }}
                         />
                       ))}
                     </div>
+
+                    {secondsLeft !== null && (
+                      <p className={`text-xs ${otpExpired ? "text-destructive font-medium" : "text-muted-foreground"}`}>
+                        {otpExpired
+                          ? "This code has expired. Go back and sign in again for a new one."
+                          : `Code expires in ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")}`}
+                      </p>
+                    )}
 
                     {otpError && (
                       <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3.5 py-2.5 text-xs text-destructive font-medium">
@@ -408,7 +450,7 @@ export default function Login() {
                       </div>
                     )}
 
-                    <Button type="button" disabled={otpBusy} onClick={submitOtp} className="h-10 shadow-md shadow-primary/20 hover:shadow-lg hover:shadow-primary/30 transition-all text-sm font-semibold cursor-pointer">
+                    <Button type="button" disabled={otpBusy || otpExpired} onClick={submitOtp} className="h-10 shadow-md shadow-primary/20 hover:shadow-lg hover:shadow-primary/30 transition-all text-sm font-semibold cursor-pointer">
                       {otpBusy && <Loader2 className="size-4 animate-spin" />}
                       Confirm code
                     </Button>
@@ -421,6 +463,7 @@ export default function Login() {
                         setStep("credentials");
                         setOtpError(null);
                         setCode(["", "", "", "", "", ""]);
+                        setOtpExpiresAt(null);
                       }}
                     >
                       Back to sign in

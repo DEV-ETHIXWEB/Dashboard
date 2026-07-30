@@ -35,6 +35,7 @@ export interface LoginResponse {
   csrfToken: string;
   redirect?: string;
   requiresOtp?: boolean;
+  otpExpiresAt?: number;
 }
 
 export interface OtpLogEntry {
@@ -43,8 +44,8 @@ export interface OtpLogEntry {
   name: string;
   email: string;
   ipAddress: string;
-  code: string;
   createdAt: string;
   expiresAt: number;
   consumed: boolean;
+  attempts: number;
 }
