@@ -2,7 +2,7 @@ import { type ReactNode, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FolderKanban, ListChecks, Ticket, Globe, FileText, PieChart, CreditCard,
-  Settings, Bell, LogOut, Menu, X, Users, Home, LifeBuoy, KeyRound,
+  Settings, Bell, LogOut, Menu, X, Users, Home, LifeBuoy, KeyRound, ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useNotifications } from "@/hooks/useData";
@@ -32,15 +32,16 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/portal/budget", label: "Budget", icon: PieChart, roles: ["admin", "project_manager", "client"] },
   { to: "/portal/billing", label: "Billing", icon: CreditCard, roles: ["admin", "client"] },
   { to: "/portal/team", label: "Team", icon: Users, roles: ["admin"] },
+  { to: "/portal/client-access", label: "Client Access", icon: ShieldCheck, roles: ["admin"] },
   { to: "/portal/otp-monitor", label: "Login Codes", icon: KeyRound, roles: ["admin"] },
-  { to: "/portal/notifications", label: "Notifications", icon: Bell },
+  { to: "/portal/notifications", label: "Notifications", icon: Bell, roles: ["client"] },
   { to: "/portal/settings", label: "Settings", icon: Settings },
 ];
 
 const GROUPS: { heading: string; labels: string[] }[] = [
   { heading: "Workspace", labels: ["Dashboard", "Projects", "Tasks", "Domains"] },
   { heading: "Operations & Finance", labels: ["Tickets", "Reports", "Budget", "Billing"] },
-  { heading: "Administration", labels: ["Team", "Login Codes"] },
+  { heading: "Administration", labels: ["Team", "Client Access", "Login Codes"] },
   { heading: "Account", labels: ["Notifications", "Settings"] },
 ];
 
@@ -79,21 +80,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       {menuOpen && (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setMenuOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 flex w-[280px] flex-col bg-sidebar shadow-xl">
-            <div className="flex justify-end p-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="tap-target"
-                aria-label="Close menu"
-                onClick={() => setMenuOpen(false)}
-              >
-                <X className="size-5" />
-              </Button>
-            </div>
-            <SidebarContent items={items} onNavigate={() => setMenuOpen(false)} />
+        <div className="fixed inset-0 z-50 animate-in fade-in-0 duration-200 md:hidden">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-xs" onClick={() => setMenuOpen(false)} />
+          <aside className="absolute inset-y-0 left-0 flex w-[280px] max-w-[calc(100vw-3rem)] flex-col bg-sidebar border-r border-sidebar-border/60 shadow-2xl animate-in slide-in-from-left duration-200">
+            <SidebarContent items={items} onNavigate={() => setMenuOpen(false)} onClose={() => setMenuOpen(false)} />
           </aside>
         </div>
       )}
@@ -107,18 +97,20 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Brand compact />
           </div>
 
-          <NavLink
-            to="/portal/notifications"
-            aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
-            className="tap-target focus-clear relative inline-flex items-center justify-center rounded-lg text-foreground hover:bg-secondary"
-          >
-            <Bell className="size-5" />
-            {unread > 0 && (
-              <span className="absolute top-1.5 right-1.5 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
-                {unread > 9 ? "9+" : unread}
-              </span>
-            )}
-          </NavLink>
+          {user?.role === "client" && (
+            <NavLink
+              to="/portal/notifications"
+              aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
+              className="tap-target focus-clear relative inline-flex items-center justify-center rounded-lg text-foreground hover:bg-secondary"
+            >
+              <Bell className="size-5" />
+              {unread > 0 && (
+                <span className="absolute top-1.5 right-1.5 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                  {unread > 9 ? "9+" : unread}
+                </span>
+              )}
+            </NavLink>
+          )}
         </header>
 
         <main id="main" className="flex-1 overflow-y-auto p-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
@@ -187,13 +179,21 @@ function NavRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }
   );
 }
 
-function SidebarContent({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
+function SidebarContent({
+  items,
+  onNavigate,
+  onClose,
+}: {
+  items: NavItem[];
+  onNavigate?: () => void;
+  onClose?: () => void;
+}) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const byLabel = new Map(items.map((i) => [i.label, i]));
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
       <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
         <img
           src="/spiderweb.svg"
@@ -202,11 +202,22 @@ function SidebarContent({ items, onNavigate }: { items: NavItem[]; onNavigate?: 
         />
       </div>
 
-      <div className="relative z-10 border-b border-sidebar-border/60 px-4 py-3.5">
+      <div className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border/60 px-4">
         <Brand />
+        {onClose && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0 rounded-lg text-muted-foreground hover:text-foreground hover:bg-sidebar-accent md:hidden"
+            aria-label="Close menu"
+            onClick={onClose}
+          >
+            <X className="size-5" />
+          </Button>
+        )}
       </div>
 
-      <nav aria-label="Sections" className="relative z-10 flex-1 overflow-y-auto no-scrollbar px-2 py-3">
+      <nav aria-label="Sections" className="relative z-10 flex-1 min-h-0 overflow-y-auto no-scrollbar px-2.5 py-3">
         {GROUPS.map((group) => {
           const groupItems = group.labels.map((l) => byLabel.get(l)).filter((i): i is NavItem => i != null);
           if (groupItems.length === 0) return null;
@@ -225,14 +236,14 @@ function SidebarContent({ items, onNavigate }: { items: NavItem[]; onNavigate?: 
         })}
       </nav>
 
-      <div className="relative z-10 border-t border-sidebar-border/60 px-4 py-3">
+      <div className="relative z-10 shrink-0 border-t border-sidebar-border/60 px-4 py-3">
         <div className="pb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
           Appearance
         </div>
         <ThemeSwitch />
       </div>
 
-      <div className="relative z-10 border-t border-sidebar-border/60 p-3">
+      <div className="relative z-10 shrink-0 border-t border-sidebar-border/60 p-3">
         <div className="flex items-center gap-2.5 rounded-lg bg-card px-2.5 py-2 ring-1 ring-foreground/10">
           <Avatar className="size-8 shrink-0">
             <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">

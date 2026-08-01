@@ -4,9 +4,10 @@ const express = require('express');
 const router = express.Router();
 
 const { db } = require('../db/setup');
-const { requireAuth, requireCSRF } = require('../middleware/auth');
+const { requireAuth, requireRole, requireCSRF } = require('../middleware/auth');
 
 router.use(requireAuth);
+router.use(requireRole('client'));
 
 router.get('/', async (req, res, next) => {
   try {

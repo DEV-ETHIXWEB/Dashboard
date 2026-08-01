@@ -19,10 +19,6 @@ function getDriveClient() {
   return driveClient;
 }
 
-/**
- * Uploads a file buffer to the configured Google Drive folder.
- * Returns { driveFileId, driveLink }.
- */
 async function uploadToDrive({ buffer, filename, mimeType }) {
   const drive = getDriveClient();
   const res = await drive.files.create({

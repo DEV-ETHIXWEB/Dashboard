@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiUpload } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import type { UserRecord, Project, Task, Ticket, Domain, Report, BudgetItem, Billing, Notification } from "@/lib/entities";
 import type { OtpLogEntry } from "@/lib/types";
 
@@ -15,10 +16,6 @@ export function useOtpLogs() {
   });
 }
 
-// Codes are never included in the list response -- each reveal is its own
-// audited request, so there's a real record of which admin looked at which
-// code and when, instead of every code sitting in the browser's memory the
-// instant the page loads.
 export function useRevealOtpCode() {
   return useMutation({
     mutationFn: (id: string) => api<{ code: string }>("POST", `/auth/otp-logs/${id}/reveal`).then((d) => d.code),
@@ -89,8 +86,8 @@ export function useDeleteTask() {
 export function useCreateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; email: string; role: string; company: string | null; password: string }) =>
-      api<{ user: UserRecord }>("POST", "/users", body),
+    mutationFn: (body: { name: string; email: string; role: string; company: string | null; password?: string; passwordExpiresAt?: number | null }) =>
+      api<{ user: UserRecord; temporaryPassword: string }>("POST", "/users", body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
   });
 }
@@ -98,7 +95,8 @@ export function useCreateUser() {
 export function useUpdateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) => api<{ user: UserRecord }>("PUT", `/users/${id}`, patch),
+    mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) =>
+      api<{ user: UserRecord; temporaryPassword?: string }>("PUT", `/users/${id}`, patch),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
   });
 }
@@ -206,9 +204,11 @@ export function useBillingStatus() {
 }
 
 export function useNotifications() {
+  const { user } = useAuth();
   return useQuery({
     queryKey: ["notifications"],
     queryFn: () => api<{ notifications: Notification[] }>("GET", "/notifications").then((d) => d.notifications),
+    enabled: user?.role === "client",
     refetchInterval: 30_000,
   });
 }

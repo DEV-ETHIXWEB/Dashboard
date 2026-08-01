@@ -6,6 +6,7 @@ export interface UserRecord {
   email: string;
   role: Role;
   company?: string | null;
+  passwordExpiresAt?: number | null;
 }
 
 export interface Project {

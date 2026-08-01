@@ -55,26 +55,32 @@ see "Local development" below.
 
 ## Feature overview
 
-- **Projects, Tasks, Tickets, Team** — core CRM entities, scoped per role.
-- **Domains** — one record per client website: platform, hosting provider
+- **Projects, Tasks, Tickets, Team** - core CRM entities, scoped per role.
+- **Domains** - one record per client website: platform, hosting provider
   and region, registrar, SSL status, expiry, DNS status, and a renew action.
-- **Reports** — file upload and download, stored in Google Drive when
+- **Reports** - file upload and download, stored in Google Drive when
   configured, otherwise in the database (4MB limit in that mode).
-- **Budget** — per-client spend tracking by category, with totals and a
+- **Budget** - per-client spend tracking by category, with totals and a
   breakdown view.
-- **Billing** — client subscription management via Stripe Checkout.
-- **Notifications** — per-user, with an unread count and a mark-all-read
+- **Billing** - client subscription management via Stripe Checkout.
+- **Notifications** - per-user, with an unread count and a mark-all-read
   action.
-- **Login codes (OTP)** — every non-admin login requires a second step: a
-  6-digit code the client types in. The code isn't emailed or texted — it's
+- **Client Access** - the admin-only console (`/portal/client-access`) that
+  issues client logins. The admin never types a client's password: the
+  server generates it, shows it back exactly once, and stores only a bcrypt
+  hash. Each login can carry an expiry date, after which the client is
+  locked out until an admin issues a new one. See
+  [Client access & credential lifecycle](#client-access--credential-lifecycle).
+- **Login codes (OTP)** - every non-admin login requires a second step: a
+  6-digit code the client types in. The code isn't emailed or texted - it's
   generated the instant the password check succeeds and shown, masked, in
   the admin-only **Login Codes** page (`/portal/otp-monitor`), alongside the
   requester's name, email, and IP address. An admin reveals it and reads it
   out to the client over another channel (phone/chat). Admin accounts skip
-  this step entirely — they're the only ones who can see the panel, so
+  this step entirely - they're the only ones who can see the panel, so
   gating their own login behind it would lock everyone out. See
   [Login codes (OTP) flow](#login-codes-otp-flow) below.
-- **Sign in with Google** — restricted to existing accounts; an admin must
+- **Sign in with Google** - restricted to existing accounts; an admin must
   create the account first.
 
 ## Environment variables
@@ -88,11 +94,192 @@ turns on automatically once you add the variable and redeploy.
 |---|---|
 | `DATABASE_URL` | Required. Postgres connection string. |
 | `GOOGLE_CLIENT_ID` | Sign in with Google (Google Identity Services button) |
-| `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON` | Firebase client SDK (Sign in with Google popup fallback) and the self-service 2FA contact toggle in Settings — **not** used by the login-time OTP step, which needs no configuration |
+| `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON` | Firebase client SDK (Sign in with Google popup fallback) and the self-service 2FA contact toggle in Settings. **Not** used by the login-time OTP step, the client-access credentials, or password expiry - all of which need no configuration. See [What Firebase is actually used for](#what-firebase-is-actually-used-for). |
 | `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET` | Billing |
 | `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID` | Report storage in Google Drive |
 
 See `.env.example` for the full list with descriptions.
+
+## Client access & credential lifecycle
+
+Clients never sign themselves up and never choose their own password. An
+admin issues the credential, decides how long it stays valid, and can cut it
+off at any time. There are two separate admin screens, and the split is
+deliberate:
+
+| Screen | Path | Purpose |
+|---|---|---|
+| **Team** | `/portal/team` | Internal staff only (Admin, Sales, Project Manager, Employee). Its role dropdown deliberately excludes Client, so a client account can't be created here and skip the credential rules below. |
+| **Client Access** | `/portal/client-access` | Client logins only: issue, set/change expiry, reissue, revoke. |
+
+### Issuing a login
+
+1. Admin opens **Client Access** → *New Client Login* and enters name, login
+   ID (email), company, and an expiry date (or ticks *No expiry*).
+2. `POST /api/users` generates a 14-character password server-side with
+   `crypto.randomBytes`, drawn from an alphabet that omits visually
+   confusable characters (`0/O`, `1/l/I`) because an admin usually reads it
+   aloud. The alphabet is 54 characters, so a 14-character password carries
+   roughly 80 bits of entropy.
+3. The password is hashed with bcrypt (cost factor 10) before it touches the
+   database. The plaintext exists only in that one HTTP response.
+4. The UI shows it once, with a copy button. There is no endpoint that can
+   read it back - if it's lost, the only path forward is issuing a new one.
+5. The admin relays it to the client over a separate channel (phone, chat).
+
+### Expiry enforcement
+
+`password_expires_at` is a millisecond timestamp on the `users` row. It is
+checked in **three** places, so there's no way around it:
+
+| Where | What it stops |
+|---|---|
+| `finishLogin()` in `routes/auth.js` | Password sign-in **and** Sign in with Google. Putting the check here rather than in the password branch alone means an expired client can't slip in through the Google button. |
+| `requireAuth()` in `middleware/auth.js` | An **already-open session**. Sessions last 7 days, so without this a client who signed in the day before their deadline would keep working past it. The check runs on every authenticated request and deletes the session the moment it fails. |
+| `PUT /api/users/:id` | Changing a password deletes that user's sessions, so "reissue" actually cuts off access instead of leaving the old cookie alive. |
+
+Deleting a client (**Revoke**) also removes their sessions and any
+outstanding login code in the same request.
+
+An expired client sees a distinct amber "Access expired" state on the login
+screen telling them to contact their admin, rather than a generic wrong-password
+error.
+
+### Full journey
+
+```
+Admin issues login ──► client gets ID + password out-of-band
+        │
+        ▼
+Client enters ID + password ──► POST /api/auth/login
+        │                        ├─ wrong password ─────► 401
+        │                        └─ expired ────────────► 403 "Access expired"
+        ▼
+  6-digit OTP generated, tied to that user's id (never sent to them)
+        │
+        ▼
+Admin reads it from Login Codes ──► relays by phone/chat
+        │
+        ▼
+Client enters code ──► POST /api/auth/verify-otp ──► session promoted, signed in
+        │
+        ▼
+Every later request re-checks expiry in requireAuth()
+```
+
+## Where the data is stored
+
+**Everything is stored server-side, in either PostgreSQL or Firestore.**
+Nothing sensitive is in browser storage, and the browser never talks to the
+database directly under either driver.
+
+Pick the driver with `DB_DRIVER`:
+
+| `DB_DRIVER` | Backing store | Requires |
+|---|---|---|
+| `postgres` (default) | PostgreSQL | `DATABASE_URL` |
+| `firestore` | Cloud Firestore | `FIREBASE_SERVICE_ACCOUNT_JSON` |
+
+If `DB_DRIVER` is unset the app infers it: Firestore when a service account
+is configured *and* `DATABASE_URL` is not, otherwise Postgres. Setting both
+without `DB_DRIVER` keeps Postgres — so adding a Firebase key to enable
+Google sign-in can't silently relocate an existing deployment's data.
+
+Both drivers implement the same async API
+(`find/all/filter/recent/insert/update/remove/removeWhere/incrementIfBelow`),
+so **no route file knows which one is active**:
+
+- `db/schemas.js` — the per-collection field whitelist, shared by both.
+- `db/setup.js` — Postgres driver + driver selection.
+- `db/firestore.js` — Firestore driver (Admin SDK only).
+
+### Firestore specifics
+
+- **Admin SDK only.** No Firestore client SDK is bundled in the frontend.
+- **`firestore.rules` denies every client read and write.** That's the whole
+  posture and it's deliberate: the Admin SDK bypasses rules by design, so a
+  blanket deny costs nothing and means the public web config (`apiKey`,
+  `projectId` — which ship to every browser and are *not* secrets) can't be
+  used to open a direct connection that reads anything. Deploy it with
+  `firebase deploy --only firestore:rules`.
+- **The OTP attempt cap uses a Firestore transaction**, mirroring the
+  Postgres conditional `UPDATE`. Both close the same race: concurrent verify
+  requests reading the same pre-increment value and slipping past the limit.
+- Documents store camelCase fields directly, so there's no snake_case
+  mapping on this driver.
+
+The table below describes the Postgres schema; the Firestore collections
+carry the same names and the same (camelCased) fields.
+
+| Table | Holds | Notes on sensitive fields |
+|---|---|---|
+| `users` | Accounts: name, email, role, company, password, `password_expires_at` | `password` is a **bcrypt hash**, never plaintext. Stripped from every API response by `safeUser()`. |
+| `sessions` | Session id, user id, CSRF token, expiry, `pending` flag | The session id is the only thing in the cookie. `pending` marks a login that passed the password step but not yet OTP. |
+| `otp_codes` | 6-digit login codes, user id, IP, expiry, attempt count | Codes are excluded from the list endpoint and fetched one at a time via an audited reveal call. Expired rows are pruned automatically. |
+| `activity_log` | Who did what, when | Every credential issue, password regeneration, and OTP reveal lands here. |
+| `projects`, `tasks`, `tickets`, `domains`, `reports`, `budget_items`, `billing`, `notifications` | Core CRM records | Scoped per role at the route layer. |
+
+Set `DATABASE_URL` to any standard Postgres host (Vercel Postgres, Neon,
+Supabase, self-hosted). For local development `npm run dev:pgmem` runs an
+in-memory Postgres that resets on restart - convenient for demos, not for
+real data.
+
+### What Firebase is actually used for
+
+Firebase can play up to three separate roles here, and they're independent —
+you can use any one without the others:
+
+1. **Firestore as the database** (`DB_DRIVER=firestore`). Needs
+   `FIREBASE_SERVICE_ACCOUNT_JSON`. See above.
+2. **A fallback popup for "Sign in with Google."**
+3. **The 2FA contact toggle in Settings.**
+
+**Firebase Authentication is *not* used to log anyone in.** Even with
+Firestore as the database, the app's own auth is what runs: bcrypt password
+hashes, server-side sessions, and the admin-issued OTP. Firebase never
+decides who gets in.
+
+A note on the keys, because it trips people up: the four `FIREBASE_*` client
+values (`API_KEY`, `AUTH_DOMAIN`, `PROJECT_ID`, `APP_ID`) are **public** —
+they ship inside every browser bundle and grant no access on their own. The
+only Firebase secret is `FIREBASE_SERVICE_ACCOUNT_JSON`, which is read
+server-side only and must never be committed. Having the four public values
+is *not* enough to store data in Firestore.
+
+The two optional sign-in features, in detail:
+
+1. **A fallback popup for "Sign in with Google."** The primary path is Google
+   Identity Services (`GOOGLE_CLIENT_ID`). If the Firebase config is present,
+   `frontend/src/lib/firebase2fa.ts` can open a Firebase Google popup instead
+   and hand the resulting ID token to `POST /api/auth/google`. The server
+   verifies that token, then looks the email up in **your own database** — if
+   there's no account there, sign-in is refused. Firebase can never create an
+   account or grant access on its own.
+2. **The 2FA contact toggle in Settings**, which uses Firebase to prove a
+   user controls a phone number or email. This is currently vestigial — it
+   isn't wired into login (see Known limitations).
+
+Leaving all `FIREBASE_*` variables unset is a fully supported configuration
+when you're on Postgres: every other feature keeps working.
+
+## Security model
+
+| Control | Implementation |
+|---|---|
+| Password storage | bcrypt, cost 10. Plaintext never persisted; returned exactly once at generation. |
+| Password generation | `crypto.randomBytes` (CSPRNG), ~80 bits of entropy. Never `Math.random()`. |
+| Session transport | `httpOnly`, `sameSite: lax`, `secure` in production. The browser can't read the cookie from JavaScript. |
+| CSRF | Per-session token required on every mutating request (`requireCSRF`). |
+| Authorisation | `requireRole('admin')` on all credential endpoints; role checks again at the route layer, never in the UI alone. |
+| Brute force | Rate limits on `/auth/login` (20 per 15 min) and `/auth/verify-otp` (30 per 15 min), on separate buckets so a mistyped OTP can't lock someone out of login itself. |
+| OTP guessing | 5-attempt cap enforced with an atomic `UPDATE ... WHERE attempts < max`, so concurrent requests can't race past the limit. Codes compared with `crypto.timingSafeEqual`. |
+| Secret exposure | `safeUser()` strips password fields from every response. OTP codes are never in list responses - each reveal is a separate, audited call. |
+| Audit trail | `activity_log` records every issue, regeneration, reveal, login, and deletion. |
+| Self-registration | Impossible. Both password and Google paths require an account an admin already created. |
+| XSS | A real Content-Security-Policy (`server.js`). The bundle has no inline `<script>`, so `script-src 'self'` plus the two Google origins is enough — injected script won't execute even if it reaches the DOM. `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'self'` (no clickjacking). |
+| CORS | Off by default. Both supported setups are same-origin (Express serves the SPA; Vite proxies `/api` server-side), so no cross-origin permission is granted at all. Opt in per-origin with `CORS_ORIGINS`. |
+| Transport | TLS enforced for any non-localhost database host; HSTS, `nosniff`, and `Referrer-Policy: no-referrer` via helmet. |
+| Availability | Pool capped per instance, 10s connection timeout, and an idle-client error handler — without which a routine dropped connection from a hosted provider crashes the Node process. |
 
 ## Login codes (OTP) flow
 
@@ -100,7 +287,7 @@ See `.env.example` for the full list with descriptions.
 2. If the password is correct and the account is **not** an admin, the
    server creates a `pending` session (10-minute TTL) and inserts a row
    into `otp_codes`: a random 6-digit code, the user's id, `req.ip`, and a
-   5-minute expiry. The response is `{ requiresOtp: true }` — the code
+   5-minute expiry. The response is `{ requiresOtp: true }` - the code
    itself is never sent to the client that's logging in.
 3. An admin opens **Login Codes** (`/portal/otp-monitor`,
    `GET /api/auth/otp-logs`, admin-only) and finds the row by name/email/IP,
@@ -112,11 +299,79 @@ See `.env.example` for the full list with descriptions.
    the 5-minute expiry, then on success marks the code `consumed`, promotes
    the pending session to a full one, and logs the client in.
 5. Admin accounts skip steps 2–4 entirely (see `finishLogin` in
-   `routes/auth.js`) — otherwise no admin could ever reach the panel needed
+   `routes/auth.js`) - otherwise no admin could ever reach the panel needed
    to unlock their own login.
 
 This intentionally has no automatic delivery channel (no SMS/email
-provider integrated) — the admin is the delivery mechanism, by design.
+provider integrated) - the admin is the delivery mechanism, by design.
+
+### Connecting a real Postgres (Supabase)
+
+Until `DATABASE_URL` is set, `npm run dev:pgmem` runs against an **in-memory**
+database that resets on every restart. To make data persist:
+
+1. [supabase.com](https://supabase.com) → New project. Save the database
+   password it generates.
+2. **Project Settings → Database → Connection string.** Pick the variant that
+   matches how you run the app:
+
+   | Variant | Port | Use when |
+   |---|---|---|
+   | Transaction pooler | 6543 | Vercel / any serverless deploy |
+   | Session pooler | 5432 (host contains `pooler`) | long-running `node server.js` |
+   | Direct connection | 5432 (`db.<ref>.supabase.co`) | rarely — IPv6-only on newer projects, so it often fails from IPv4 networks and from Vercel |
+
+3. Put it in `.env`, replacing `[YOUR-PASSWORD]`:
+   ```
+   DATABASE_URL=postgresql://postgres.abcdefgh:PASSWORD@aws-0-eu-west-1.pooler.supabase.com:6543/postgres
+   ```
+   URL-encode special characters in the password (`@`→`%40`, `#`→`%23`,
+   `/`→`%2F`), otherwise the URL parses wrongly and surfaces as a confusing
+   authentication error.
+4. Verify the connection before starting anything:
+   ```bash
+   npm run db:check
+   ```
+   It reports the server version, which tables exist, and row counts — and
+   on failure translates the common opaque errors (`ENOTFOUND`, `ETIMEDOUT`,
+   `Tenant or user not found`) into the actual fix.
+5. Start the app. Tables are created automatically (`CREATE TABLE IF NOT
+   EXISTS`) and `seed()` inserts the demo data — no migration step.
+
+`.env` is loaded by the npm scripts via Node's built-in
+`--env-file-if-exists=.env` (Node 20.6+). There's no `dotenv` dependency, and
+nothing loads `.env` if you run `node server.js` directly — use `npm run dev`
+or `npm start`. On Vercel, environment variables come from the project
+settings and no `.env` file exists, which the `-if-exists` form handles.
+
+To develop offline against the in-memory database instead, use
+`npm run dev:pgmem` (data resets on every restart).
+
+TLS is enabled automatically for any non-localhost host. Connection pooling
+is capped per instance (`PG_POOL_MAX`, default 5) so serverless instances
+can't collectively exhaust the provider's connection limit.
+
+### Switching storage to Firestore
+
+1. [console.firebase.google.com](https://console.firebase.google.com) → your
+   project → **Firestore Database** → Create database → production mode.
+2. ⚙️ **Project Settings → Service Accounts → Generate new private key**.
+   This downloads a JSON file. It is a secret.
+3. Put it in `.env` on one line, and select the driver:
+   ```
+   DB_DRIVER=firestore
+   FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...", ...}
+   ```
+4. Deploy the lockdown rules:
+   ```bash
+   firebase deploy --only firestore:rules
+   ```
+5. Start the app. `seed()` runs on boot and populates the demo data if the
+   collections are empty, exactly as it does on Postgres.
+
+If the server exits complaining the key "looks like the public web config,
+not a service account key", you pasted the four public `FIREBASE_*` values
+instead of the downloaded JSON — go back to step 2.
 
 ### Setting up Sign in with Google
 
@@ -126,7 +381,7 @@ provider integrated) — the admin is the delivery mechanism, by design.
 
 ### Setting up Firebase (Google sign-in popup fallback + Settings 2FA toggle)
 
-Not required for the login-OTP flow — only for the Firebase-popup path of
+Not required for the login-OTP flow - only for the Firebase-popup path of
 Sign in with Google, and the currently-vestigial 2FA contact toggle in
 Settings (see Known limitations).
 
@@ -154,7 +409,7 @@ Settings (see Known limitations).
 1. Create a Postgres database: Vercel dashboard → project → Storage → Create Database → Postgres. This sets `DATABASE_URL` automatically.
    If you use Prisma Postgres instead of plain Postgres, copy the connection string that starts with `postgres://` into a variable named `DATABASE_URL`.
 2. Add any of the optional environment variables listed above that you're ready to use.
-3. Optional — migrate local data: `DATABASE_URL="<connection-string>" npm run migrate` copies `db/data/*.json` into the real database, preserving IDs.
+3. Optional - migrate local data: `DATABASE_URL="<connection-string>" npm run migrate` copies `db/data/*.json` into the real database, preserving IDs.
 4. Deploy:
    ```bash
    npm install -g vercel
@@ -166,7 +421,7 @@ Settings (see Known limitations).
 ## Database schema
 
 All tables are defined in `db/setup.js` (`SCHEMAS` + `initSchema()`), and
-created automatically on startup (`CREATE TABLE IF NOT EXISTS`) — there's no
+created automatically on startup (`CREATE TABLE IF NOT EXISTS`) - there's no
 separate migration step for a fresh database. Route code never writes raw
 SQL; everything goes through `db.find/all/filter/insert/update/remove`
 (see below), which maps camelCase JS objects to the snake_case columns
@@ -174,7 +429,7 @@ listed here.
 
 | Table | Columns | Notes |
 |---|---|---|
-| `users` | `id, name, email, role, company, password, google_id, two_factor_enabled, two_factor_contact` | `role` is one of `admin, sales, project_manager, employee, client`. `two_factor_enabled`/`two_factor_contact` back the self-service toggle in Settings only — unrelated to the login OTP step below. |
+| `users` | `id, name, email, role, company, password, google_id, two_factor_enabled, two_factor_contact, password_expires_at` | `role` is one of `admin, sales, project_manager, employee, client`. `password` is a bcrypt hash. `password_expires_at` is a millisecond timestamp (or `NULL` for no expiry) set from the Client Access console - see [Expiry enforcement](#expiry-enforcement). `two_factor_enabled`/`two_factor_contact` back the self-service toggle in Settings only - unrelated to the login OTP step below. |
 | `projects` | `id, name, type, client_id, assigned_pm_id, status, description, created_at` | |
 | `tasks` | `id, project_id, name, assignee_id, status, priority, due` | |
 | `tickets` | `id, subject, category, client_id, assignee_id, status, description, created_at` | |
@@ -192,18 +447,18 @@ listed here.
 `db/setup.js` exports a small async API used by every route file instead of
 raw queries:
 
-- `db.all(collection)` — all rows.
-- `db.find(collection, id)` — one row by id, or `null`.
-- `db.filter(collection, predicate)` — `db.all()` + a JS `.filter()` (no SQL
+- `db.all(collection)` - all rows.
+- `db.find(collection, id)` - one row by id, or `null`.
+- `db.filter(collection, predicate)` - `db.all()` + a JS `.filter()` (no SQL
   `WHERE`; fine at current scale, see Known limitations).
-- `db.insert(collection, obj)` — `obj.id` defaults to a new UUID if omitted.
-- `db.update(collection, id, patch)` — partial update, returns the new row.
+- `db.insert(collection, obj)` - `obj.id` defaults to a new UUID if omitted.
+- `db.update(collection, id, patch)` - partial update, returns the new row.
 - `db.remove(collection, id)` / `db.removeWhere(collection, predicate)`.
-- `db.recent(collection, limit)` — like `all()`, but sorts/limits in SQL
+- `db.recent(collection, limit)` - like `all()`, but sorts/limits in SQL
   (`ORDER BY created_at DESC LIMIT`) instead of fetching everything into
   JS first. Use this instead of `all()` for anything read on a tight
   polling interval, like the OTP monitor.
-- `db.incrementIfBelow(collection, id, field, max)` — atomically increments
+- `db.incrementIfBelow(collection, id, field, max)` - atomically increments
   a counter only if it's still under `max`, in one SQL statement, and
   returns the updated row (or `null` if already at the cap). Used for the
   OTP attempt counter, where a plain read-then-write would race.
@@ -276,20 +531,25 @@ npm run dev:frontend-only  # in frontend/
   scale; revisit if the dataset grows significantly.
 - Rate limiting: `/api/auth/login` and `/api/auth/google` share a strict
   limit (20 attempts / 15 min per IP). `/api/auth/verify-otp` has its own,
-  separate limit (30 attempts / 15 min per IP) — kept apart so retyping a
+  separate limit (30 attempts / 15 min per IP) - kept apart so retyping a
   mistyped code can't lock someone out of the password step itself. The
-  rest of the API has a general limit (600 requests / 15 min per IP) —
+  rest of the API has a general limit (600 requests / 15 min per IP) -
   generous enough not to affect normal use, but bounded.
 - The self-service 2FA toggle in Settings (`users.js`'s `/me/2fa/enable` /
   `/me/2fa/disable`, backed by `users.two_factor_enabled` /
-  `two_factor_contact`) no longer affects login — it predates the OTP flow
+  `two_factor_contact`) no longer affects login - it predates the OTP flow
   above and is currently vestigial. Either wire it into `finishLogin` as an
   extra check, or remove it, depending on whether you want per-user opt-in
   on top of the blanket OTP requirement.
+- Password expiry has no automatic warning: nobody is emailed as a client's
+  deadline approaches. The Client Access console surfaces it visually
+  ("Expiring ≤ 7d" counter and an amber row badge), but an admin has to be
+  looking. Wire a scheduled job into `notifications` if you want proactive
+  alerts.
 - Report uploads accept any file type up to the configured size limit;
   there's no MIME-type allowlist. Downloads are served with
   `Content-Disposition: attachment`, so browsers won't execute uploaded
-  content — add a stricter allowlist if you need it for compliance reasons.
+  content - add a stricter allowlist if you need it for compliance reasons.
 - CORS currently reflects any request origin (`cors({ origin: true })`).
   Session cookies are `SameSite=Lax`, so this doesn't expose authenticated
   cross-site requests in practice, but once you have a fixed production

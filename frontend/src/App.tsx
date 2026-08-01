@@ -15,6 +15,7 @@ const Reports = lazy(() => import("@/pages/Reports"));
 const Budget = lazy(() => import("@/pages/Budget"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const Team = lazy(() => import("@/pages/Team"));
+const ClientAccess = lazy(() => import("@/pages/ClientAccess"));
 const OtpMonitor = lazy(() => import("@/pages/OtpMonitor"));
 const Settings = lazy(() => import("@/pages/Settings"));
 const Notifications = lazy(() => import("@/pages/Notifications"));
@@ -99,6 +100,14 @@ function App() {
             }
           />
           <Route
+            path="/portal/client-access"
+            element={
+              <RoleRoute roles={["admin"]}>
+                <ClientAccess />
+              </RoleRoute>
+            }
+          />
+          <Route
             path="/portal/otp-monitor"
             element={
               <RoleRoute roles={["admin"]}>
@@ -107,7 +116,14 @@ function App() {
             }
           />
           <Route path="/portal/settings" element={<RoleRoute><Settings /></RoleRoute>} />
-          <Route path="/portal/notifications" element={<RoleRoute><Notifications /></RoleRoute>} />
+          <Route
+            path="/portal/notifications"
+            element={
+              <RoleRoute roles={["client"]}>
+                <Notifications />
+              </RoleRoute>
+            }
+          />
 
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />

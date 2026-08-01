@@ -2,6 +2,7 @@
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const router = express.Router();
 
 const { db } = require('../db/setup');
@@ -9,10 +10,18 @@ const { requireAuth, requireRole, requireCSRF, safeUser, audit } = require('../m
 
 router.use(requireAuth);
 
+const PASSWORD_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+function generatePassword(length = 14) {
+  let out = '';
+  const bytes = crypto.randomBytes(length);
+  for (let i = 0; i < length; i++) {
+    out += PASSWORD_ALPHABET[bytes[i] % PASSWORD_ALPHABET.length];
+  }
+  return out;
+}
+
 const { isFirebaseAdminConfigured, verifyFirebaseIdToken } = require('../utils/firebaseAdmin');
 
-// Enable 2FA -- requires proving control of the phone/email first via a
-// Firebase-verified ID token, so you can't lock someone else's account.
 router.post('/me/2fa/enable', requireCSRF, async (req, res, next) => {
   try {
     if (!isFirebaseAdminConfigured()) {
@@ -43,7 +52,6 @@ router.post('/me/2fa/disable', requireCSRF, async (req, res, next) => {
   }
 });
 
-// Self-service profile update — must come before the admin-only /:id route.
 router.put('/me', requireCSRF, async (req, res, next) => {
   try {
     const { name, email, password } = req.body || {};
@@ -77,19 +85,24 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', requireCSRF, requireRole('admin'), async (req, res, next) => {
   try {
-    const { name, email, role, company, password } = req.body || {};
-    if (!name || !email || !role || !password) return res.status(400).json({ error: 'name, email, role, and password are required' });
+    const { name, email, role, company, password, passwordExpiresAt } = req.body || {};
+    if (!name || !email || !role) return res.status(400).json({ error: 'name, email, and role are required' });
     const validRoles = ['admin', 'sales', 'project_manager', 'employee', 'client'];
     if (!validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+    if (passwordExpiresAt !== undefined && passwordExpiresAt !== null && !Number.isFinite(Number(passwordExpiresAt))) {
+      return res.status(400).json({ error: 'passwordExpiresAt must be a timestamp or null' });
+    }
 
     const existing = await db.filter('users', (u) => u.email.toLowerCase() === email.toLowerCase());
     if (existing.length > 0) return res.status(409).json({ error: 'A user with that email already exists' });
 
+    const plaintextPassword = password || generatePassword();
     const user = await db.insert('users', {
-      name, email, role, company: company || null, password: bcrypt.hashSync(password, 10),
+      name, email, role, company: company || null, password: bcrypt.hashSync(plaintextPassword, 10),
+      passwordExpiresAt: passwordExpiresAt != null ? Number(passwordExpiresAt) : null,
     });
     await audit(req.user.id, 'create', 'user', user.id);
-    res.status(201).json({ user: safeUser(user) });
+    res.status(201).json({ user: safeUser(user), temporaryPassword: plaintextPassword });
   } catch (err) {
     next(err);
   }
@@ -99,13 +112,32 @@ router.put('/:id', requireCSRF, requireRole('admin'), async (req, res, next) => 
   try {
     const patch = { ...req.body };
     delete patch.id;
-    if (patch.password) patch.password = bcrypt.hashSync(patch.password, 10);
-    else delete patch.password;
+
+    if (patch.passwordExpiresAt !== undefined && patch.passwordExpiresAt !== null && !Number.isFinite(Number(patch.passwordExpiresAt))) {
+      return res.status(400).json({ error: 'passwordExpiresAt must be a timestamp or null' });
+    }
+    if (patch.passwordExpiresAt != null) patch.passwordExpiresAt = Number(patch.passwordExpiresAt);
+
+    let temporaryPassword;
+    if (patch.regeneratePassword) {
+      temporaryPassword = generatePassword();
+      patch.password = bcrypt.hashSync(temporaryPassword, 10);
+    } else if (patch.password) {
+      patch.password = bcrypt.hashSync(patch.password, 10);
+    } else {
+      delete patch.password;
+    }
+    delete patch.regeneratePassword;
 
     const updated = await db.update('users', req.params.id, patch);
     if (!updated) return res.status(404).json({ error: 'User not found' });
-    await audit(req.user.id, 'update', 'user', req.params.id);
-    res.json({ user: safeUser(updated) });
+
+    if (patch.password) {
+      await db.removeWhere('sessions', (s) => s.userId === req.params.id);
+    }
+
+    await audit(req.user.id, 'update', 'user', req.params.id, temporaryPassword ? { passwordRegenerated: true } : undefined);
+    res.json({ user: safeUser(updated), ...(temporaryPassword ? { temporaryPassword } : {}) });
   } catch (err) {
     next(err);
   }
@@ -116,6 +148,9 @@ router.delete('/:id', requireCSRF, requireRole('admin'), async (req, res, next) 
     if (req.params.id === req.user.id) return res.status(400).json({ error: "You can't delete your own account" });
     const ok = await db.remove('users', req.params.id);
     if (!ok) return res.status(404).json({ error: 'User not found' });
+
+    await db.removeWhere('sessions', (s) => s.userId === req.params.id);
+    await db.removeWhere('otp_codes', (o) => o.userId === req.params.id);
 
     const tasks = await db.filter('tasks', (t) => t.assigneeId === req.params.id);
     for (const t of tasks) await db.update('tasks', t.id, { assigneeId: null });

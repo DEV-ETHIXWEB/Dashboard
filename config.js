@@ -1,13 +1,5 @@
 'use strict';
 
-// Every "big" integration (Google Sign-In, Firebase 2FA, Stripe billing,
-// Google Drive storage) is feature-gated on whether its env vars are set.
-// Nothing in the app assumes these exist -- the UI checks the *Enabled
-// flags from GET /api/config and shows a "not set up yet" state instead of
-// a broken button when they're missing. The moment real credentials are
-// added to Vercel's Environment Variables and redeployed, these flip on
-// automatically -- no code changes needed.
-
 function getPublicConfig() {
   const googleClientId = process.env.GOOGLE_CLIENT_ID || null;
 

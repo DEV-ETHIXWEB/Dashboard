@@ -12,6 +12,7 @@ const {
   requireAuth, requireRole, requireCSRF, audit, PORTAL_PATH,
 } = require('../middleware/auth');
 const { isGoogleSignInConfigured, verifyGoogleIdToken } = require('../utils/googleAuth');
+const { encryptCode, decryptCode, codesMatch } = require('../utils/otpCrypto');
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
@@ -24,10 +25,6 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many login attempts. Please try again in a few minutes.' },
 });
 
-// Separate, slightly more generous limiter for OTP verification. It shares
-// no bucket with loginLimiter: a user re-typing a mistyped code shouldn't
-// burn down the same budget that guards the password check, or they could
-// get locked out of /login itself despite having the right password.
 const verifyOtpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
@@ -44,32 +41,16 @@ const COOKIE_OPTS = {
   path: '/',
 };
 
-// Strips the "::ffff:" prefix Node adds to IPv4 addresses on a dual-stack
-// listener, so admins see "127.0.0.1" instead of "::ffff:127.0.0.1".
 function normalizeIp(ip) {
   if (!ip) return ip;
   return ip.startsWith('::ffff:') ? ip.slice(7) : ip;
 }
 
-// Constant-time comparison for the 6-digit code, so response timing can't
-// be used to narrow down correct digits. Both inputs are normalized to a
-// fixed length first since crypto.timingSafeEqual requires equal-length
-// buffers (a length mismatch alone is safe to reveal via early return --
-// it doesn't leak anything about the code's content).
-function codesMatch(submitted, actual) {
-  const a = Buffer.from(String(submitted));
-  const b = Buffer.from(String(actual));
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
-
-// Every non-admin login requires a second step: an admin-issued OTP. As
-// soon as the password check succeeds we generate a 6-digit code and log
-// it (with the requester's name/email/IP) for an admin to read out to the
-// client over another channel -- there is no automatic SMS/email delivery.
-// Admins themselves skip this step: they're the only ones who can see the
-// OTP panel, so gating their own login behind it would lock them out.
 async function finishLogin(req, res, user) {
+  if (user.passwordExpiresAt && Number(user.passwordExpiresAt) < Date.now()) {
+    return res.status(403).json({ error: 'This access has expired. Ask your admin to issue you new credentials.', passwordExpired: true });
+  }
+
   if (user.role === 'admin') {
     const session = await createSession(user.id);
     res.cookie(SESSION_COOKIE, session.id, COOKIE_OPTS);
@@ -80,11 +61,6 @@ async function finishLogin(req, res, user) {
   const pendingSession = await createSession(user.id, { pending: true });
   res.cookie(SESSION_COOKIE, pendingSession.id, COOKIE_OPTS);
 
-  // Opportunistic cleanup: drop anything past its expiry (regardless of
-  // outcome) and retire any still-unconsumed code this same user already
-  // had outstanding, so there's only ever one "live" code per user -- an
-  // admin can never read out a stale one that verify-otp would reject
-  // anyway (it only ever checks the newest).
   await db.pruneExpiredOtps();
   await db.invalidateUserOtps(user.id);
 
@@ -92,7 +68,7 @@ async function finishLogin(req, res, user) {
   const expiresAt = Date.now() + OTP_TTL_MS;
   await db.insert('otp_codes', {
     userId: user.id,
-    code,
+    code: encryptCode(code),
     ipAddress: normalizeIp(req.ip),
     createdAt: new Date().toISOString(),
     expiresAt,
@@ -119,9 +95,6 @@ router.post('/login', loginLimiter, async (req, res, next) => {
   }
 });
 
-// Sign in with Google -- only works for an email that already has an
-// account here (an admin must have added them first). Prevents random
-// Google accounts from self-registering into the CRM.
 router.post('/google', loginLimiter, async (req, res, next) => {
   try {
     if (!isGoogleSignInConfigured()) {
@@ -143,8 +116,6 @@ router.post('/google', loginLimiter, async (req, res, next) => {
   }
 });
 
-// Step 2 of login: the client submits the 6-digit code an admin read out
-// to them from the /otp-logs panel.
 router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
   try {
     const sid = req.cookies?.[SESSION_COOKIE];
@@ -166,14 +137,6 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
       return res.status(403).json({ error: 'That code has expired. Please sign in again to get a new one.' });
     }
 
-    // Atomically increments attempts only if still below the cap, in one
-    // SQL statement. A plain "read attempts, check in JS, write attempts+1"
-    // has a real race: concurrent requests can all read the same
-    // pre-increment value and all pass the check before any write lands,
-    // letting more guesses through than MAX_OTP_ATTEMPTS allows. This
-    // returns null (and we lock out) the instant the cap is already hit,
-    // whether or not this particular guess would have been correct --
-    // matching the original intent that a locked-out code stays locked out.
     const updated = await db.incrementIfBelow('otp_codes', otp.id, 'attempts', MAX_OTP_ATTEMPTS);
     if (!updated) {
       return res.status(403).json({ error: 'Too many incorrect attempts. Please sign in again to get a new code.' });
@@ -192,12 +155,6 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
   }
 });
 
-// Admin-only feed of recently generated login OTPs, so an admin can read a
-// code out to the client requesting it. Codes are NOT included here --
-// they're fetched one at a time via POST /otp-logs/:id/reveal, which is
-// audit-logged, so there's a real record of which admin looked at which
-// code and when, instead of every code being downloaded to the browser
-// (and sitting in its memory/devtools) the instant the page loads.
 router.get('/otp-logs', requireAuth, requireRole('admin'), async (req, res, next) => {
   try {
     const [otps, users] = await Promise.all([db.recent('otp_codes', 100), db.all('users')]);
@@ -208,7 +165,7 @@ router.get('/otp-logs', requireAuth, requireRole('admin'), async (req, res, next
         id: o.id,
         userId: o.userId,
         name: u?.name || 'Unknown user',
-        email: u?.email || '—',
+        email: u?.email || '-',
         ipAddress: normalizeIp(o.ipAddress),
         createdAt: o.createdAt,
         expiresAt: Number(o.expiresAt),
@@ -226,8 +183,14 @@ router.post('/otp-logs/:id/reveal', requireAuth, requireRole('admin'), requireCS
   try {
     const otp = await db.find('otp_codes', req.params.id);
     if (!otp) return res.status(404).json({ error: 'Not found' });
+    const code = decryptCode(otp.code);
+    if (code === null) {
+      return res.status(409).json({
+        error: 'This code can no longer be read, most likely because the server restarted. Ask the client to sign in again for a fresh code.',
+      });
+    }
     await audit(req.user.id, 'reveal_otp', 'otp_codes', otp.id, { forUserId: otp.userId });
-    res.json({ code: otp.code });
+    res.json({ code });
   } catch (err) {
     next(err);
   }

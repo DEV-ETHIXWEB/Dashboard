@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm run dev:pgmem --prefix ..\" \"vite\"",
+    "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm run dev --prefix ..\" \"node scripts/wait-for-backend.cjs && vite\"",
+    "dev:pgmem": "concurrently -n backend,frontend -c yellow,cyan \"npm run dev:pgmem --prefix ..\" \"node scripts/wait-for-backend.cjs && vite\"",
     "dev:frontend-only": "vite",
     "build": "node scripts/build.cjs",
     "lint": "oxlint",

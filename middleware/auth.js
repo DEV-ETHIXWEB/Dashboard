@@ -52,6 +52,12 @@ async function requireAuth(req, res, next) {
     if (!session || session.pending) return res.status(401).json({ error: 'Not signed in' });
     const user = await db.find('users', session.userId);
     if (!user) return res.status(401).json({ error: 'Not signed in' });
+
+    if (user.passwordExpiresAt && Number(user.passwordExpiresAt) < Date.now()) {
+      await db.remove('sessions', session.id);
+      return res.status(401).json({ error: 'Your access has expired. Ask your admin to issue you new credentials.', passwordExpired: true });
+    }
+
     req.session = session;
     req.user = user;
     next();
@@ -85,6 +91,8 @@ async function audit(actorId, action, entity, entityId, meta) {
 
 async function notify(userId, message, type) {
   if (!userId) return;
+  const user = await db.find('users', userId);
+  if (!user || user.role !== 'client') return;
   await db.insert('notifications', {
     id: uuidv4(), userId, message, type: type || 'general', read: false, createdAt: new Date().toISOString(),
   });

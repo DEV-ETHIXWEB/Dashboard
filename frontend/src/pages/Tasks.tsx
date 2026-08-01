@@ -191,7 +191,6 @@ export default function Tasks() {
                 showCloseButton={false}
                 className="sm:max-w-md p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
               >
-                {/* Header */}
                 <div className="relative p-6 pb-4 border-b border-border/40 bg-gradient-to-br from-primary/10 via-background to-background">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-center gap-3">
@@ -213,7 +212,6 @@ export default function Tasks() {
                   </div>
                 </div>
 
-                {/* Form Body */}
                 <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
                   <div className="space-y-1.5">
                     <Label className="text-xs font-medium">Task Name *</Label>
@@ -300,7 +298,6 @@ export default function Tasks() {
                   </div>
                 </div>
 
-                {/* Footer */}
                 <DialogFooter className="m-0 px-6 py-4 bg-muted/30 border-t border-border/40 flex flex-row items-center justify-end gap-2.5 rounded-b-2xl">
                   <DialogClose render={<Button variant="ghost" className="h-9 text-xs px-3.5 text-muted-foreground hover:text-foreground" />}>
                     Cancel
@@ -326,7 +323,6 @@ export default function Tasks() {
         }
       />
 
-      {/* Filter and Search Control Bar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-1.5 bg-card/60 border border-border/60 rounded-xl backdrop-blur-xs">
         <div className="relative w-full sm:w-72">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
@@ -346,7 +342,6 @@ export default function Tasks() {
           )}
         </div>
 
-        {/* Status Filter Chips */}
         <div className="flex items-center gap-1 w-full sm:w-auto overflow-x-auto no-scrollbar">
           {["All", ...STATUSES].map((st) => {
             const isSelected = statusFilter === st;
@@ -375,7 +370,6 @@ export default function Tasks() {
         </div>
       </div>
 
-      {/* Data Table View */}
       {isLoading ? (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => (

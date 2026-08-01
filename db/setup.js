@@ -1,16 +1,13 @@
 'use strict';
 
-// Postgres-backed database layer. Works with Vercel Postgres, Neon, Supabase,
-// or any standard Postgres connection string via DATABASE_URL.
-//
-// Route files call the same db.find/insert/update/remove API as before (now
-// async), and objects still use camelCase JS property names (clientId,
-// createdAt, etc.) -- this module handles the camelCase <-> snake_case
-// column mapping so nothing else in the app had to change shape.
-
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const { SCHEMAS, toSnake, toCamel } = require('./schemas');
+
+const DB_DRIVER =
+  process.env.DB_DRIVER ||
+  (!process.env.DATABASE_URL && process.env.FIREBASE_SERVICE_ACCOUNT_JSON ? 'firestore' : 'postgres');
 
 let pool;
 function getPool() {
@@ -19,39 +16,23 @@ function getPool() {
     if (!connectionString) {
       throw new Error('DATABASE_URL is not set. See .env.example / README for setup steps.');
     }
+
+    const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\//.test(connectionString);
+
     pool = new Pool({
       connectionString,
-      ssl: connectionString.includes('localhost') ? false : { rejectUnauthorized: false },
+      ssl: isLocal ? false : { rejectUnauthorized: false },
+      max: Number(process.env.PG_POOL_MAX || 5),
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    });
+
+    pool.on('error', (err) => {
+      console.error('[db] idle client error (connection dropped, pool recovers):', err.message);
     });
   }
   return pool;
 }
-
-// Column list per "collection" (table). Only keys present here are ever
-// read from / written to the database for that collection.
-const SCHEMAS = {
-  users: ['id', 'name', 'email', 'role', 'company', 'password', 'google_id', 'two_factor_enabled', 'two_factor_contact'],
-  projects: ['id', 'name', 'type', 'client_id', 'assigned_pm_id', 'status', 'description', 'created_at'],
-  tasks: ['id', 'project_id', 'name', 'assignee_id', 'status', 'priority', 'due'],
-  tickets: ['id', 'subject', 'category', 'client_id', 'assignee_id', 'status', 'description', 'created_at'],
-  notifications: ['id', 'user_id', 'message', 'type', 'read', 'created_at'],
-  sessions: ['id', 'user_id', 'csrf_token', 'created_at', 'expires_at', 'pending'],
-  activity_log: ['id', 'actor_id', 'action', 'entity', 'entity_id', 'meta', 'created_at'],
-  domains: [
-    'id', 'client_id', 'domain_name', 'platform', 'hosting_provider', 'hosting_region',
-    'registrar', 'ssl_status', 'expires_at', 'auto_renew', 'dns_status', 'notes',
-  ],
-  reports: [
-    'id', 'client_id', 'name', 'category', 'storage_type', 'drive_file_id', 'drive_link',
-    'content_base64', 'mime_type', 'size_bytes', 'uploaded_by', 'created_at',
-  ],
-  budget_items: ['id', 'client_id', 'label', 'amount', 'color', 'month'],
-  billing: ['id', 'client_id', 'stripe_customer_id', 'stripe_subscription_id', 'plan', 'status', 'updated_at'],
-  otp_codes: ['id', 'user_id', 'code', 'ip_address', 'created_at', 'expires_at', 'consumed', 'attempts'],
-};
-
-function toSnake(str) { return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`); }
-function toCamel(str) { return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase()); }
 
 function rowToCamel(row, collection) {
   if (!row) return null;
@@ -65,15 +46,13 @@ function rowToCamel(row, collection) {
   if ('createdAt' in out && typeof out.createdAt === 'object' && out.createdAt instanceof Date) {
     out.createdAt = out.createdAt.toISOString();
   }
-  // Only the sessions table stores expiresAt/createdAt as millisecond
-  // timestamps -- domains stores expiresAt as a human-readable date string
-  // ("Aug 23, 2026"), so this coercion must not apply to every table.
   if (collection === 'sessions') {
     if ('expiresAt' in out) out.expiresAt = Number(out.expiresAt);
     if ('createdAt' in out) out.createdAt = Number(out.createdAt);
   }
   if ('amount' in out && out.amount !== null) out.amount = Number(out.amount);
   if ('sizeBytes' in out && out.sizeBytes !== null) out.sizeBytes = Number(out.sizeBytes);
+  if ('passwordExpiresAt' in out && out.passwordExpiresAt !== null) out.passwordExpiresAt = Number(out.passwordExpiresAt);
   return out;
 }
 
@@ -90,7 +69,7 @@ function objToSnakeEntries(collection, obj) {
   return entries;
 }
 
-const db = {
+const pgDb = {
   async all(collection) {
     const res = await getPool().query(`SELECT * FROM ${collection}`);
     return res.rows.map((row) => rowToCamel(row, collection));
@@ -100,13 +79,9 @@ const db = {
     return rowToCamel(res.rows[0], collection) || null;
   },
   async filter(collection, predicate) {
-    const rows = await db.all(collection);
+    const rows = await pgDb.all(collection);
     return rows.filter(predicate);
   },
-  // Like all(), but sorts and limits in SQL instead of fetching the whole
-  // table into JS first -- with an index on created_at, cost stays bounded
-  // regardless of how large the table grows. Use this for anything read on
-  // a tight polling interval (e.g. the OTP monitor) instead of all()+slice().
   async recent(collection, limit = 100) {
     const res = await getPool().query(`SELECT * FROM ${collection} ORDER BY created_at DESC LIMIT $1`, [limit]);
     return res.rows.map((row) => rowToCamel(row, collection));
@@ -125,7 +100,7 @@ const db = {
   },
   async update(collection, id, patch) {
     const entries = objToSnakeEntries(collection, patch).filter(([k]) => k !== 'id');
-    if (entries.length === 0) return db.find(collection, id);
+    if (entries.length === 0) return pgDb.find(collection, id);
     const setClause = entries.map(([k], i) => `${k} = $${i + 1}`).join(', ');
     const values = entries.map(([, v]) => v);
     const res = await getPool().query(
@@ -139,16 +114,10 @@ const db = {
     return res.rowCount > 0;
   },
   async removeWhere(collection, predicate) {
-    const rows = await db.filter(collection, predicate);
-    for (const row of rows) await db.remove(collection, row.id);
+    const rows = await pgDb.filter(collection, predicate);
+    for (const row of rows) await pgDb.remove(collection, row.id);
     return rows.length;
   },
-  // Atomic "increment a counter only if it's still below a cap" -- used for
-  // OTP attempt-limiting. A plain read-then-write (read attempts, check in
-  // JS, write attempts+1) has a race: concurrent requests can all read the
-  // same pre-increment value and all pass the check before any write lands,
-  // letting more than `max` guesses through. This does the check and the
-  // increment in one statement, so Postgres's row lock makes it atomic.
   async incrementIfBelow(collection, id, field, max) {
     const col = toSnake(field);
     const res = await getPool().query(
@@ -157,30 +126,30 @@ const db = {
     );
     return rowToCamel(res.rows[0], collection) || null;
   },
-  // Deletes rows past their expiry (regardless of consumed/attempts state --
-  // once expired they have no further value). Called opportunistically
-  // whenever a new OTP is issued, so the table never grows unbounded even
-  // without a separate cron/scheduled job.
   async pruneExpiredOtps() {
     await getPool().query(`DELETE FROM otp_codes WHERE expires_at < $1`, [Date.now()]);
   },
-  // Only one OTP should ever be "live" for a given user -- issuing a new one
-  // (e.g. the user went back and logged in again) immediately retires any
-  // still-unconsumed prior code, so an admin can never accidentally read out
-  // a stale code that verify-otp would silently reject anyway (it only ever
-  // checks the newest).
   async invalidateUserOtps(userId) {
     await getPool().query(`DELETE FROM otp_codes WHERE user_id = $1 AND consumed = FALSE`, [userId]);
   },
 };
 
+const firestore = DB_DRIVER === 'firestore' ? require('./firestore') : null;
+const db = firestore ? firestore.db : pgDb;
+
 async function initSchema() {
+  if (firestore) return firestore.initSchema();
+  return initPostgresSchema();
+}
+
+async function initPostgresSchema() {
   const p = getPool();
   const statements = [
     `CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
       role TEXT NOT NULL, company TEXT, password TEXT, google_id TEXT,
-      two_factor_enabled BOOLEAN DEFAULT FALSE, two_factor_contact TEXT
+      two_factor_enabled BOOLEAN DEFAULT FALSE, two_factor_contact TEXT,
+      password_expires_at BIGINT
     )`,
     `CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT, client_id TEXT,
@@ -233,13 +202,12 @@ async function initSchema() {
   ];
   for (const sql of statements) await p.query(sql);
 
-  // Safe, idempotent migrations for databases created before these columns
-  // existed (e.g. your already-deployed Vercel database).
   const alterations = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_contact TEXT`,
     `ALTER TABLE users ALTER COLUMN password DROP NOT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_expires_at BIGINT`,
     `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending BOOLEAN DEFAULT FALSE`,
   ];
   for (const sql of alterations) {
@@ -286,7 +254,7 @@ async function seed() {
       db.insert('tasks', { id: 'task-1', projectId: 'proj-1', name: 'Homepage hero redesign', assigneeId: 'u-employee', status: 'In Progress', priority: 'High', due: daysFromNow(5) }),
       db.insert('tasks', { id: 'task-2', projectId: 'proj-1', name: 'Booking flow wireframes', assigneeId: 'u-employee', status: 'To Do', priority: 'Medium', due: daysFromNow(10) }),
       db.insert('tasks', { id: 'task-3', projectId: 'proj-2', name: 'App store listing assets', assigneeId: 'u-employee', status: 'In Review', priority: 'High', due: daysFromNow(3) }),
-      db.insert('tasks', { id: 'task-4', projectId: 'proj-3', name: 'Ad creative — carousel set', assigneeId: 'u-employee', status: 'Complete', priority: 'Low', due: daysFromNow(-2) }),
+      db.insert('tasks', { id: 'task-4', projectId: 'proj-3', name: 'Ad creative - carousel set', assigneeId: 'u-employee', status: 'Complete', priority: 'Low', due: daysFromNow(-2) }),
     ]);
   }
 
@@ -330,7 +298,7 @@ async function seed() {
         uploadedBy: 'u-pm', createdAt: new Date().toISOString(),
       }),
       db.insert('reports', {
-        id: 'rep-2', clientId: 'u-client', name: 'SEO Audit — Q2 2026', category: 'SEO',
+        id: 'rep-2', clientId: 'u-client', name: 'SEO Audit - Q2 2026', category: 'SEO',
         storageType: 'database', mimeType: 'application/pdf', sizeBytes: 4600000,
         uploadedBy: 'u-pm', createdAt: new Date().toISOString(),
       }),
@@ -347,4 +315,4 @@ async function seed() {
   }
 }
 
-module.exports = { db, seed, initSchema, getPool, SCHEMAS };
+module.exports = { db, seed, initSchema, getPool, SCHEMAS, DB_DRIVER };

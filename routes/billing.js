@@ -60,9 +60,6 @@ router.post('/checkout', requireCSRF, requireRole('client'), async (req, res, ne
   }
 });
 
-// Stripe webhook -- mounted separately in server.js with a raw body parser
-// (Stripe signature verification needs the untouched request body, not
-// JSON-parsed), so this is exported as a plain handler, not a router route.
 async function webhookHandler(req, res) {
   const stripe = getStripe();
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).end();

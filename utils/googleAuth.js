@@ -12,10 +12,6 @@ function getClient() {
   return client;
 }
 
-/**
- * Verifies a Google ID token (from Google Identity Services on the login
- * page) and returns { googleId, email, name } if valid, or throws.
- */
 async function verifyGoogleIdToken(idToken) {
   const ticket = await getClient().verifyIdToken({
     idToken,

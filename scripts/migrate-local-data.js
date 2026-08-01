@@ -1,16 +1,5 @@
 'use strict';
 
-// Copies your existing local db/data/*.json files into the Postgres
-// database pointed to by DATABASE_URL, preserving all existing IDs.
-//
-// Usage:
-//   DATABASE_URL="postgres://..." npm run migrate
-//
-// Safe to run once against a fresh database. Re-running it after data
-// already exists will fail on duplicate primary keys (by design, so you
-// don't accidentally double-insert) -- wipe the tables first if you need
-// to re-run it.
-
 const fs = require('fs');
 const path = require('path');
 const { db, initSchema } = require('../db/setup');

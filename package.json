@@ -1,14 +1,15 @@
 {
   "name": "ethixweb-crm",
   "version": "1.0.0",
-  "description": "EthixWeb internal CRM — projects, tasks, tickets, and team management",
+  "description": "EthixWeb internal CRM - projects, tasks, tickets, and team management",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "dev:pgmem": "node --watch -r ./scripts/dev-with-pgmem.js server.js",
-    "migrate": "node scripts/migrate-local-data.js",
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --watch --env-file-if-exists=.env server.js",
+    "dev:pgmem": "node --watch --env-file-if-exists=.env -r ./scripts/dev-with-pgmem.js server.js",
+    "db:check": "node --env-file-if-exists=.env scripts/db-check.js",
+    "migrate": "node --env-file-if-exists=.env scripts/migrate-local-data.js",
     "build": "node scripts/build-frontend.js"
   },
   "dependencies": {

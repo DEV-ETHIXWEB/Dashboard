@@ -15,11 +15,6 @@ function getApp() {
   return app;
 }
 
-/**
- * Verifies a Firebase ID token (issued client-side after a successful
- * phone or email-link verification) and returns the decoded token, which
- * includes `phone_number` and/or `email` depending on which method was used.
- */
 async function verifyFirebaseIdToken(idToken) {
   const admin = require('firebase-admin');
   getApp();

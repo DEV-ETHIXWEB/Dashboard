@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShieldCheck, Loader2, Lock, Activity, Mail } from "lucide-react";
+import { ShieldCheck, Loader2, Lock, Activity, Mail, Accessibility, Sun, Moon, Monitor, Check, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { useTheme } from "@/hooks/useTheme";
+import { cn } from "@/lib/utils";
 import type { LoginResponse } from "@/lib/types";
 import * as fb2fa from "@/lib/firebase2fa";
 
@@ -23,11 +25,27 @@ type Step = "credentials" | "otp";
 export default function Login() {
   const navigate = useNavigate();
   const { config, setSession } = useAuth();
+  const { theme, setTheme } = useTheme();
+
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const themeMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!themeMenuOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (themeMenuRef.current && !themeMenuRef.current.contains(e.target as Node)) {
+        setThemeMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [themeMenuOpen]);
 
   const [step, setStep] = useState<Step>("credentials");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [expiredAccess, setExpiredAccess] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const [otpError, setOtpError] = useState<string | null>(null);
@@ -115,6 +133,7 @@ export default function Login() {
   async function doLogin(e?: React.FormEvent, override?: { email: string; password: string }) {
     e?.preventDefault();
     setError(null);
+    setExpiredAccess(false);
     const creds = override ?? { email, password };
     if (!creds.email || !creds.password) {
       setError("Please enter email and password.");
@@ -125,6 +144,7 @@ export default function Login() {
       const d = await api<LoginResponse>("POST", "/auth/login", creds);
       await handleLoginResponse(d);
     } catch (err) {
+      setExpiredAccess(err instanceof ApiError && err.status === 403);
       setError(err instanceof ApiError ? err.message : "Cannot connect to the server. Is it running?");
     } finally {
       setBusy(false);
@@ -160,17 +180,97 @@ export default function Login() {
 
   return (
     <div className="relative flex min-h-svh items-center justify-center overflow-hidden bg-gradient-to-b from-secondary/50 via-background to-background text-foreground px-3 sm:px-6 lg:px-10 py-6 sm:py-10">
-      {/* Theme-aware background gradients and fine grid overlay */}
+      <div ref={themeMenuRef} className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50">
+        {themeMenuOpen && (
+          <div className="absolute bottom-12 right-0 w-44 rounded-xl border border-border/80 bg-card/95 p-2 shadow-2xl backdrop-blur-md animate-in fade-in-0 zoom-in-95 duration-150 z-50">
+            <div className="px-2 py-1 text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+              <Accessibility className="size-3.5 text-primary shrink-0" />
+              <span>Theme options</span>
+            </div>
+            <div className="my-1.5 h-[1px] bg-border/60" />
+            <div className="flex flex-col gap-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setTheme("light");
+                  setThemeMenuOpen(false);
+                }}
+                className={cn(
+                  "w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer",
+                  theme === "light"
+                    ? "bg-primary/10 text-primary font-semibold"
+                    : "text-foreground hover:bg-secondary"
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <Sun className="size-3.5 shrink-0" />
+                  <span>Light</span>
+                </div>
+                {theme === "light" && <Check className="size-3.5 text-primary" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTheme("dark");
+                  setThemeMenuOpen(false);
+                }}
+                className={cn(
+                  "w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer",
+                  theme === "dark"
+                    ? "bg-primary/10 text-primary font-semibold"
+                    : "text-foreground hover:bg-secondary"
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <Moon className="size-3.5 shrink-0" />
+                  <span>Dark</span>
+                </div>
+                {theme === "dark" && <Check className="size-3.5 text-primary" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTheme("system");
+                  setThemeMenuOpen(false);
+                }}
+                className={cn(
+                  "w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer",
+                  theme === "system"
+                    ? "bg-primary/10 text-primary font-semibold"
+                    : "text-foreground hover:bg-secondary"
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <Monitor className="size-3.5 shrink-0" />
+                  <span>Auto</span>
+                </div>
+                {theme === "system" && <Check className="size-3.5 text-primary" />}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          aria-label="Accessibility & Theme settings"
+          title="Accessibility & Theme settings"
+          onClick={() => setThemeMenuOpen((prev) => !prev)}
+          className="size-10 sm:size-11 rounded-full border-border/80 bg-card/90 text-primary shadow-xl backdrop-blur-md hover:bg-card hover:scale-105 active:scale-95 transition-all cursor-pointer ring-1 ring-primary/20"
+        >
+          <Accessibility className="size-5" />
+        </Button>
+      </div>
+
       <div className="pointer-events-none absolute inset-0 -z-30 bg-[radial-gradient(circle_at_15%_20%,hsl(var(--primary)/0.16),transparent_45%),radial-gradient(circle_at_85%_15%,rgba(59,130,246,0.14),transparent_45%),radial-gradient(circle_at_50%_100%,rgba(168,85,247,0.12),transparent_50%)]" />
       <div className="absolute inset-0 -z-20 opacity-[0.07] pointer-events-none bg-[linear-gradient(to_right,hsl(var(--foreground)/0.09)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--foreground)/0.09)_1px,transparent_1px)] bg-[size:36px_36px] [mask-image:radial-gradient(ellipse_75%_65%_at_50%_40%,black,transparent)]" />
 
-      {/* Ambient background glow orbs in organic spots */}
       <div className="absolute -top-28 -left-20 w-[480px] h-[480px] bg-primary/25 rounded-full blur-[140px] pointer-events-none -z-10 animate-[pulse_10s_ease-in-out_infinite]" />
       <div className="absolute top-12 -right-16 w-[440px] h-[440px] bg-rose-600/20 rounded-full blur-[130px] pointer-events-none -z-10 animate-[pulse_12s_ease-in-out_infinite]" />
       <div className="absolute bottom-8 left-[10%] w-[380px] h-[380px] bg-purple-600/15 rounded-full blur-[120px] pointer-events-none -z-10" />
       <div className="absolute -bottom-32 -right-12 w-[540px] h-[540px] bg-blue-600/15 rounded-full blur-[160px] pointer-events-none -z-10 animate-[pulse_8s_ease-in-out_infinite]" />
 
-      {/* Multiple layered spiderweb graphics across background */}
       <div
         className="pointer-events-none absolute -top-16 -right-16 w-[580px] h-[580px] bg-contain bg-no-repeat opacity-[0.08] dark:opacity-[0.12] -z-20 rotate-12"
         style={{ backgroundImage: "url('/spiderweb.svg')" }}
@@ -188,7 +288,6 @@ export default function Login() {
         style={{ backgroundImage: "url('/spiderweb.svg')" }}
       />
 
-      {/* Theme-aware background watermark outline text */}
       <div className="pointer-events-none absolute inset-0 -z-20 select-none overflow-hidden">
         <div
           className="absolute top-2 left-3 sm:top-4 sm:left-6 text-[12vw] sm:text-[9.5vw] lg:text-[8vw] font-black uppercase tracking-tighter leading-none"
@@ -348,7 +447,20 @@ export default function Login() {
                       </div>
 
                       {error && (
-                        <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3.5 py-2.5 text-xs text-destructive font-medium">
+                        <div
+                          className={cn(
+                            "rounded-md border px-3.5 py-2.5 text-xs font-medium",
+                            expiredAccess
+                              ? "bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400"
+                              : "bg-destructive/10 border-destructive/20 text-destructive",
+                          )}
+                        >
+                          {expiredAccess && (
+                            <span className="mb-1 flex items-center gap-1.5 font-semibold">
+                              <Clock className="size-3.5 shrink-0" />
+                              Access expired
+                            </span>
+                          )}
                           {error}
                         </div>
                       )}

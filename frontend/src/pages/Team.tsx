@@ -44,6 +44,13 @@ const ROLE_LABEL: Record<string, string> = {
   client: "Client",
 };
 
+const STAFF_ROLES: Record<string, string> = {
+  admin: "Admin",
+  sales: "Sales",
+  project_manager: "Project Manager",
+  employee: "Employee",
+};
+
 export default function Team() {
   const { user: currentUser } = useAuth();
   const { data: users, isLoading, isError, error, refetch } = useUsers();
@@ -178,7 +185,6 @@ export default function Team() {
               showCloseButton={false}
               className="sm:max-w-md p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
             >
-              {/* Header */}
               <div className="relative p-6 pb-4 border-b border-border/40 bg-gradient-to-br from-primary/10 via-background to-background">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
@@ -200,7 +206,6 @@ export default function Team() {
                 </div>
               </div>
 
-              {/* Form Body */}
               <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-medium">Full Name *</Label>
@@ -228,7 +233,7 @@ export default function Team() {
                   <div className="space-y-1.5">
                     <Label className="text-xs font-medium">Role</Label>
                     <Select
-                      items={ROLE_LABEL}
+                      items={STAFF_ROLES}
                       value={role}
                       onValueChange={(v) => setRole(v ?? "employee")}
                       disabled={Boolean(editing)}
@@ -237,7 +242,7 @@ export default function Team() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {Object.entries(ROLE_LABEL).map(([v, l]) => (
+                        {Object.entries(STAFF_ROLES).map(([v, l]) => (
                           <SelectItem key={v} value={v}>
                             {l}
                           </SelectItem>
@@ -271,7 +276,6 @@ export default function Team() {
                 </div>
               </div>
 
-              {/* Footer */}
               <DialogFooter className="m-0 px-6 py-4 bg-muted/30 border-t border-border/40 flex flex-row items-center justify-end gap-2.5 rounded-b-2xl">
                 <DialogClose render={<Button variant="ghost" className="h-9 text-xs px-3.5 text-muted-foreground hover:text-foreground" />}>
                   Cancel
@@ -298,7 +302,6 @@ export default function Team() {
         }
       />
 
-      {/* Quick Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="p-4 rounded-2xl border border-border/60 bg-card/80 shadow-xs backdrop-blur-xs flex items-center gap-3">
           <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary border border-primary/20">
@@ -341,7 +344,6 @@ export default function Team() {
         </div>
       </div>
 
-      {/* Control Bar: Search & Role Filters */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-1.5 bg-card/60 border border-border/60 rounded-xl backdrop-blur-xs">
         <div className="relative w-full sm:w-72">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
@@ -390,7 +392,6 @@ export default function Team() {
         </div>
       </div>
 
-      {/* Member Cards Grid */}
       {isLoading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[...Array(4)].map((_, i) => (
@@ -450,7 +451,6 @@ export default function Team() {
                 </div>
               </div>
 
-              {/* Action Buttons */}
               <div className="flex items-center gap-1 shrink-0">
                 <Button
                   variant="ghost"
