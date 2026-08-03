@@ -25,7 +25,11 @@ function withoutContent(report) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const all = await db.all('reports');
+    let all = await db.all('reports');
+   
+    if (req.query.clientId && req.user.role === 'admin') {
+      all = all.filter((r) => r.clientId === req.query.clientId);
+    }
     res.json({ reports: all.filter((r) => visibleTo(req.user, r)).map(withoutContent), driveEnabled: isDriveConfigured() });
   } catch (err) {
     next(err);
