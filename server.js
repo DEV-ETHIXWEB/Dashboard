@@ -84,6 +84,7 @@ app.use('/api/domains', require('./routes/domains'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/budget', require('./routes/budget'));
 app.use('/api/billing', require('./routes/billing'));
+app.use('/api/integrations', require('./routes/integrations'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 

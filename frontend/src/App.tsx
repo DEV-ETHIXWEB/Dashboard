@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { RoleRoute } from "@/components/RoleRoute";
 import { GuestRoute } from "@/components/GuestRoute";
+import { useAuth } from "@/context/AuthContext";
 
 const Login = lazy(() => import("@/pages/Login"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
@@ -17,6 +18,9 @@ const Billing = lazy(() => import("@/pages/Billing"));
 const Team = lazy(() => import("@/pages/Team"));
 const ClientAccess = lazy(() => import("@/pages/ClientAccess"));
 const OtpMonitor = lazy(() => import("@/pages/OtpMonitor"));
+const AdminHome = lazy(() => import("@/pages/AdminHome"));
+const ClickUpTasks = lazy(() => import("@/pages/ClickUpTasks"));
+const SlackMessages = lazy(() => import("@/pages/SlackMessages"));
 const Settings = lazy(() => import("@/pages/Settings"));
 const Notifications = lazy(() => import("@/pages/Notifications"));
 
@@ -26,6 +30,15 @@ function RouteFallback() {
       <Loader2 className="size-6 animate-spin text-muted-foreground" />
     </div>
   );
+}
+
+/**
+ * Admins get the operations overview at /portal; everyone else keeps the
+ * client-facing dashboard. Same URL either way, so nothing else has to change.
+ */
+function PortalHome() {
+  const { user } = useAuth();
+  return user?.role === "admin" ? <AdminHome /> : <Dashboard />;
 }
 
 function App() {
@@ -41,7 +54,7 @@ function App() {
               </GuestRoute>
             }
           />
-          <Route path="/portal" element={<RoleRoute><Dashboard /></RoleRoute>} />
+          <Route path="/portal" element={<RoleRoute><PortalHome /></RoleRoute>} />
           <Route
             path="/portal/projects"
             element={
@@ -115,15 +128,24 @@ function App() {
               </RoleRoute>
             }
           />
-          <Route path="/portal/settings" element={<RoleRoute><Settings /></RoleRoute>} />
           <Route
-            path="/portal/notifications"
+            path="/portal/clickup"
             element={
-              <RoleRoute roles={["client"]}>
-                <Notifications />
+              <RoleRoute roles={["admin"]}>
+                <ClickUpTasks />
               </RoleRoute>
             }
           />
+          <Route
+            path="/portal/slack"
+            element={
+              <RoleRoute roles={["admin"]}>
+                <SlackMessages />
+              </RoleRoute>
+            }
+          />
+          <Route path="/portal/settings" element={<RoleRoute><Settings /></RoleRoute>} />
+          <Route path="/portal/notifications" element={<RoleRoute><Notifications /></RoleRoute>} />
 
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />

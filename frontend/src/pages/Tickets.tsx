@@ -12,6 +12,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { plainDate } from "@/lib/money";
 import { CreateTicketModal } from "@/components/CreateTicketModal";
+import { TicketTimelineDialog } from "@/components/tickets/TicketTimelineDialog";
+import { useMyTicketRequests, useTicketStages } from "@/hooks/useTicketWorkflow";
+import { stageLabel } from "@/lib/tickets";
+import type { Ticket } from "@/lib/entities";
 
 const STAFF_STATUSES = ["Open", "In Progress", "Resolved", "Closed"];
 
@@ -23,6 +27,47 @@ export default function Tickets() {
 
   const isStaff = user && ["admin", "sales", "project_manager", "employee"].includes(user.role);
   const [open, setOpen] = useState(false);
+  const [timelineId, setTimelineId] = useState<string | null>(null);
+  const { data: stages } = useTicketStages();
+  const { data: myRequests } = useMyTicketRequests();
+
+  /** Tickets with a handover or collaboration request waiting on this user. */
+  const awaitingMe = new Set((myRequests ?? []).map((r) => r.ticketId));
+
+  /** Every ticket row: progress bar, a "needs you" flag, and an Open button. */
+  function rowProps(t: Ticket) {
+    return {
+      progress: { pct: t.progress ?? 0, label: stageLabel(t.stage, stages) },
+      flag: awaitingMe.has(t.id) ? "Needs you" : undefined,
+      action: (
+        <div className="flex shrink-0 items-center gap-2">
+          {isStaff && (
+            <Select value={t.status} onValueChange={(v) => changeStatus(t.id, v || "Open")}>
+              <SelectTrigger size="sm" className="h-9 w-32 shrink-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STAFF_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 shrink-0"
+            onClick={() => setTimelineId(t.id)}
+            aria-label={`Open "${t.subject}" and its updates`}
+          >
+            Open
+          </Button>
+        </div>
+      ),
+    };
+  }
 
   function changeStatus(id: string, status: string) {
     updateTicket.mutate(
@@ -99,22 +144,7 @@ export default function Tickets() {
                               .filter(Boolean)
                               .join(" · ")}
                             status={isStaff ? undefined : t.status}
-                            action={
-                              isStaff ? (
-                                <Select value={t.status} onValueChange={(v) => changeStatus(t.id, v || "Open")}>
-                                  <SelectTrigger size="sm" className="h-9 w-32 shrink-0">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {STAFF_STATUSES.map((s) => (
-                                      <SelectItem key={s} value={s}>
-                                        {s}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              ) : undefined
-                            }
+                            {...rowProps(t)}
                           />
                         ))}
                       </DataList>
@@ -138,6 +168,17 @@ export default function Tickets() {
                               .filter(Boolean)
                               .join(" · ")}
                             status={t.status}
+                            action={
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-9 shrink-0"
+                                onClick={() => setTimelineId(t.id)}
+                                aria-label={`Open "${t.subject}" and its updates`}
+                              >
+                                Open
+                              </Button>
+                            }
                           />
                         ))}
                       </DataList>
@@ -149,6 +190,8 @@ export default function Tickets() {
           />
         </div>
       )}
+
+      <TicketTimelineDialog ticketId={timelineId} onClose={() => setTimelineId(null)} />
     </BentoGrid>
   );
 }

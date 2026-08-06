@@ -161,8 +161,21 @@ async function initPostgresSchema() {
     )`,
     `CREATE TABLE IF NOT EXISTS tickets (
       id TEXT PRIMARY KEY, subject TEXT NOT NULL, category TEXT, client_id TEXT,
-      assignee_id TEXT, status TEXT, description TEXT, created_at TEXT
+      assignee_id TEXT, status TEXT, description TEXT, created_at TEXT,
+      clickup_task_id TEXT, clickup_task_url TEXT,
+      progress INTEGER DEFAULT 0, stage TEXT
     )`,
+    `CREATE TABLE IF NOT EXISTS ticket_updates (
+      id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, author_id TEXT, kind TEXT NOT NULL,
+      body TEXT, progress INTEGER, stage TEXT, target_user_id TEXT, status TEXT,
+      created_at TEXT, resolved_at TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS ticket_collaborators (
+      id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, user_id TEXT NOT NULL,
+      added_by TEXT, created_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_ticket_updates_ticket ON ticket_updates(ticket_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_ticket_collaborators_ticket ON ticket_collaborators(ticket_id)`,
     `CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY, user_id TEXT, message TEXT, type TEXT,
       read BOOLEAN DEFAULT FALSE, created_at TEXT
@@ -209,6 +222,10 @@ async function initPostgresSchema() {
     `ALTER TABLE users ALTER COLUMN password DROP NOT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_expires_at BIGINT`,
     `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS clickup_task_id TEXT`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS clickup_task_url TEXT`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage TEXT`,
   ];
   for (const sql of alterations) {
     try {

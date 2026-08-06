@@ -9,6 +9,34 @@ export function formatDate(value: string | null | undefined): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+/** "3h ago" / "in 2d" for epoch-millisecond timestamps. */
+export function formatRelativeTime(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  const diff = ms - Date.now();
+  const abs = Math.abs(diff);
+
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["year", 365 * 24 * 3600_000],
+    ["month", 30 * 24 * 3600_000],
+    ["day", 24 * 3600_000],
+    ["hour", 3600_000],
+    ["minute", 60_000],
+  ];
+  const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+
+  for (const [unit, size] of units) {
+    if (abs >= size) return rtf.format(Math.round(diff / size), unit);
+  }
+  return "just now";
+}
+
+export function formatDateTime(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  return new Date(ms).toLocaleString("en-US", {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  });
+}
+
 export function toLocalISO(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");

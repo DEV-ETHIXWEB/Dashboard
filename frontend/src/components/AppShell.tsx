@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FolderKanban, ListChecks, Ticket, Globe, FileText, PieChart, CreditCard,
   Settings, Bell, LogOut, Menu, X, Users, Home, LifeBuoy, KeyRound, ShieldCheck,
+  ListTodo, MessageSquare,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useNotifications } from "@/hooks/useData";
@@ -34,13 +35,16 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/portal/team", label: "Team", icon: Users, roles: ["admin"] },
   { to: "/portal/client-access", label: "Client Access", icon: ShieldCheck, roles: ["admin"] },
   { to: "/portal/otp-monitor", label: "Login Codes", icon: KeyRound, roles: ["admin"] },
-  { to: "/portal/notifications", label: "Notifications", icon: Bell, roles: ["client"] },
+  { to: "/portal/clickup", label: "ClickUp", icon: ListTodo, roles: ["admin"] },
+  { to: "/portal/slack", label: "Slack", icon: MessageSquare, roles: ["admin"] },
+  { to: "/portal/notifications", label: "Notifications", icon: Bell },
   { to: "/portal/settings", label: "Settings", icon: Settings },
 ];
 
 const GROUPS: { heading: string; labels: string[] }[] = [
   { heading: "Workspace", labels: ["Dashboard", "Projects", "Tasks", "Domains"] },
   { heading: "Operations & Finance", labels: ["Tickets", "Reports", "Budget", "Billing"] },
+  { heading: "Integrations", labels: ["ClickUp", "Slack"] },
   { heading: "Administration", labels: ["Team", "Client Access", "Login Codes"] },
   { heading: "Account", labels: ["Notifications", "Settings"] },
 ];
@@ -97,7 +101,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Brand compact />
           </div>
 
-          {user?.role === "client" && (
+          {user && (
             <NavLink
               to="/portal/notifications"
               aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}

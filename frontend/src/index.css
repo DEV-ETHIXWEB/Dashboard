@@ -306,4 +306,28 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
+
+  /* Slim themed scrollbar for panels that scroll inside the page (sidebars,
+     long lists). The native bar is too wide and ignores the theme. */
+  .scrollbar-slim {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .scrollbar-slim::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-slim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-slim::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 999px;
+  }
+  .scrollbar-slim:hover::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  }
+  .scrollbar-slim::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }

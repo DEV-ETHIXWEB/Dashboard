@@ -208,7 +208,9 @@ export function useNotifications() {
   return useQuery({
     queryKey: ["notifications"],
     queryFn: () => api<{ notifications: Notification[] }>("GET", "/notifications").then((d) => d.notifications),
-    enabled: user?.role === "client",
+    // Every role now receives notifications -- staff get handover and
+    // collaboration requests, not just clients.
+    enabled: Boolean(user),
     refetchInterval: 30_000,
   });
 }

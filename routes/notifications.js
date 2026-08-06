@@ -4,10 +4,12 @@ const express = require('express');
 const router = express.Router();
 
 const { db } = require('../db/setup');
-const { requireAuth, requireRole, requireCSRF } = require('../middleware/auth');
+const { requireAuth, requireCSRF } = require('../middleware/auth');
 
 router.use(requireAuth);
-router.use(requireRole('client'));
+// Open to every role: staff need to receive handover and collaboration
+// requests. Each route below is already scoped to req.user.id, so a user can
+// only ever read or change their own notifications.
 
 router.get('/', async (req, res, next) => {
   try {

@@ -40,6 +40,12 @@ export interface Ticket {
   status: "Open" | "In Progress" | "Resolved" | "Closed" | string;
   description: string;
   createdAt: string;
+  /** Set when the ticket was mirrored into ClickUp. */
+  clickupTaskId?: string | null;
+  clickupTaskUrl?: string | null;
+  /** 0-100, driven by the stage or set directly by the team. */
+  progress?: number | null;
+  stage?: string | null;
 }
 
 export interface Domain {
