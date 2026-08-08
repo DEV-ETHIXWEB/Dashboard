@@ -39,19 +39,31 @@ const FRIENDLY_ERRORS = {
   ratelimited: 'Slack rate limit reached. Try again in a minute.',
 };
 
-async function request(method, params) {
+async function request(method, params, bodyData) {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) throw new SlackError('Slack is not connected. Set SLACK_BOT_TOKEN.', 503);
 
   const url = new URL(`${BASE}/${method}`);
-  for (const [key, value] of Object.entries(params || {})) {
-    if (value === undefined || value === null) continue;
-    url.searchParams.set(key, String(value));
+  if (params && !bodyData) {
+    for (const [key, value] of Object.entries(params || {})) {
+      if (value === undefined || value === null) continue;
+      url.searchParams.set(key, String(value));
+    }
+  }
+
+  const fetchOpts = {
+    headers: { Authorization: `Bearer ${token}` },
+  };
+
+  if (bodyData) {
+    fetchOpts.method = 'POST';
+    fetchOpts.headers['Content-Type'] = 'application/json; charset=utf-8';
+    fetchOpts.body = JSON.stringify(bodyData);
   }
 
   let res;
   try {
-    res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    res = await fetch(url, fetchOpts);
   } catch {
     throw new SlackError('Could not reach Slack. Check the server connection.', 502);
   }
@@ -123,12 +135,62 @@ async function fetchChannels() {
   }, TTL_CHANNELS);
 }
 
-// --- message rendering -----------------------------------------------------
+const EMOJI_MAP = {
+  '+1': '👍',
+  '-1': '👎',
+  thumbsup: '👍',
+  thumbsdown: '👎',
+  saluting_face: '🫡',
+  wave: '👋',
+  eyes: '👀',
+  raising_hand: '🙋',
+  raised_hands: '🙌',
+  folded_hands: '🙏',
+  pray: '🙏',
+  joy: '😂',
+  rofl: '🤣',
+  sob: '😭',
+  sweat_smile: '😅',
+  thinking_face: '🤔',
+  thinking: '🤔',
+  party_popper: '🎉',
+  tada: '🎉',
+  '100': '💯',
+  sparkles: '✨',
+  heavy_check_mark: '✔️',
+  check: '✓',
+  x: '❌',
+  cross_mark: '❌',
+  arrow_right: '➡️',
+  point_right: '👉',
+  clap: '👏',
+  bar_chart: '📊',
+  chart_with_upwards_trend: '📈',
+  file_folder: '📁',
+  warning: '⚠️',
+  pushpin: '📌',
+  white_check_mark: '✅',
+  memo: '📝',
+  rocket: '🚀',
+  fire: '🔥',
+  star: '⭐',
+  bell: '🔔',
+  calendar: '📅',
+  smile: '😊',
+  heart: '❤️',
+  exclamation: '❗',
+  question: '❓',
+  bulb: '💡',
+};
 
-/** Turn Slack mrkdwn entity refs (<@U1>, <#C1|dev>, <http://x|y>) into readable text. */
+const emoji = require('node-emoji');
+
+/** Turn Slack mrkdwn entity refs (<@U1>, <#C1|dev>, <http://x|y>) and :emoji: into readable text. */
 function renderText(text, userMap, channelMap) {
   if (!text) return '';
-  return text
+  const emojified = emoji.emojify(text);
+  return emojified
+    .replace(/:([a-z0-9_+-]+):/g, (match, code) => EMOJI_MAP[code] || match)
     .replace(/<@([A-Z0-9]+)(\|[^>]*)?>/g, (_, id) => `@${userMap[id]?.name || id}`)
     .replace(/<#([A-Z0-9]+)\|([^>]*)>/g, (_, id, name) => `#${name || channelMap[id] || id}`)
     .replace(/<#([A-Z0-9]+)>/g, (_, id) => `#${channelMap[id] || id}`)
@@ -217,16 +279,34 @@ function categorise(message, renderedText) {
   return 'general';
 }
 
+const CATEGORY_DEFAULT_EMOJIS = {
+  alerts: '🔔',
+  announcements: '📢',
+  action_items: '📌',
+  questions: '❓',
+  links_files: '📎',
+  discussion: '💬',
+  general: '💬',
+};
+
+const STARTS_WITH_EMOJI = /^(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff]|:([a-z0-9_+-]+):)/i;
+
 function normaliseMessage(message, channel, userMap, channelMap) {
-  const text = renderText(message.text, userMap, channelMap);
+  let text = renderText(message.text, userMap, channelMap);
   const author = message.user ? userMap[message.user] : null;
+  const category = categorise(message, text);
+  const defaultEmoji = CATEGORY_DEFAULT_EMOJIS[category] || '💬';
+
+  if (text && !STARTS_WITH_EMOJI.test(text.trim())) {
+    text = `${defaultEmoji} ${text}`;
+  }
 
   return {
     id: `${channel.id}:${message.ts}`,
     ts: message.ts,
     at: Math.round(Number(message.ts) * 1000) || null,
     text,
-    category: categorise(message, text),
+    category,
     channelId: channel.id,
     channelName: channel.name,
     authorId: message.user || message.bot_id || null,
@@ -235,7 +315,30 @@ function normaliseMessage(message, channel, userMap, channelMap) {
     isBot: Boolean(message.bot_id) || message.subtype === 'bot_message',
     replyCount: Number(message.reply_count) || 0,
     reactionCount: (message.reactions || []).reduce((sum, r) => sum + (Number(r.count) || 0), 0),
-    files: (message.files || []).map((f) => ({ id: f.id, name: f.name || f.title || 'file', type: f.filetype || null })),
+    files: (message.files || []).map((f) => {
+      const type = f.filetype || null;
+      const mimetype = f.mimetype || '';
+      const isImage = Boolean(mimetype.startsWith('image') || ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(type));
+      return {
+        id: f.id,
+        name: f.name || f.title || 'file',
+        type,
+        mimetype,
+        url: f.url_private || f.permalink || null,
+        thumb: f.thumb_360 || f.thumb_800 || f.thumb_64 || f.url_private || null,
+        isImage,
+      };
+    }),
+    attachments: (message.attachments || []).map((a) => ({
+      id: String(a.id || Math.random()),
+      title: a.title || null,
+      titleUrl: a.title_link || null,
+      text: renderText(a.text || a.fallback || '', userMap, channelMap),
+      pretext: renderText(a.pretext || '', userMap, channelMap),
+      imageUrl: a.image_url || a.thumb_url || null,
+      color: a.color ? (a.color.startsWith('#') ? a.color : `#${a.color}`) : null,
+      authorName: a.author_name || null,
+    })),
     permalink: `https://slack.com/archives/${channel.id}/p${String(message.ts).replace('.', '')}`,
   };
 }
@@ -254,6 +357,20 @@ async function fetchChannelMessages(channelId, { limit = 50 } = {}) {
     return (data.messages || [])
       .filter((m) => m.subtype !== 'channel_join' && m.subtype !== 'channel_leave')
       .map((m) => normaliseMessage(m, channel, userMap, channelMap));
+  }, TTL_MESSAGES);
+}
+
+/** Fetch thread replies for a specific parent message. */
+async function fetchMessageReplies(channelId, threadTs) {
+  return cached(`slack:replies:${channelId}:${threadTs}`, async () => {
+    const [channels, userMap] = await Promise.all([fetchChannels(), fetchUserMap()]);
+    const channel = channels.find((c) => c.id === channelId);
+    if (!channel) throw new SlackError(FRIENDLY_ERRORS.channel_not_found, 404, 'channel_not_found');
+
+    const channelMap = Object.fromEntries(channels.map((c) => [c.id, c.name]));
+    const data = await request('conversations.replies', { channel: channelId, ts: threadTs });
+
+    return (data.messages || []).map((m) => normaliseMessage(m, channel, userMap, channelMap));
   }, TTL_MESSAGES);
 }
 
@@ -306,6 +423,84 @@ async function fetchCategorisedFeed({ channelIds, perChannel = 30 } = {}) {
   };
 }
 
+// --- writing back to slack -------------------------------------------------
+
+/** Post a new message or reply to a thread in a channel. */
+async function postMessage({ channelId, text, threadTs }) {
+  if (!text || !text.trim()) {
+    throw new SlackError('Message text cannot be empty.', 400);
+  }
+  const payload = {
+    channel: channelId,
+    text: text.trim(),
+  };
+  if (threadTs) {
+    payload.thread_ts = threadTs;
+  }
+  const data = await request('chat.postMessage', null, payload);
+  return { ok: true, ts: data.ts, message: data.message };
+}
+
+/** Send an event notification to Slack. */
+async function notifySlack(text, channelId) {
+  if (!isEnabled()) return;
+  try {
+    let targetChannel = channelId || process.env.SLACK_NOTIFICATION_CHANNEL;
+    if (!targetChannel) {
+      const channels = await fetchChannels();
+      const memberChannel = channels.find((c) => c.isMember);
+      if (memberChannel) targetChannel = memberChannel.id;
+    }
+    if (!targetChannel) return;
+    await postMessage({ channelId: targetChannel, text });
+  } catch (err) {
+    // Silent fail for event notifications so application flow is not interrupted
+    console.error('Slack event notification failed:', err.message);
+  }
+}
+
+/** Post a structured summary digest of current dashboard projects and tasks to Slack. */
+async function sendSlackDigest({ channelId, tasks = [], projects = [] }) {
+  if (!isEnabled()) throw new SlackError('Slack is not connected. Set SLACK_BOT_TOKEN.', 503);
+
+  let targetChannel = channelId;
+  if (!targetChannel) {
+    const channels = await fetchChannels();
+    const memberChannel = channels.find((c) => c.isMember);
+    if (!memberChannel) throw new SlackError('No channel available to post digest to.', 400);
+    targetChannel = memberChannel.id;
+  }
+
+  const activeProjects = projects.filter((p) => p.status !== 'Completed');
+  const openTasks = tasks.filter((t) => t.status !== 'Done');
+  const highPriorityTasks = openTasks.filter((t) => t.priority === 'High' || t.priority === 'Urgent');
+
+  const lines = [
+    `📊 *Dashboard Daily Executive Digest*`,
+    `----------------------------------------`,
+    `• *Active Projects:* ${activeProjects.length} active (Total: ${projects.length})`,
+    `• *Open Tasks:* ${openTasks.length} pending tasks (${highPriorityTasks.length} High/Urgent)`,
+  ];
+
+  if (activeProjects.length > 0) {
+    lines.push(`\n📁 *Top Active Projects:*`);
+    activeProjects.slice(0, 5).forEach((p) => {
+      lines.push(`- *${p.name}* (${p.status || 'In Progress'})`);
+    });
+  }
+
+  if (highPriorityTasks.length > 0) {
+    lines.push(`\n⚠️ *High Priority Action Items:*`);
+    highPriorityTasks.slice(0, 5).forEach((t) => {
+      lines.push(`- ${t.name} (Due: ${t.due || 'No date'})`);
+    });
+  }
+
+  lines.push(`\n_Generated live from Dashboard App_`);
+
+  return postMessage({ channelId: targetChannel, text: lines.join('\n') });
+}
+
 module.exports = {
   isEnabled,
   SlackError,
@@ -313,5 +508,9 @@ module.exports = {
   fetchChannels,
   fetchUserMap,
   fetchChannelMessages,
+  fetchMessageReplies,
   fetchCategorisedFeed,
+  postMessage,
+  notifySlack,
+  sendSlackDigest,
 };

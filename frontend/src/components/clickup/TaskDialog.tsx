@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, Trash2, Send, ExternalLink } from "lucide-react";
 import {
@@ -211,7 +211,7 @@ export function CreateTaskDialog({
     createTask.mutate(
       { listId, input: toInput(form, true) },
       {
-        onSuccess: (task) => {
+        onSuccess: ({ task }) => {
           toast.success(`Created "${task.name}"`);
           onOpenChange(false);
         },

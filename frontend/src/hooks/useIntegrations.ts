@@ -4,6 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import type {
   ClickUpComment, ClickUpMember, ClickUpOverview, ClickUpStatus, ClickUpTask, ClickUpTaskInput,
   ClickUpTree, IntegrationStatus, SlackChannel, SlackFeed, SlackMessage,
+  SendSlackMessageInput, ConvertSlackToTaskInput, SendSlackDigestInput,
 } from "@/lib/integrations";
 
 /** All integration data is admin-only; gate every query on the role. */
@@ -109,28 +110,30 @@ export function useClickUpComments(taskId: string | null) {
 // Every write invalidates the whole ClickUp cache: a status change can move a
 // task between urgency buckets, lists, and the workload table at once.
 
-function useClickUpWrite<TArgs, TResult>(fn: (args: TArgs) => Promise<TResult>) {
+export function useCreateClickUpTask() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: fn,
+    mutationFn: ({ listId, input }: { listId: string; input: ClickUpTaskInput }) =>
+      api<{ task: ClickUpTask }>("POST", `/integrations/clickup/lists/${listId}/tasks`, input),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["integrations", "clickup"] }),
   });
 }
 
-export function useCreateClickUpTask() {
-  return useClickUpWrite(({ listId, input }: { listId: string; input: ClickUpTaskInput }) =>
-    api<{ task: ClickUpTask }>("POST", `/integrations/clickup/lists/${listId}/tasks`, input).then((d) => d.task),
-  );
-}
-
 export function useUpdateClickUpTask() {
-  return useClickUpWrite(({ taskId, input }: { taskId: string; input: ClickUpTaskInput }) =>
-    api<{ task: ClickUpTask }>("PUT", `/integrations/clickup/tasks/${taskId}`, input).then((d) => d.task),
-  );
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, input }: { taskId: string; input: ClickUpTaskInput }) =>
+      api<{ task: ClickUpTask }>("PUT", `/integrations/clickup/tasks/${taskId}`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["integrations", "clickup"] }),
+  });
 }
 
 export function useDeleteClickUpTask() {
-  return useClickUpWrite((taskId: string) => api("DELETE", `/integrations/clickup/tasks/${taskId}`));
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (taskId: string) => api("DELETE", `/integrations/clickup/tasks/${taskId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["integrations", "clickup"] }),
+  });
 }
 
 export function useAddClickUpComment() {
@@ -138,8 +141,7 @@ export function useAddClickUpComment() {
   return useMutation({
     mutationFn: ({ taskId, text }: { taskId: string; text: string }) =>
       api("POST", `/integrations/clickup/tasks/${taskId}/comments`, { text }),
-    onSuccess: (_d, { taskId }) =>
-      qc.invalidateQueries({ queryKey: ["integrations", "clickup", "comments", taskId] }),
+    onSuccess: (_d, { taskId }) => qc.invalidateQueries({ queryKey: ["integrations", "clickup", "comments", taskId] }),
   });
 }
 
@@ -181,6 +183,44 @@ export function useSlackChannelMessages(channelId: string | null, limit = 50) {
     enabled: isAdmin && Boolean(channelId),
     staleTime: 2 * 60_000,
     retry: false,
+  });
+}
+
+export function useSlackThread(channelId: string | null, messageTs: string | null) {
+  const isAdmin = useIsAdmin();
+  return useQuery({
+    queryKey: ["integrations", "slack", "thread", channelId, messageTs],
+    queryFn: () =>
+      api<{ replies: SlackMessage[] }>("GET", `/integrations/slack/channels/${channelId}/messages/${messageTs}/replies`)
+        .then((d) => d.replies),
+    enabled: isAdmin && Boolean(channelId) && Boolean(messageTs),
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+export function useSendSlackMessage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SendSlackMessageInput) =>
+      api<{ ok: boolean; ts: string }>("POST", "/integrations/slack/messages", input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["integrations", "slack"] }),
+  });
+}
+
+export function useConvertSlackToTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ConvertSlackToTaskInput) =>
+      api<{ task: any }>("POST", "/integrations/slack/convert-to-task", input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+  });
+}
+
+export function useSendSlackDigest() {
+  return useMutation({
+    mutationFn: (input: SendSlackDigestInput) =>
+      api<{ ok: boolean }>("POST", "/integrations/slack/send-digest", input),
   });
 }
 

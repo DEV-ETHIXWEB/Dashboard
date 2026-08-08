@@ -5,6 +5,7 @@ const router = express.Router();
 
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
+const slack = require('../utils/slack');
 
 router.use(requireAuth);
 
@@ -44,6 +45,7 @@ router.post('/', requireCSRF, requireRole('admin', 'project_manager'), async (re
     });
     await audit(req.user.id, 'create', 'task', task.id);
     if (assigneeId) await notify(assigneeId, `You were assigned a new task: "${name}"`, 'task');
+    slack.notifySlack(`📝 *New Task Created:* "${name}" (Project: ${project.name}, Priority: ${priority || 'Medium'})`);
     res.status(201).json({ task });
   } catch (err) {
     next(err);
@@ -68,6 +70,9 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
     if (patch.status && patch.status !== task.status) {
       const project = await db.find('projects', task.projectId);
       if (project?.assignedPmId) await notify(project.assignedPmId, `Task "${task.name}" moved to ${patch.status}`, 'task');
+      if (patch.status === 'Done') {
+        slack.notifySlack(`✅ *Task Completed:* "${task.name}"`);
+      }
     }
     if (patch.assigneeId && patch.assigneeId !== task.assigneeId) {
       await notify(patch.assigneeId, `You were assigned to task: "${task.name}"`, 'task');

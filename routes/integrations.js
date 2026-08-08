@@ -3,7 +3,8 @@
 const express = require('express');
 const router = express.Router();
 
-const { requireAuth, requireRole, requireCSRF, audit } = require('../middleware/auth');
+const { db } = require('../db/setup');
+const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
 const cache = require('../utils/integrationCache');
 const clickup = require('../utils/clickup');
 const slack = require('../utils/slack');
@@ -109,6 +110,54 @@ router.get('/slack/feed', handle(async (req, res) => {
 router.get('/slack/channels/:channelId/messages', handle(async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   res.json({ messages: await slack.fetchChannelMessages(req.params.channelId, { limit }) });
+}));
+
+router.get('/slack/channels/:channelId/messages/:messageTs/replies', handle(async (req, res) => {
+  const replies = await slack.fetchMessageReplies(req.params.channelId, req.params.messageTs);
+  res.json({ replies });
+}));
+
+router.post('/slack/messages', requireCSRF, handle(async (req, res) => {
+  const { channelId, text, threadTs } = req.body || {};
+  const result = await slack.postMessage({ channelId, text, threadTs });
+  cache.invalidate('slack:');
+  await audit(req.user.id, 'create', 'slack_message', result.ts, { channelId });
+  res.status(201).json(result);
+}));
+
+router.post('/slack/convert-to-task', requireCSRF, handle(async (req, res) => {
+  const { projectId, name, assigneeId, priority, due, slackMessageUrl, text } = req.body || {};
+  if (!projectId || !name) return res.status(400).json({ error: 'projectId and name are required' });
+  const project = await db.find('projects', projectId);
+  if (!project) return res.status(400).json({ error: 'Project not found' });
+
+  const description = `Converted from Slack message:\n"${text || name}"\nPermalink: ${slackMessageUrl || ''}`;
+  const task = await db.insert('tasks', {
+    projectId,
+    name,
+    description,
+    assigneeId: assigneeId || null,
+    status: 'To Do',
+    priority: priority || 'Medium',
+    due: due || null,
+    source: 'slack',
+  });
+  await audit(req.user.id, 'create', 'task', task.id, { source: 'slack' });
+  if (assigneeId) await notify(assigneeId, `New task assigned from Slack: "${name}"`, 'task');
+
+  // Trigger notification back to Slack
+  await slack.notifySlack(`📌 Task created in Dashboard from Slack message: *${name}* (Project: ${project.name})`);
+
+  res.status(201).json({ task });
+}));
+
+router.post('/slack/send-digest', requireCSRF, handle(async (req, res) => {
+  const { channelId } = req.body || {};
+  const tasks = await db.all('tasks');
+  const projects = await db.all('projects');
+  const result = await slack.sendSlackDigest({ channelId, tasks, projects });
+  await audit(req.user.id, 'send', 'slack_digest', result.ts, { channelId });
+  res.json({ ok: true, result });
 }));
 
 // --- cache -----------------------------------------------------------------

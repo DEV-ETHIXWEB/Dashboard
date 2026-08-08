@@ -141,6 +141,27 @@ export interface SlackChannel {
   memberCount: number | null;
 }
 
+export interface SlackFile {
+  id: string;
+  name: string;
+  type: string | null;
+  mimetype?: string | null;
+  url?: string | null;
+  thumb?: string | null;
+  isImage?: boolean;
+}
+
+export interface SlackAttachment {
+  id: string;
+  title: string | null;
+  titleUrl: string | null;
+  text: string;
+  pretext: string | null;
+  imageUrl: string | null;
+  color: string | null;
+  authorName: string | null;
+}
+
 export interface SlackMessage {
   id: string;
   ts: string;
@@ -155,7 +176,8 @@ export interface SlackMessage {
   isBot: boolean;
   replyCount: number;
   reactionCount: number;
-  files: { id: string; name: string; type: string | null }[];
+  files: SlackFile[];
+  attachments: SlackAttachment[];
   permalink: string;
 }
 
@@ -173,3 +195,24 @@ export interface SlackFeed {
   total: number;
   fetchedAt: number;
 }
+
+export interface SendSlackMessageInput {
+  channelId: string;
+  text: string;
+  threadTs?: string;
+}
+
+export interface ConvertSlackToTaskInput {
+  projectId: string;
+  name: string;
+  assigneeId?: string;
+  priority?: "High" | "Medium" | "Low" | "Urgent";
+  due?: string;
+  slackMessageUrl?: string;
+  text?: string;
+}
+
+export interface SendSlackDigestInput {
+  channelId?: string;
+}
+
