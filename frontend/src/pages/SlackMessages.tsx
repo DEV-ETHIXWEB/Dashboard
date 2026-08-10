@@ -41,6 +41,54 @@ const CATEGORY_TONE: Record<string, string> = {
   general: "bg-secondary text-muted-foreground",
 };
 
+const SLACK_EMOJIS: Record<string, string> = {
+  "+1": "👍",
+  "-1": "👎",
+  thumbsup: "👍",
+  thumbsdown: "👎",
+  saluting_face: "🫡",
+  wave: "👋",
+  eyes: "👀",
+  raising_hand: "🙋",
+  raised_hands: "🙌",
+  folded_hands: "🙏",
+  pray: "🙏",
+  joy: "😂",
+  rofl: "🤣",
+  sob: "😭",
+  sweat_smile: "😅",
+  thinking_face: "🤔",
+  thinking: "🤔",
+  party_popper: "🎉",
+  tada: "🎉",
+  "100": "💯",
+  sparkles: "✨",
+  heavy_check_mark: "✔️",
+  check: "✓",
+  x: "❌",
+  cross_mark: "❌",
+  arrow_right: "➡️",
+  point_right: "👉",
+  clap: "👏",
+  bar_chart: "📊",
+  chart_with_upwards_trend: "📈",
+  file_folder: "📁",
+  warning: "⚠️",
+  pushpin: "📌",
+  white_check_mark: "✅",
+  memo: "📝",
+  rocket: "🚀",
+  fire: "🔥",
+  star: "⭐",
+  bell: "🔔",
+  calendar: "📅",
+  smile: "😊",
+  heart: "❤️",
+  exclamation: "❗",
+  question: "❓",
+  bulb: "💡",
+};
+
 export default function SlackMessages() {
   const { data: status, isLoading: statusLoading } = useIntegrationStatus();
   const channels = useSlackChannels();
@@ -558,6 +606,7 @@ function RedditThreadSection({ message }: { message: SlackMessage }) {
           setReplyText("");
           refetch();
         },
+        onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to post reply"),
       }
     );
   };
@@ -907,56 +956,8 @@ function ThreadViewerDialog({
 function FormattedSlackText({ text }: { text: string }) {
   if (!text) return <span className="italic text-muted-foreground">(no text)</span>;
 
-  const EMOJIS: Record<string, string> = {
-    "+1": "👍",
-    "-1": "👎",
-    thumbsup: "👍",
-    thumbsdown: "👎",
-    saluting_face: "🫡",
-    wave: "👋",
-    eyes: "👀",
-    raising_hand: "🙋",
-    raised_hands: "🙌",
-    folded_hands: "🙏",
-    pray: "🙏",
-    joy: "😂",
-    rofl: "🤣",
-    sob: "😭",
-    sweat_smile: "😅",
-    thinking_face: "🤔",
-    thinking: "🤔",
-    party_popper: "🎉",
-    tada: "🎉",
-    "100": "💯",
-    sparkles: "✨",
-    heavy_check_mark: "✔️",
-    check: "✓",
-    x: "❌",
-    cross_mark: "❌",
-    arrow_right: "➡️",
-    point_right: "👉",
-    clap: "👏",
-    bar_chart: "📊",
-    chart_with_upwards_trend: "📈",
-    file_folder: "📁",
-    warning: "⚠️",
-    pushpin: "📌",
-    white_check_mark: "✅",
-    memo: "📝",
-    rocket: "🚀",
-    fire: "🔥",
-    star: "⭐",
-    bell: "🔔",
-    calendar: "📅",
-    smile: "😊",
-    heart: "❤️",
-    exclamation: "❗",
-    question: "❓",
-    bulb: "💡",
-  };
-
   const emojified = emoji.emojify(text);
-  const processedText = emojified.replace(/:([a-z0-9_+-]+):/g, (match, code) => EMOJIS[code] || match);
+  const processedText = emojified.replace(/:([a-z0-9_+-]+):/g, (match, code) => SLACK_EMOJIS[code] || match);
   const lines = processedText.split("\n");
 
   return (
@@ -1002,32 +1003,7 @@ function FormattedSlackText({ text }: { text: string }) {
 function cleanSlackTextForTitle(rawText: string): string {
   if (!rawText) return "Follow up on Slack message";
 
-  const EMOJIS: Record<string, string> = {
-    bar_chart: "📊",
-    chart_with_upwards_trend: "📈",
-    file_folder: "📁",
-    warning: "⚠️",
-    pushpin: "📌",
-    white_check_mark: "✅",
-    memo: "📝",
-    rocket: "🚀",
-    fire: "🔥",
-    star: "⭐",
-    x: "❌",
-    bell: "🔔",
-    calendar: "📅",
-    smile: "😊",
-    thumbsup: "👍",
-    thumbsdown: "👎",
-    heart: "❤️",
-    tada: "🎉",
-    check: "✓",
-    exclamation: "❗",
-    question: "❓",
-    bulb: "💡",
-  };
-
-  let cleaned = rawText.replace(/:([a-z0-9_+-]+):/g, (match, code) => EMOJIS[code] || match);
+  let cleaned = rawText.replace(/:([a-z0-9_+-]+):/g, (match, code) => SLACK_EMOJIS[code] || match);
   const lines = cleaned.split("\n").map((l) => l.trim()).filter(Boolean);
 
   let firstLine = lines[0] || cleaned;

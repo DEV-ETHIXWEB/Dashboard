@@ -318,7 +318,7 @@ export function TaskEditorDialog({
         <DialogHeader>
           <DialogTitle className="pr-8">{task.name}</DialogTitle>
           <DialogDescription>
-            {task.folderName ? `${task.folderName} / ${task.listName}` : task.listName} Â· changes save to ClickUp
+            {task.folderName ? `${task.folderName} / ${task.listName}` : task.listName} · changes save to ClickUp
           </DialogDescription>
         </DialogHeader>
 
@@ -409,7 +409,7 @@ export function TaskEditorDialog({
               className="h-11"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              placeholder="Write a commentâ€¦"
+              placeholder="Write a comment…"
               aria-label="New comment"
             />
             <Button type="submit" className="h-11 gap-2" disabled={addComment.isPending || !comment.trim()}>
