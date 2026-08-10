@@ -230,9 +230,11 @@
   }
   html {
     @apply font-sans;
+    overflow-x: hidden;
   }
   body {
     margin: 0;
+    overflow-x: hidden;
     @apply bg-background text-foreground antialiased;
   }
 }

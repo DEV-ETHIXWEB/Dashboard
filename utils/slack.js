@@ -75,6 +75,10 @@ async function request(method, params, bodyData) {
   const data = await res.json().catch(() => ({}));
   if (!data.ok) {
     const code = data.error || 'slack_error';
+    // Always log the method and Slack's error code -- without it "Slack
+    // rejected the bot token" is unactionable when the real cause is a
+    // missing scope or an uninvited channel.
+    console.error(`Slack ${method} -> ${code}`);
     throw new SlackError(FRIENDLY_ERRORS[code] || `Slack request failed (${code})`, 502, code);
   }
   return data;
