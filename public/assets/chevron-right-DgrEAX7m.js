@@ -1,1 +1,0 @@
-import{U as e}from"./button-6XZ0Zj79.js";var t=e(`chevron-right`,[[`path`,{d:`m9 18 6-6-6-6`,key:`mthhwq`}]]);export{t};
