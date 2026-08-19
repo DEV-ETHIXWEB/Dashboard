@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ShieldCheck, Loader2, Lock, Activity, Mail, Accessibility, Sun, Moon, Monitor, Check, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,18 @@ const DEMO_ACCOUNTS = [
 
 type Step = "credentials" | "otp";
 
+/**
+ * Why a sign-in link bounced, in words a client can act on. Links are issued by
+ * an admin from the portal, so every message points back at them rather than
+ * offering a self-service retry.
+ */
+const LINK_ERRORS: Record<string, string> = {
+  used: "That sign-in link was already used. Ask us for a new one, or sign in with your password below.",
+  expired: "That sign-in link expired. Ask us for a new one, or sign in with your password below.",
+  invalid: "That sign-in link is not valid. Ask us for a new one, or sign in with your password below.",
+  access_expired: "This access has expired. Ask your admin to issue you new credentials.",
+};
+
 export default function Login() {
   const navigate = useNavigate();
   const { config, setSession } = useAuth();
@@ -41,6 +53,7 @@ export default function Login() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [themeMenuOpen]);
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const [step, setStep] = useState<Step>("credentials");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -49,11 +62,20 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
 
   const [otpError, setOtpError] = useState<string | null>(null);
+  const [codeDestination, setCodeDestination] = useState<string | null>(null);
   const [otpBusy, setOtpBusy] = useState(false);
   const [code, setCode] = useState(["", "", "", "", "", ""]);
   const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const codeRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    const reason = searchParams.get("linkError");
+    if (!reason) return;
+    setError(LINK_ERRORS[reason] ?? LINK_ERRORS.invalid);
+    searchParams.delete("linkError");
+    setSearchParams(searchParams, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (step !== "otp" || !otpExpiresAt) return;
@@ -111,6 +133,7 @@ export default function Login() {
     if (d.requiresOtp) {
       setCode(["", "", "", "", "", ""]);
       setOtpError(null);
+      setCodeDestination(d.codeEmailed ? d.codeDestination ?? null : null);
       setOtpExpiresAt(d.otpExpiresAt ?? null);
       setNow(Date.now());
       setStep("otp");
@@ -506,7 +529,9 @@ export default function Login() {
                       <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">Verify it's you</h1>
                     </div>
                     <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-                      Ask your admin for the 6-digit login code generated for this sign-in, then enter it below.
+                      {codeDestination
+                        ? `We sent a 6-digit code to ${codeDestination}. Enter it below.`
+                        : "We could not email your code. Ask your admin for the 6-digit code generated for this sign-in, then enter it below."}
                     </p>
 
                     <div className="flex justify-between gap-2 my-1">

@@ -1,0 +1,15 @@
+{
+  "name": "EthixWeb Dashboard",
+  "short_name": "EthixWeb",
+  "description": "Project status, tickets, and reports for your account.",
+  "start_url": "/portal",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#c20000",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/emblem-mark.png", "sizes": "397x406", "type": "image/png", "purpose": "any" }
+  ]
+}

@@ -18,13 +18,22 @@ export default function Settings() {
   const [name, setName] = useState(user?.name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
   const [password, setPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
 
   const updateProfile = useMutation({
-    mutationFn: () => api<{ user: User }>("PUT", "/users/me", { name, email, password: password || undefined }),
+    mutationFn: () =>
+      api<{ user: User }>("PUT", "/users/me", {
+        name,
+        email,
+        password: password || undefined,
+        // Only sent when actually changing the password; the server insists on it.
+        currentPassword: password ? currentPassword : undefined,
+      }),
     onSuccess: (d) => {
       setSession(d.user, "");
       toast.success("Profile updated");
       setPassword("");
+      setCurrentPassword("");
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to update profile"),
   });
@@ -60,7 +69,7 @@ export default function Settings() {
               onChange={(e) => setEmail(e.target.value)}
             />
           </div>
-          <div className="flex flex-col gap-1.5 sm:col-span-2">
+          <div className="flex flex-col gap-1.5">
             <Label htmlFor="password">New password</Label>
             <Input
               id="password"
@@ -72,9 +81,26 @@ export default function Settings() {
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="current-password">Current password</Label>
+            <Input
+              id="current-password"
+              type="password"
+              autoComplete="current-password"
+              className="h-10"
+              placeholder={password ? "Required to change your password" : "Only needed for a password change"}
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              disabled={!password}
+            />
+          </div>
         </div>
         <div className="mt-4">
-          <Button onClick={() => updateProfile.mutate()} disabled={updateProfile.isPending} className="h-10 px-4">
+          <Button
+            onClick={() => updateProfile.mutate()}
+            disabled={updateProfile.isPending || (Boolean(password) && !currentPassword)}
+            className="h-10 px-4"
+          >
             {updateProfile.isPending ? "Saving…" : "Save changes"}
           </Button>
         </div>

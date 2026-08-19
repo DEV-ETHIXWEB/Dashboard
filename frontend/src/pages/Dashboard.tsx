@@ -19,7 +19,9 @@ import { cn } from "@/lib/utils";
 import { money, monthKey, plainMonth, plainDate, describeChange } from "@/lib/money";
 import { formatBytes } from "@/lib/format";
 import { apiUrl } from "@/lib/api";
+import { canSeePage } from "@/lib/permissions";
 import type { Billing, BudgetItem } from "@/lib/entities";
+import type { ClientPageKey } from "@/lib/types";
 
 const NEEDS_ACTION = new Set(["past_due", "unpaid", "incomplete", "incomplete_expired", "canceled"]);
 
@@ -31,6 +33,9 @@ const NOTICE_ACTION =
 export default function Dashboard() {
   const { user } = useAuth();
   const isClient = user?.role === "client";
+
+  /** Sections this account may open; staff always get all of them. */
+  const can = (page: ClientPageKey) => canSeePage(user, page);
 
   const queryClient = useQueryClient();
 
@@ -161,38 +166,47 @@ export default function Dashboard() {
         </div>
       )}
 
-      <StatTile
-        className={bento(1)}
-        label="Projects"
-        value={activeProjects.length}
-        hint={`${projects?.length ?? 0} in total`}
-        icon={FolderKanban}
-        to="/portal/projects"
-      />
-      <StatTile
-        className={bento(1)}
-        label="Requests"
-        value={openTickets.length}
-        hint={openTickets.length === 0 ? "Nothing waiting" : "Waiting on us"}
-        icon={LifeBuoy}
-        to="/portal/tickets"
-      />
-      <StatTile
-        className={bento(1)}
-        label="Websites"
-        value={domains?.length ?? 0}
-        hint={expiringDomains.length > 0 ? `${expiringDomains.length} renewing soon` : "All up to date"}
-        icon={Globe}
-        to="/portal/domains"
-      />
-      <StatTile
-        className={bento(1)}
-        label="Documents"
-        value={reports?.length ?? 0}
-        hint="Ready to read"
-        icon={FileText}
-        to="/portal/reports"
-      />
+      {/* Only tiles for sections this account can actually open. */}
+      {can("projects") && (
+        <StatTile
+          className={bento(1)}
+          label="Projects"
+          value={activeProjects.length}
+          hint={`${projects?.length ?? 0} in total`}
+          icon={FolderKanban}
+          to="/portal/projects"
+        />
+      )}
+      {can("tickets") && (
+        <StatTile
+          className={bento(1)}
+          label="Requests"
+          value={openTickets.length}
+          hint={openTickets.length === 0 ? "Nothing waiting" : "Waiting on us"}
+          icon={LifeBuoy}
+          to="/portal/tickets"
+        />
+      )}
+      {can("domains") && (
+        <StatTile
+          className={bento(1)}
+          label="Websites"
+          value={domains?.length ?? 0}
+          hint={expiringDomains.length > 0 ? `${expiringDomains.length} renewing soon` : "All up to date"}
+          icon={Globe}
+          to="/portal/domains"
+        />
+      )}
+      {can("reports") && (
+        <StatTile
+          className={bento(1)}
+          label="Documents"
+          value={reports?.length ?? 0}
+          hint="Ready to read"
+          icon={FileText}
+          to="/portal/reports"
+        />
+      )}
 
       <div className={bento(4)}>
         <BentoColumns

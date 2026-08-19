@@ -1,5 +1,17 @@
 # Login OTP feature (what we built today)
 
+> **Update, since this was written.** Two things changed, and they change the
+> premise of this document rather than adding to it:
+>
+> 1. **The code is emailed now.** An admin reading it out is the fallback for a
+>    workspace with no mail transport configured, not the plan. The sections
+>    below that describe the admin as the delivery mechanism "on purpose"
+>    describe the first version, not the current one.
+> 2. **Clients can skip the password and the code entirely.** An admin can
+>    mint a one-tap sign-in link for them from Client access and hand it over
+>    -- see "One-tap sign-in links" in the README. Staff and admin accounts
+>    still use password + code.
+
 This document explains the login OTP system we added to
 the CRM today: why it exists, how it works end to end, what changed in the
 codebase, and how the database is laid out to support it. It also covers

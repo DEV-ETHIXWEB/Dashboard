@@ -10,7 +10,10 @@
     "dev:pgmem": "node --watch --env-file-if-exists=.env -r ./scripts/dev-with-pgmem.js server.js",
     "db:check": "node --env-file-if-exists=.env scripts/db-check.js",
     "migrate": "node --env-file-if-exists=.env scripts/migrate-local-data.js",
-    "build": "node scripts/build-frontend.js"
+    "build": "node scripts/build-frontend.js",
+    "test": "npm run test:app && npm run test:mail",
+    "test:app": "node --env-file-if-exists=.env.test -r ./scripts/dev-with-pgmem.js scripts/test-app.js",
+    "test:mail": "node -r ./scripts/dev-with-pgmem.js scripts/test-mail.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -24,6 +27,7 @@
     "helmet": "^7.1.0",
     "multer": "^2.0.0",
     "node-emoji": "^2.2.0",
+    "nodemailer": "^9.0.5",
     "pg": "^8.11.5",
     "stripe": "^22.3.2",
     "uuid": "^9.0.1"

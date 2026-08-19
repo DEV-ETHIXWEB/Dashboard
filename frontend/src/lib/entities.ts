@@ -1,4 +1,4 @@
-import type { Role } from "./types";
+import type { ClientPageKey, Role } from "./types";
 
 export interface UserRecord {
   id: string;
@@ -7,6 +7,8 @@ export interface UserRecord {
   role: Role;
   company?: string | null;
   passwordExpiresAt?: number | null;
+  /** null = every client section; an array = only these. */
+  allowedPages?: ClientPageKey[] | null;
 }
 
 export interface Project {
@@ -46,6 +48,10 @@ export interface Ticket {
   /** 0-100, driven by the stage or set directly by the team. */
   progress?: number | null;
   stage?: string | null;
+  /** Intake routing: urgency and the first-response clock. */
+  priority?: "Low" | "Normal" | "High" | "Urgent" | string | null;
+  responseDueAt?: number | null;
+  firstResponseAt?: number | null;
 }
 
 export interface Domain {

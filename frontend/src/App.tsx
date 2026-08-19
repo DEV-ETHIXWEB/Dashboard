@@ -20,6 +20,8 @@ const ClientAccess = lazy(() => import("@/pages/ClientAccess"));
 const OtpMonitor = lazy(() => import("@/pages/OtpMonitor"));
 const AdminHome = lazy(() => import("@/pages/AdminHome"));
 const ClickUpTasks = lazy(() => import("@/pages/ClickUpTasks"));
+const WorkProgress = lazy(() => import("@/pages/WorkProgress"));
+const MailCenter = lazy(() => import("@/pages/MailCenter"));
 const SlackMessages = lazy(() => import("@/pages/SlackMessages"));
 const Settings = lazy(() => import("@/pages/Settings"));
 const Notifications = lazy(() => import("@/pages/Notifications"));
@@ -68,6 +70,14 @@ function App() {
             element={
               <RoleRoute roles={["admin", "project_manager", "employee"]}>
                 <Tasks />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/portal/progress"
+            element={
+              <RoleRoute roles={["admin", "sales", "project_manager", "client"]}>
+                <WorkProgress />
               </RoleRoute>
             }
           />
@@ -133,6 +143,14 @@ function App() {
             element={
               <RoleRoute roles={["admin"]}>
                 <ClickUpTasks />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/portal/mail"
+            element={
+              <RoleRoute roles={["admin"]}>
+                <MailCenter />
               </RoleRoute>
             }
           />

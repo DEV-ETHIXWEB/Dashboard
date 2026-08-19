@@ -5,8 +5,10 @@ const router = express.Router();
 
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit } = require('../middleware/auth');
+const { requirePage } = require('../utils/clientPages');
 
 router.use(requireAuth);
+router.use(requirePage('domains'));
 
 function visibleTo(user, domain) {
   if (['admin', 'sales', 'project_manager'].includes(user.role)) return true;

@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
 import { formatRelativeTime, initials, parseLocalISO, toLocalISO } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { PRIORITY_OPTIONS, type ClickUpTask, type ClickUpTaskInput } from "@/lib/integrations";
@@ -69,7 +70,9 @@ function TaskFields({
   }
 
   return (
-    <div className="space-y-4">
+    // Wide layout: what the task is on the left, how it is routed on the right.
+    <div className="grid gap-x-5 gap-y-4 md:grid-cols-2">
+      <div className="space-y-4">
       <div className="space-y-1.5">
         <Label htmlFor="cu-name">Task name</Label>
         <Input
@@ -87,15 +90,17 @@ function TaskFields({
           <Label htmlFor="cu-description">Description</Label>
           <Textarea
             id="cu-description"
-            rows={3}
+            rows={5}
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
             placeholder="Extra context for whoever picks this up."
           />
         </div>
       )}
+      </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="cu-status">Status</Label>
           <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v ?? "" })}>
@@ -170,6 +175,7 @@ function TaskFields({
           </div>
         )}
       </div>
+      </div>
     </div>
   );
 }
@@ -222,7 +228,7 @@ export function CreateTaskDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="scrollbar-slim max-h-[90svh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="scrollbar-slim max-h-[90svh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>New task in {listName}</DialogTitle>
           <DialogDescription>This creates the task in ClickUp straight away.</DialogDescription>
@@ -314,7 +320,7 @@ export function TaskEditorDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="scrollbar-slim max-h-[90svh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="scrollbar-slim max-h-[90svh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="pr-8">{task.name}</DialogTitle>
           <DialogDescription>
@@ -324,6 +330,7 @@ export function TaskEditorDialog({
 
         <form onSubmit={save} className="space-y-4">
           <TaskFields form={form} setForm={setForm} listId={task.listId} showDescription={false} />
+          <Separator />
 
           <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
             <div className="flex items-center gap-2">

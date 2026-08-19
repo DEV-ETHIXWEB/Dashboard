@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import {
   MessageSquare, Hash, Lock, RotateCw, Search, Loader2, AlertTriangle, ExternalLink,
   Reply, Paperclip, Smile, Send, CheckSquare, Sparkles, ChevronDown, ChevronUp,
+  Bell, Megaphone, HelpCircle, MessagesSquare, Inbox,
 } from "lucide-react";
 import {
   useIntegrationStatus, useRefreshIntegration, useSlackChannels, useSlackFeed,
@@ -39,6 +40,27 @@ const CATEGORY_TONE: Record<string, string> = {
   links_files: "bg-secondary text-muted-foreground",
   discussion: "bg-secondary text-muted-foreground",
   general: "bg-secondary text-muted-foreground",
+};
+
+const TAB_BASE =
+  "inline-flex h-9 flex-none items-center gap-2 rounded-xl px-3.5 text-xs font-medium whitespace-nowrap text-muted-foreground transition-all hover:bg-foreground/5 hover:text-foreground";
+
+/**
+ * Selected pill. Keyed off aria-selected, which Base UI keeps in step with the
+ * real selection -- its data-active attribute tracks keyboard highlight instead.
+ */
+const TAB_ACTIVE =
+  "aria-selected:bg-background aria-selected:font-semibold aria-selected:text-foreground aria-selected:shadow-sm aria-selected:ring-1 aria-selected:ring-foreground/10 dark:aria-selected:bg-foreground/10";
+
+/** Icon and short name per category, so the tab strip reads at a glance. */
+const CATEGORY_META: Record<string, { icon: typeof MessageSquare; short: string }> = {
+  alerts: { icon: Bell, short: "Alerts" },
+  announcements: { icon: Megaphone, short: "Announcements" },
+  action_items: { icon: CheckSquare, short: "Action items" },
+  questions: { icon: HelpCircle, short: "Questions" },
+  links_files: { icon: Paperclip, short: "Links & files" },
+  discussion: { icon: MessagesSquare, short: "Discussions" },
+  general: { icon: MessageSquare, short: "General" },
 };
 
 const SLACK_EMOJIS: Record<string, string> = {
@@ -124,6 +146,11 @@ export default function SlackMessages() {
       }))
       .filter((c) => c.messages.length > 0);
   }, [feed.data, query]);
+
+  const totalMessages = useMemo(
+    () => categories.reduce((sum, c) => sum + c.messages.length, 0),
+    [categories],
+  );
 
   function toggleChannel(id: string) {
     setSelected((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
@@ -289,35 +316,53 @@ export default function SlackMessages() {
                 />
               ) : (
                 <Tabs defaultValue="all">
-                  <div className="mb-6 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                    <TabsList className="group-data-horizontal/tabs:h-auto inline-flex h-auto w-max max-w-full items-center gap-2 rounded-2xl bg-secondary/80 px-3 py-2.5 ring-1 ring-foreground/10">
-                      <TabsTrigger
-                        value="all"
-                        className="h-8 rounded-xl px-4 py-1 text-xs font-medium transition-all data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
-                      >
-                        All
-                      </TabsTrigger>
-                      {categories.map((c) => {
-                        const shortLabel = c.label
-                          .replace("Alerts & app notifications", "Alerts")
-                          .replace("Threaded discussion", "Discussions")
-                          .replace("General chatter", "General");
+                  {/* Wraps onto a second row instead of clipping the first and
+                      last tab, which is what an overflow strip does here. The
+                      selected pill keys off aria-selected: Base UI's
+                      data-active tracks keyboard highlight, not selection. */}
+                  <TabsList className="group-data-horizontal/tabs:h-auto mb-6 flex h-auto w-full flex-wrap items-center gap-1.5 rounded-2xl bg-secondary/60 p-2 ring-1 ring-foreground/10">
+                    <TabsTrigger
+                      value="all"
+                      className={cn(TAB_BASE, TAB_ACTIVE)}
+                    >
+                      <Inbox aria-hidden className="size-3.5" />
+                      <span>All</span>
+                      <span className="rounded-full bg-foreground/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                        {totalMessages}
+                      </span>
+                    </TabsTrigger>
 
-                        return (
-                          <TabsTrigger
-                            key={c.key}
-                            value={c.key}
-                            className="inline-flex h-8 items-center gap-2 rounded-xl px-3.5 py-1 text-xs font-medium whitespace-nowrap transition-all data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                    {categories.map((c) => {
+                      const meta = CATEGORY_META[c.key];
+                      const Icon = meta?.icon ?? MessageSquare;
+                      const count = c.messages.length;
+
+                      return (
+                        <TabsTrigger
+                          key={c.key}
+                          value={c.key}
+                          title={c.description}
+                          className={cn(
+                            TAB_BASE,
+                            TAB_ACTIVE,
+                            // An empty bucket stays clickable but stops competing for attention.
+                            count === 0 && "opacity-50",
+                          )}
+                        >
+                          <Icon aria-hidden className="size-3.5" />
+                          <span>{meta?.short ?? c.label}</span>
+                          <span
+                            className={cn(
+                              "rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
+                              count === 0 ? "bg-foreground/5 text-muted-foreground" : CATEGORY_TONE[c.key],
+                            )}
                           >
-                            <span>{shortLabel}</span>
-                            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-                              {c.messages.length}
-                            </span>
-                          </TabsTrigger>
-                        );
-                      })}
-                    </TabsList>
-                  </div>
+                            {count}
+                          </span>
+                        </TabsTrigger>
+                      );
+                    })}
+                  </TabsList>
 
                   <TabsContent value="all">
                     <div className="space-y-6">
@@ -736,15 +781,16 @@ function PostMessageDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-2xl">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>Send Message to Slack</DialogTitle>
             <DialogDescription>Post a update or message directly to a Slack channel.</DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-1.5">
+          {/* Where it goes on the left, what it says on the right. */}
+          <div className="grid gap-x-5 gap-y-4 py-4 md:grid-cols-2">
+            <div className="grid content-start gap-1.5">
               <Label htmlFor="slack-channel">Channel</Label>
               <Select value={channelId || channels[0]?.id || ""} onValueChange={(val) => setChannelId(val ?? "")}>
                 <SelectTrigger id="slack-channel">
@@ -764,7 +810,7 @@ function PostMessageDialog({
               <Label htmlFor="slack-text">Message</Label>
               <Textarea
                 id="slack-text"
-                rows={4}
+                rows={5}
                 placeholder="Type your message here..."
                 value={text}
                 onChange={(e) => setText(e.target.value)}
@@ -1063,7 +1109,7 @@ function ConvertToTaskDialog({
 
   return (
     <Dialog open onOpenChange={(val) => !val && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-3xl">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -1075,8 +1121,9 @@ function ConvertToTaskDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-1.5">
+          {/* Task fields on the left, the Slack context it came from on the right. */}
+          <div className="grid gap-x-5 gap-y-4 py-4 md:grid-cols-2">
+            <div className="grid gap-1.5 md:col-span-2">
               <Label htmlFor="task-title">Task Title</Label>
               <Input
                 id="task-title"
@@ -1086,6 +1133,7 @@ function ConvertToTaskDialog({
               />
             </div>
 
+            <div className="grid content-start gap-4">
             <div className="grid gap-1.5">
               <Label htmlFor="task-project">Project</Label>
               <Select value={projectId} onValueChange={(val) => setProjectId(val ?? "")}>
@@ -1133,10 +1181,11 @@ function ConvertToTaskDialog({
                 </SelectContent>
               </Select>
             </div>
+            </div>
 
             <div className="rounded-lg bg-secondary/60 p-2.5 text-xs text-muted-foreground">
-              <p className="font-semibold text-foreground mb-1">Slack Context Included:</p>
-              <div className="max-h-24 overflow-y-auto rounded bg-background/60 p-2 ring-1 ring-foreground/10">
+              <p className="mb-1 font-semibold text-foreground">Slack Context Included:</p>
+              <div className="max-h-48 overflow-y-auto rounded bg-background/60 p-2 ring-1 ring-foreground/10">
                 <FormattedSlackText text={message.text} />
               </div>
               <p className="mt-1.5 text-[11px]">Permalink will be saved to task description.</p>

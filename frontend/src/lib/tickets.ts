@@ -59,3 +59,54 @@ export function stageLabel(key: string | null | undefined, stages: TicketStage[]
 export function isRequest(update: TicketUpdate): boolean {
   return update.kind === "handover" || update.kind === "collaboration";
 }
+
+// --- service level ---------------------------------------------------------
+
+/** Mirrors PRIORITIES in utils/ticketIntake.js, most urgent last. */
+export const TICKET_PRIORITIES = ["Low", "Normal", "High", "Urgent"] as const;
+export type TicketPriority = (typeof TICKET_PRIORITIES)[number];
+
+export type SlaState = "met" | "breached" | "due-soon" | "on-track" | "none";
+
+export interface SlaStatus {
+  state: SlaState;
+  /** Milliseconds left (negative once the deadline has passed). */
+  remainingMs: number;
+  label: string;
+}
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+
+function shortDuration(ms: number): string {
+  const abs = Math.abs(ms);
+  if (abs < HOUR) return `${Math.max(1, Math.round(abs / MINUTE))}m`;
+  if (abs < 24 * HOUR) return `${Math.round(abs / HOUR)}h`;
+  return `${Math.round(abs / (24 * HOUR))}d`;
+}
+
+/**
+ * Where a ticket stands against its first-response deadline. Answered tickets
+ * are judged on when the answer landed, not on the clock still running.
+ */
+export function slaStatus(ticket: Ticket, now = Date.now()): SlaStatus {
+  const due = ticket.responseDueAt;
+  if (!due) return { state: "none", remainingMs: 0, label: "No SLA" };
+
+  if (ticket.firstResponseAt) {
+    const late = ticket.firstResponseAt - due;
+    return late > 0
+      ? { state: "breached", remainingMs: -late, label: `Answered ${shortDuration(late)} late` }
+      : { state: "met", remainingMs: -late, label: `Answered ${shortDuration(late)} early` };
+  }
+
+  const remainingMs = due - now;
+  if (remainingMs <= 0) return { state: "breached", remainingMs, label: `${shortDuration(remainingMs)} overdue` };
+  if (remainingMs <= HOUR) return { state: "due-soon", remainingMs, label: `${shortDuration(remainingMs)} left` };
+  return { state: "on-track", remainingMs, label: `${shortDuration(remainingMs)} left` };
+}
+
+export function priorityRank(priority: string | null | undefined): number {
+  const index = TICKET_PRIORITIES.indexOf((priority ?? "Normal") as TicketPriority);
+  return index === -1 ? 1 : index;
+}

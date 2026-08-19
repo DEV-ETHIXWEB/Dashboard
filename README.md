@@ -72,14 +72,22 @@ see "Local development" below.
   locked out until an admin issues a new one. See
   [Client access & credential lifecycle](#client-access--credential-lifecycle).
 - **Login codes (OTP)** - every non-admin login requires a second step: a
-  6-digit code the client types in. The code isn't emailed or texted - it's
-  generated the instant the password check succeeds and shown, masked, in
-  the admin-only **Login Codes** page (`/portal/otp-monitor`), alongside the
-  requester's name, email, and IP address. An admin reveals it and reads it
-  out to the client over another channel (phone/chat). Admin accounts skip
-  this step entirely - they're the only ones who can see the panel, so
+  6-digit code the client types in. The code is emailed to the account
+  holder the instant the password check succeeds, so signing in needs
+  nobody's help. The admin-only **Login Codes** page
+  (`/portal/otp-monitor`) is the fallback for a workspace with no mail
+  transport configured: it lists the requester's name, email, and IP, and
+  an admin can reveal one code at a time and read it out. Admin accounts
+  skip the step entirely - they're the only ones who can see the panel, so
   gating their own login behind it would lock everyone out. See
   [Login codes (OTP) flow](#login-codes-otp-flow) below.
+- **One-tap sign-in links** - an admin can mint a single-use link for a
+  client from **Client access** and hand it over on WhatsApp, SMS, or
+  email. Opening it signs the client straight in: no password, no code.
+  Links last 15 minutes, work once, and are admin-issued only - there is no
+  self-service "email me a link" button, because a link is a bearer
+  credential. Client accounts only. See
+  [One-tap sign-in links](#one-tap-sign-in-links).
 - **Sign in with Google** - restricted to existing accounts; an admin must
   create the account first.
 
@@ -99,6 +107,89 @@ turns on automatically once you add the variable and redeploy.
 | `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID` | Report storage in Google Drive |
 
 See `.env.example` for the full list with descriptions.
+
+## Email, client progress, and multiple admins
+
+### Email
+
+Every notification is a real message, rendered by `utils/emailMessages.js` on
+top of the layout in `utils/emailTemplates.js`: EthixWeb red (`#c20000`, the
+same `--primary` the app uses), the emblem from `public/emblem-mark.png`, one
+task card, one call to action. The layout follows the shape of a ClickUp
+notification because that shape works; the palette and mark are EthixWeb's.
+
+Turn delivery on with any ONE of:
+
+| Transport | Set | Notes |
+| --- | --- | --- |
+| SMTP | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | Any mailbox you own -- Gmail/Workspace, Zoho, Outlook 365, SES, cPanel. Gmail and Outlook need an **app password**, not the account password. |
+| Resend | `RESEND_API_KEY` | HTTPS API, verify your domain first. |
+| Webhook | `MAIL_WEBHOOK_URL` | Receives `POST {from, to, subject, text, html}`. |
+
+Also set `MAIL_FROM` (an address the mailbox may send as) and `APP_BASE_URL`
+(the public URL of this dashboard -- the buttons and the emblem in every email
+point at it).
+
+With none of them set nothing is delivered, but every message is still rendered
+and recorded, so the templates can be reviewed before any credential exists.
+
+**Admin → Mail** (`/portal/mail`) is the control surface: which transport is
+live, **Verify connection** (opens a real SMTP session and authenticates),
+**Send test**, a preview of all twelve templates rendered by the production
+code, and a log of every message the app attempted with the exact HTML that
+went out.
+
+Messages sent, and what triggers each:
+
+| Template | Goes to | When |
+| --- | --- | --- |
+| New ticket | Every admin + the owner | A ticket is raised |
+| Ticket receipt | The client | A ticket is raised |
+| Ticket assigned | The new owner | Assignment changes |
+| Status changed | The client | Status moves |
+| New comment | The other side | A note is posted |
+| Handover request | The teammate asked | Handover or collaboration request |
+| Response due | Owner + admins | First-response deadline approaching or missed |
+| Sign-in code | The person signing in | Any non-admin login |
+| Login issued | The new user | An admin creates the account or resets the password |
+| Admin roster change | Every admin | Someone gains or loses admin |
+| Progress summary | The client | Sent on demand from the progress board |
+
+### Client progress (`/portal/progress`)
+
+Clients follow their work without a ClickUp seat or a Slack account. The server
+reads both on their behalf and returns only what belongs to them: their tickets
+with the live task-board status, the team's notes, the board comments, and the
+Slack thread the ticket opened. Replies from this page go back out to the
+ticket, the ClickUp task, and the Slack thread in one action.
+
+`CLIENT_SLACK_THREAD` controls how much of the thread a client sees:
+
+* `summary` (default) -- only the updates this dashboard posted.
+* `full` -- the whole thread, including the team's own replies.
+
+Admins switch the section on per client under **Client Access**, like any other
+client page.
+
+### Multiple administrators
+
+The workspace has a set of administrators, not an owner. Every admin has the
+same powers, alerts fan out to all of them, and a roster change emails everyone
+who holds the role. The one rule the server enforces is that the last
+administrator cannot be deleted or demoted -- that would lock the workspace out
+of user management permanently.
+
+### Tests
+
+```bash
+npm test
+```
+
+Runs both suites against an in-memory Postgres: `scripts/test-app.js` drives the
+real HTTP API (sign-in, ticket intake, client progress, page permissions, the
+last-admin guard), and `scripts/test-mail.js` stands up an actual SMTP server,
+sends through the normal application path, and asserts on the bytes that
+arrived.
 
 ## Client access & credential lifecycle
 
@@ -155,10 +246,8 @@ Client enters ID + password ──► POST /api/auth/login
         │                        ├─ wrong password ─────► 401
         │                        └─ expired ────────────► 403 "Access expired"
         ▼
-  6-digit OTP generated, tied to that user's id (never sent to them)
-        │
-        ▼
-Admin reads it from Login Codes ──► relays by phone/chat
+  6-digit OTP generated and emailed to the account holder
+        │            (no mail transport? an admin reads it out of Login Codes)
         │
         ▼
 Client enters code ──► POST /api/auth/verify-otp ──► session promoted, signed in
@@ -216,6 +305,7 @@ carry the same names and the same (camelCased) fields.
 | `users` | Accounts: name, email, role, company, password, `password_expires_at` | `password` is a **bcrypt hash**, never plaintext. Stripped from every API response by `safeUser()`. |
 | `sessions` | Session id, user id, CSRF token, expiry, `pending` flag | The session id is the only thing in the cookie. `pending` marks a login that passed the password step but not yet OTP. |
 | `otp_codes` | 6-digit login codes, user id, IP, expiry, attempt count | Codes are excluded from the list endpoint and fetched one at a time via an audited reveal call. Expired rows are pruned automatically. |
+| `login_links` | One-tap sign-in links: user id, SHA-256 of the link secret, IP, 15-minute expiry, single-use flag | Client accounts only. The secret itself is never stored, so a database leak cannot be replayed as a login. |
 | `activity_log` | Who did what, when | Every credential issue, password regeneration, and OTP reveal lands here. |
 | `projects`, `tasks`, `tickets`, `domains`, `reports`, `budget_items`, `billing`, `notifications` | Core CRM records | Scoped per role at the route layer. |
 
@@ -289,10 +379,14 @@ when you're on Postgres: every other feature keeps working.
    into `otp_codes`: a random 6-digit code, the user's id, `req.ip`, and a
    5-minute expiry. The response is `{ requiresOtp: true }` - the code
    itself is never sent to the client that's logging in.
-3. An admin opens **Login Codes** (`/portal/otp-monitor`,
-   `GET /api/auth/otp-logs`, admin-only) and finds the row by name/email/IP,
-   clicks the eye icon to reveal the code, and relays it to the client
-   through another channel (phone call, chat, in person).
+3. The code is emailed to the account holder straight away, and the
+   response carries `codeEmailed` plus a masked `codeDestination` so the
+   login screen can say which inbox to look in. If no mail transport is
+   configured the send is skipped, `codeEmailed` is false, and the login
+   screen falls back to telling the client to ask an admin. An admin then
+   opens **Login Codes** (`/portal/otp-monitor`, `GET /api/auth/otp-logs`,
+   admin-only), finds the row by name/email/IP, clicks the eye icon to
+   reveal the code, and relays it.
 4. The client types the code into the 6-box input and it's submitted to
    `POST /api/auth/verify-otp`. The server checks it against the newest
    non-consumed `otp_codes` row for that user, enforces a 5-attempt cap and
@@ -302,8 +396,44 @@ when you're on Postgres: every other feature keeps working.
    `routes/auth.js`) - otherwise no admin could ever reach the panel needed
    to unlock their own login.
 
-This intentionally has no automatic delivery channel (no SMS/email
-provider integrated) - the admin is the delivery mechanism, by design.
+Delivery is by email only; there is no SMS provider wired up. The server
+warns at boot when no mail transport is configured, because that is the one
+state where a client cannot sign in without an admin on the phone.
+
+## One-tap sign-in links
+
+For clients, a 14-character password plus a 6-digit code is two secrets to
+type on a phone keyboard. A sign-in link is neither.
+
+1. An admin opens **Client access** (`/portal/client-access`) and clicks
+   **Sign-in link** on a client's row → `POST /api/auth/login-link/:userId`
+   (admin-only, CSRF-checked). There is deliberately no public endpoint: a
+   link signs in whoever opens it, so an admin decides who gets one.
+2. Only **client** accounts are eligible. Staff and admin accounts can issue
+   credentials and change other people's access, which a pasteable URL is
+   not a strong enough gate for. An expired client is refused with a message
+   naming the fix.
+3. Any previous unused link for that client is deleted first, so a stale one
+   handed over earlier stops working. The new row goes into `login_links`;
+   the URL carries `<row id>.<32 random bytes>` and only the SHA-256 of the
+   secret half is stored, so the database holds nothing replayable.
+4. The response is a **path**, not an absolute URL, and the portal prefixes
+   it with `window.location.origin`. That is what makes the link work on
+   whatever address the portal is actually served from - in development the
+   Vite origin (`http://localhost:5173`), which proxies `/api` to the
+   backend. The backend only ever sees the proxy's own host
+   (`127.0.0.1:4000`), so a URL built server-side would point at the wrong
+   place. `url` in the response is the `APP_BASE_URL` version, for callers
+   that are not a browser.
+5. Opening the link hits `GET /api/auth/magic-link/verify`, which checks the
+   15-minute expiry, compares the secret in constant time, claims the row
+   with an `UPDATE ... WHERE consumed = FALSE` (so two clicks racing each
+   other cannot both win), mints a full session, and redirects to `/portal`.
+   Failures redirect to `/login?linkError=used|expired|invalid|access_expired`
+   and the login page explains each one.
+
+Client sessions last 30 days rather than the 7 days staff get, because for
+a client every expiry is a sign-in round trip they did not ask for.
 
 ### Connecting a real Postgres (Supabase)
 

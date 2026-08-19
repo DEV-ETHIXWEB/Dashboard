@@ -11,6 +11,9 @@
 const { v4: uuidv4 } = require('uuid');
 const { db } = require('../db/setup');
 const { audit } = require('../middleware/auth');
+const mailer = require('./mailer');
+const messages = require('./emailMessages');
+const intake = require('./ticketIntake');
 
 /**
  * Notify any user regardless of role.
@@ -178,7 +181,61 @@ async function addProgressUpdate(user, ticket, { body, progress, stage } = {}) {
     await notify(ticket.clientId, `Update on your ticket "${ticket.subject}"`, 'ticket');
   }
 
+  // Email and the outside world (Slack thread, ClickUp task) are best-effort:
+  // the update is already saved, and no integration outage may undo that.
+  try {
+    await announceUpdate({ user, ticket: { ...ticket, ...patch }, update, isClient });
+  } catch (err) {
+    console.error(`Could not announce the update on ticket ${ticket.id}:`, err.message);
+  }
+
   return update;
+}
+
+/**
+ * Fan one ticket note out to email, the ticket's Slack thread, and its ClickUp
+ * task, so nobody has to watch three places to stay current.
+ */
+async function announceUpdate({ user, ticket, update, isClient }) {
+  const body = update.body || '';
+  const stageText = update.stage ? ` [${messages.stageLabel(update.stage)}]` : '';
+  const progressText = update.progress === null || update.progress === undefined ? '' : ` (${update.progress}%)`;
+
+  await intake.echoActivity(
+    ticket,
+    `💬 *${user.name}*${stageText}${progressText} on ${ticket.id}\n${body || '_tracker updated_'}`,
+  );
+
+  if (isClient) {
+    // The team hears about a client reply by email as well as in the bell.
+    const staffIds = await interestedStaff(ticket);
+    const staff = (await Promise.all(staffIds.map((id) => db.find('users', id)))).filter(Boolean);
+    const inboxes = staff.map((s) => s.email);
+    if (inboxes.length > 0) {
+      await mailer.sendTemplate({
+        to: inboxes,
+        message: messages.ticketComment({
+          ticket, authorName: user.name, body, progress: update.progress, stage: update.stage, forClient: false,
+        }),
+        template: 'ticket_comment',
+        entity: 'ticket',
+        entityId: ticket.id,
+      });
+    }
+    return;
+  }
+
+  const client = ticket.clientId ? await db.find('users', ticket.clientId) : null;
+  if (!client?.email) return;
+  await mailer.sendTemplate({
+    to: client.email,
+    message: messages.ticketComment({
+      ticket, authorName: user.name, body, progress: update.progress, stage: update.stage, forClient: true,
+    }),
+    template: 'ticket_comment',
+    entity: 'ticket',
+    entityId: ticket.id,
+  });
 }
 
 /** Assignee plus collaborators -- everyone actually working the ticket. */
@@ -233,6 +290,21 @@ async function createRequest(user, ticket, kind, { targetUserId, note } = {}) {
     'ticket',
   );
 
+  // A request nobody notices is a stalled ticket, so it goes to their inbox too.
+  try {
+    await mailer.sendTemplate({
+      to: target.email,
+      message: messages.ticketRequest({
+        ticket, kind, fromName: user.name, toName: target.name, note: update.body,
+      }),
+      template: 'ticket_request',
+      entity: 'ticket',
+      entityId: ticket.id,
+    });
+  } catch (err) {
+    console.error(`Could not email the ${kind} request on ticket ${ticket.id}:`, err.message);
+  }
+
   return update;
 }
 
@@ -282,6 +354,16 @@ async function respondToRequest(user, ticket, requestId, accept) {
   });
 
   await audit(user.id, 'update', `ticket_${request.kind}_request`, ticket.id, { status });
+
+  try {
+    await intake.echoActivity(
+      ticket,
+      `${accept ? '✅' : '🚫'} *${user.name}* ${accept ? 'accepted' : 'declined'} the ${request.kind} request on ${ticket.id}`,
+    );
+  } catch (err) {
+    console.error(`Could not echo the request outcome on ticket ${ticket.id}:`, err.message);
+  }
+
   if (request.authorId && request.authorId !== user.id) {
     await notify(
       request.authorId,

@@ -7,10 +7,12 @@ const router = express.Router();
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
 const { isDriveConfigured, uploadToDrive } = require('../utils/googleDrive');
+const { requirePage } = require('../utils/clientPages');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 router.use(requireAuth);
+router.use(requirePage('reports'));
 
 function visibleTo(user, report) {
   if (['admin', 'sales', 'project_manager'].includes(user.role)) return true;

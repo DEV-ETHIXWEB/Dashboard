@@ -5,6 +5,7 @@ const router = express.Router();
 
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit } = require('../middleware/auth');
+const { requirePage } = require('../utils/clientPages');
 
 function getStripe() {
   if (!process.env.STRIPE_SECRET_KEY) return null;
@@ -13,6 +14,7 @@ function getStripe() {
 }
 
 router.use(requireAuth);
+router.use(requirePage('billing'));
 
 router.get('/status', async (req, res, next) => {
   try {

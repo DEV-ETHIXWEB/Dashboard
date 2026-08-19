@@ -5,10 +5,12 @@ const router = express.Router();
 
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
+const { requirePage } = require('../utils/clientPages');
 
 const STATUS_PCT = { 'To Do': 0, 'In Progress': 50, 'In Review': 90, Complete: 100 };
 
 router.use(requireAuth);
+router.use(requirePage('projects'));
 
 async function withProgress(project) {
   const tasks = await db.filter('tasks', (t) => t.projectId === project.id);

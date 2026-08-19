@@ -50,10 +50,28 @@ if (corsOrigins.length > 0) {
 
 app.use(cookieParser());
 
+// Emails carry absolute links and the emblem from public/. When APP_BASE_URL
+// is not set, the first request teaches the app what its own origin is.
+const appUrl = require('./utils/appUrl');
+app.use((req, res, next) => {
+  appUrl.rememberFromRequest(req);
+  next();
+});
+
 app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), require('./routes/billing').webhookHandler);
 
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    // Helmet defaults every response to Cross-Origin-Resource-Policy:
+    // same-origin, which is right for the app bundle but wrong for the brand
+    // emblem: it is embedded by email clients and by the Mail page preview,
+    // both of which are a different origin. Only this one file opts out.
+    if (path.basename(filePath) === 'emblem-mark.png') {
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    }
+  },
+}));
 
 app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -85,6 +103,8 @@ app.use('/api/reports', require('./routes/reports'));
 app.use('/api/budget', require('./routes/budget'));
 app.use('/api/billing', require('./routes/billing'));
 app.use('/api/integrations', require('./routes/integrations'));
+app.use('/api/mail', require('./routes/mail'));
+app.use('/api/client', require('./routes/client'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -102,6 +122,16 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`EthixWeb CRM running at http://localhost:${PORT}`);
+    // Sign-in codes go out by email. With no transport configured, a client
+    // cannot sign in without an admin reading a code out of the Login Codes
+    // page -- which is the fallback, not the plan. Say so loudly at boot
+    // rather than letting the first client discover it.
+    if (!require('./utils/mailer').isEnabled()) {
+      console.warn(
+        '[mail] No mail transport is configured, so sign-in codes cannot be delivered. ' +
+          'Clients will be stuck waiting on an admin. Set SMTP_*, RESEND_API_KEY, or MAIL_WEBHOOK_URL in .env.',
+      );
+    }
   });
 }
 

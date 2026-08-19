@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FolderKanban, ListChecks, Ticket, Globe, FileText, PieChart, CreditCard,
   Settings, Bell, LogOut, Menu, X, Users, Home, LifeBuoy, KeyRound, ShieldCheck,
-  ListTodo, MessageSquare,
+  ListTodo, MessageSquare, Activity, Mail,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useNotifications } from "@/hooks/useData";
@@ -11,6 +11,7 @@ import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { initials } from "@/lib/format";
+import { canSeePage, pageKeyForPath } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import type { Role } from "@/lib/types";
 
@@ -27,6 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/portal", label: "Dashboard", icon: LayoutDashboard },
   { to: "/portal/projects", label: "Projects", icon: FolderKanban, roles: ["admin", "sales", "project_manager", "client"] },
   { to: "/portal/tasks", label: "Tasks", icon: ListChecks, roles: ["admin", "project_manager", "employee"] },
+  { to: "/portal/progress", label: "Work progress", icon: Activity, roles: ["admin", "sales", "project_manager", "client"] },
   { to: "/portal/tickets", label: "Tickets", icon: Ticket },
   { to: "/portal/domains", label: "Domains", icon: Globe, roles: ["admin", "sales", "project_manager", "client"] },
   { to: "/portal/reports", label: "Reports", icon: FileText, roles: ["admin", "sales", "project_manager", "client"] },
@@ -37,15 +39,16 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/portal/otp-monitor", label: "Login Codes", icon: KeyRound, roles: ["admin"] },
   { to: "/portal/clickup", label: "ClickUp", icon: ListTodo, roles: ["admin"] },
   { to: "/portal/slack", label: "Slack", icon: MessageSquare, roles: ["admin"] },
+  { to: "/portal/mail", label: "Mail", icon: Mail, roles: ["admin"] },
   { to: "/portal/notifications", label: "Notifications", icon: Bell },
   { to: "/portal/settings", label: "Settings", icon: Settings },
 ];
 
 const GROUPS: { heading: string; labels: string[] }[] = [
   { heading: "Workspace", labels: ["Dashboard", "Projects", "Tasks", "Domains"] },
-  { heading: "Operations & Finance", labels: ["Tickets", "Reports", "Budget", "Billing"] },
+  { heading: "Operations & Finance", labels: ["Work progress", "Tickets", "Reports", "Budget", "Billing"] },
   { heading: "Integrations", labels: ["ClickUp", "Slack"] },
-  { heading: "Administration", labels: ["Team", "Client Access", "Login Codes"] },
+  { heading: "Administration", labels: ["Team", "Client Access", "Login Codes", "Mail"] },
   { heading: "Account", labels: ["Notifications", "Settings"] },
 ];
 
@@ -64,7 +67,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const unread = notifications?.filter((n) => !n.read).length ?? 0;
-  const visible = (item: NavItem) => !item.roles || (user != null && item.roles.includes(user.role));
+  const visible = (item: NavItem) =>
+    (!item.roles || (user != null && item.roles.includes(user.role))) &&
+    canSeePage(user, pageKeyForPath(item.to));
   const items = NAV_ITEMS.filter(visible).map((i) =>
     i.label === "Notifications" ? { ...i, badge: unread } : i,
   );
