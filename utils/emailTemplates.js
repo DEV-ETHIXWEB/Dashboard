@@ -353,6 +353,23 @@ function detailPanel({ tone = 'info', title, fields = [], mono = false, note = n
   ].join('');
 }
 
+/**
+ * "or" rule: a hairline with a word sitting in it, for offering a second way
+ * to do the same thing right where the first one is.
+ */
+function orDivider(label = 'or') {
+  const rule = `<td style="height:1px;line-height:1px;font-size:0;background:${TOKENS.border};">&nbsp;</td>`;
+  return [
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 14px;">`,
+    '<tr>',
+    rule,
+    `<td width="40" align="center" style="padding:0 10px;font-family:${TOKENS.font};font-size:11px;font-weight:700;`,
+    `letter-spacing:.08em;text-transform:uppercase;color:${TOKENS.muted};white-space:nowrap;">${escapeHtml(label)}</td>`,
+    rule,
+    '</tr></table>',
+  ].join('');
+}
+
 function divider() {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 22px;"><tr><td style="height:1px;line-height:1px;font-size:0;background:${TOKENS.border};">&nbsp;</td></tr></table>`;
 }
@@ -543,6 +560,7 @@ module.exports = {
   callout,
   columns,
   detailPanel,
+  orDivider,
   divider,
   button,
   renderEmail,

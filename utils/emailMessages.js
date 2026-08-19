@@ -406,6 +406,14 @@ function credentialsIssued({ user, temporaryPassword, expiresAt, sections, invit
             { label: 'Password', value: temporaryPassword },
           ],
         }),
+        // The link sits directly under the ID and password, as the other way to
+        // do the same thing, rather than at the bottom of the message where a
+        // reader who already started typing would never look.
+        oneTap ? t.orDivider('or') : '',
+        oneTap ? t.button({ label: 'Sign in with link', url: oneTap }) : '',
+        oneTap
+          ? t.paragraph('That link signs you in on its own -- no password, no code. It works once, within 24 hours.', { muted: true, size: 13 })
+          : '',
         t.columns([
           expiresAt
             ? t.callout({ tone: 'warn', title: 'Access window', body: `This login stops working on ${t.formatWhen(expiresAt)}.` })
@@ -414,17 +422,9 @@ function credentialsIssued({ user, temporaryPassword, expiresAt, sections, invit
             ? [t.paragraph('Your account can open:', { muted: true, size: 13 }), t.bulletList(sections)].join('\n')
             : null,
         ]),
-        oneTap
-          ? t.paragraph(
-            'The button below signs you in without typing anything. It works once, within 24 hours -- after that, use the password above.',
-            { muted: true, size: 13 },
-          )
-          : '',
         t.paragraph('Treat this email as a password. Delete it once you have signed in and set your own.', { muted: true, size: 13 }),
       ].filter(Boolean),
-      cta: oneTap
-        ? { label: 'Tap to sign in', url: oneTap }
-        : (link ? { label: 'Sign in', url: link } : null),
+      cta: link ? { label: 'Sign in with password', url: link } : null,
       reason: 'You are receiving this because an administrator created or reset this account.',
     }),
     text: t.renderText([
@@ -434,9 +434,10 @@ function credentialsIssued({ user, temporaryPassword, expiresAt, sections, invit
       `Password: ${temporaryPassword}`,
       expiresAt ? `Access expires: ${t.formatWhen(expiresAt)}` : null,
       '',
-      oneTap ? `Sign in with one tap (works once, within 24 hours): ${oneTap}` : null,
+      oneTap ? 'Or sign in with this link -- no password needed, works once, within 24 hours:' : null,
+      oneTap || null,
       oneTap ? '' : null,
-      link ? `Sign in: ${link}` : null,
+      link ? `Sign in with your password: ${link}` : null,
       '',
       'Change this password from Settings once you are in.',
     ]),
@@ -712,6 +713,9 @@ const TEMPLATES = {
       expiresAt: Date.now() + 30 * 86400000,
       sections: ['Projects', 'Tickets', 'Work progress', 'Billing'],
       invitedBy: 'Admin User',
+      // A stand-in token: the preview has to show the link option, which only
+      // exists on a real send for a client account.
+      signInUrl: `${baseUrl() || 'https://dashboard.example.com'}/api/auth/magic-link/verify?token=example-token`,
     }),
   },
   admin_roster: {
