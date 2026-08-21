@@ -23,7 +23,6 @@ const ClickUpTasks = lazy(() => import("@/pages/ClickUpTasks"));
 const WorkProgress = lazy(() => import("@/pages/WorkProgress"));
 const MailCenter = lazy(() => import("@/pages/MailCenter"));
 const SlackMessages = lazy(() => import("@/pages/SlackMessages"));
-const Settings = lazy(() => import("@/pages/Settings"));
 const Notifications = lazy(() => import("@/pages/Notifications"));
 
 function RouteFallback() {
@@ -162,7 +161,6 @@ function App() {
               </RoleRoute>
             }
           />
-          <Route path="/portal/settings" element={<RoleRoute><Settings /></RoleRoute>} />
           <Route path="/portal/notifications" element={<RoleRoute><Notifications /></RoleRoute>} />
 
           <Route path="/" element={<Navigate to="/login" replace />} />

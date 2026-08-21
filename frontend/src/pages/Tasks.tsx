@@ -212,7 +212,7 @@ export default function Tasks() {
                   </div>
                 </div>
 
-                <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                <div className="no-scrollbar max-h-[72svh] space-y-4 overflow-y-auto overscroll-contain p-6">
                   <div className="space-y-1.5">
                     <Label className="text-xs font-medium">Task Name *</Label>
                     <Input
@@ -350,7 +350,7 @@ export default function Tasks() {
               <button
                 key={st}
                 onClick={() => setStatusFilter(st)}
-                className={`text-xs px-3 py-1 rounded-lg transition-all whitespace-nowrap flex items-center gap-1.5 font-medium cursor-pointer ${
+                className={`flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-medium whitespace-nowrap transition-all coarse:min-h-9 coarse:px-3.5 ${
                   isSelected
                     ? "bg-primary text-primary-foreground shadow-xs"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
@@ -389,7 +389,109 @@ export default function Tasks() {
           }
         />
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-xs">
+        <>
+          {/* A six-column table cannot be read on a 375px screen, and shrinking
+              it just makes six unreadable columns. Below md the same rows are
+              cards instead: the task and its status lead, the rest follows as
+              one line of context. */}
+          <ul className="space-y-2 md:hidden">
+            {filteredTasks.map((t) => {
+              const a = assignee(t.assigneeId);
+              const canEditStatus = canManage || (user?.role === "employee" && t.assigneeId === user.id);
+              return (
+                <li
+                  key={t.id}
+                  className="rounded-2xl border border-border/60 bg-card/80 p-3.5 shadow-sm"
+                >
+                  <div className="flex items-start gap-2">
+                    <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full bg-primary/80" />
+                    <p className="min-w-0 flex-1 text-[15px] leading-snug font-semibold">{t.name}</p>
+                    <span
+                      className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${priorityBadge(t.priority)}`}
+                    >
+                      {t.priority}
+                    </span>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <Folder aria-hidden className="size-3.5 shrink-0 text-primary/70" />
+                      <span className="truncate">{projectName(t.projectId)}</span>
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <Calendar aria-hidden className="size-3.5 shrink-0" />
+                      {formatDate(t.due)}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-2">
+                    {a ? (
+                      <span className="flex min-w-0 flex-1 items-center gap-2">
+                        <Avatar className="size-6 shrink-0 ring-1 ring-border">
+                          <AvatarFallback className="bg-primary/10 text-[10px] font-semibold text-primary">
+                            {initials(a.name)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="truncate text-xs font-medium text-foreground/90">{a.name}</span>
+                      </span>
+                    ) : (
+                      <span className="flex-1 text-xs text-muted-foreground italic">Unassigned</span>
+                    )}
+
+                    {canEditStatus ? (
+                      <Select
+                        items={Object.fromEntries(STATUSES.map((x) => [x, x]))}
+                        value={t.status}
+                        onValueChange={(v) => changeStatus(t.id, v ?? "To Do")}
+                      >
+                        <SelectTrigger size="sm" className="h-9 w-32 shrink-0 border-border/60 bg-background/50 text-xs font-medium">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {STATUSES.map((x) => (
+                            <SelectItem key={x} value={x}>
+                              {x}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <span
+                        className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${statusBadgeColor(t.status)}`}
+                      >
+                        {t.status}
+                      </span>
+                    )}
+                  </div>
+
+                  {canManage && (
+                    <div className="mt-2 flex items-center justify-end gap-1 border-t border-border/40 pt-2">
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Edit ${t.name}`}
+                        className="hover:bg-primary/10 hover:text-primary"
+                        onClick={() => openEdit(t)}
+                      >
+                        <Pencil aria-hidden className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Delete ${t.name}`}
+                        className="text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => remove(t)}
+                      >
+                        <Trash2 aria-hidden className="size-4" />
+                      </Button>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+        <div className="hidden overflow-hidden rounded-2xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-xs md:block">
           <Table>
             <TableHeader className="bg-muted/40">
               <TableRow className="border-border/50 hover:bg-transparent">
@@ -487,6 +589,7 @@ export default function Tasks() {
             </TableBody>
           </Table>
         </div>
+        </>
       )}
     </div>
   );

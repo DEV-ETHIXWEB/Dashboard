@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const router = express.Router();
 
 const { db } = require('../db/setup');
-const { requireAuth, requireRole, requireCSRF, safeUser, audit } = require('../middleware/auth');
+const { requireAuth, requireRole, requireCSRF, safeUser, audit, refreshSession } = require('../middleware/auth');
 const { CLIENT_PAGES, normalizeAllowedPages, parseAllowedPages, allowedPagesFor } = require('../utils/clientPages');
 const mailer = require('../utils/mailer');
 const messages = require('../utils/emailMessages');
@@ -298,6 +298,10 @@ router.put('/:id', requireCSRF, requireRole('admin'), handleAdmin(async (req, re
 
   const updated = await db.update('users', req.params.id, patch);
   if (!updated) return res.status(404).json({ error: 'User not found' });
+
+  // Role or section access may have moved under this person's feet. Their open
+  // tabs re-read who they are and redraw the navigation without a refresh.
+  refreshSession(req.params.id);
 
   if (patch.password) {
     await db.removeWhere('sessions', (s) => s.userId === req.params.id);

@@ -175,7 +175,7 @@ export default function Domains() {
                     </div>
                   </div>
 
-                  <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                  <div className="no-scrollbar max-h-[72svh] space-y-4 overflow-y-auto overscroll-contain p-6">
                     <div className="space-y-1.5">
                       <Label className="text-xs font-medium">Client *</Label>
                       <Select

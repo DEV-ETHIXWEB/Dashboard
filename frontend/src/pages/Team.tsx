@@ -214,7 +214,7 @@ export default function Team() {
               </div>
 
               {/* Side by side: identity on the left, access on the right. */}
-              <div className="grid max-h-[70vh] gap-x-5 gap-y-4 overflow-y-auto p-6 md:grid-cols-2">
+              <div className="no-scrollbar grid max-h-[72svh] gap-x-5 gap-y-4 overflow-y-auto overscroll-contain p-6 md:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-medium">Full Name *</Label>
                   <Input
@@ -348,7 +348,7 @@ export default function Team() {
               <button
                 key={r}
                 onClick={() => setRoleFilter(r)}
-                className={`text-xs px-3 py-1 rounded-lg transition-all whitespace-nowrap flex items-center gap-1.5 font-medium cursor-pointer ${
+                className={`flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-medium whitespace-nowrap transition-all coarse:min-h-9 coarse:px-3.5 ${
                   isSelected
                     ? "bg-primary text-primary-foreground shadow-xs"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
@@ -426,7 +426,7 @@ export default function Team() {
                     {u.role === "client" && (
                       <Link
                         to="/portal/client-access"
-                        className="focus-clear flex items-center gap-1 truncate hover:text-foreground"
+                        className="focus-clear -mx-2 flex items-center gap-1 truncate rounded-lg px-2 hover:text-foreground coarse:min-h-11"
                         title="Change what this client can see"
                       >
                         <LayoutGrid className="size-3 shrink-0 text-muted-foreground/70" />

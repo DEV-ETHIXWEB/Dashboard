@@ -67,7 +67,9 @@ export default function WorkProgress() {
             : "Everything we are building for you right now, straight from the team's own board."
         }
         actions={
-          <div className="flex items-center gap-2">
+          // Wrapping, because a client picker plus two buttons is wider than a
+          // phone and this header is the only thing above the board.
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             {isStaff && clients.length > 0 && (
               <Select
                 items={Object.fromEntries(
@@ -76,7 +78,7 @@ export default function WorkProgress() {
                 value={clientId ?? ""}
                 onValueChange={(v) => setClientId(v || null)}
               >
-                <SelectTrigger size="sm" className="h-9 w-52">
+                <SelectTrigger size="sm" className="h-9 w-full min-w-0 sm:w-52">
                   <SelectValue placeholder="Pick a client" />
                 </SelectTrigger>
                 <SelectContent>
@@ -533,7 +535,7 @@ function FeedSection({
             href={link}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs font-medium text-primary hover:underline"
+            className="focus-clear -mx-2 inline-flex items-center rounded-lg px-2 text-xs font-medium text-primary hover:underline coarse:min-h-11"
           >
             Open task
           </a>

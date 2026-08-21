@@ -403,7 +403,7 @@ export default function ClientAccess() {
               </div>
 
               {/* Two columns: who they are on the left, what they get on the right. */}
-              <div className="grid max-h-[70vh] gap-5 overflow-y-auto p-6 md:grid-cols-2">
+              <div className="no-scrollbar grid max-h-[72svh] gap-5 overflow-y-auto overscroll-contain p-6 md:grid-cols-2">
                 <div className="space-y-4">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-medium">Full Name *</Label>
@@ -610,7 +610,9 @@ export default function ClientAccess() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                {/* Four buttons do not fit beside a name on a phone: let them
+                    wrap under it rather than widening the page. */}
+                <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
                   <Button
                     variant="outline"
                     size="sm"

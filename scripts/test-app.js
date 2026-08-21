@@ -8,6 +8,8 @@ process.env.MAIL_BRAND_NAME = 'EthixWeb';
 process.env.TICKET_AUTO_ASSIGN = 'on';
 
 const app = require('../server');
+/** The brand red the email renderer actually ships. */
+const BRAND_RED = require('../utils/emailTemplates').TOKENS.brand;
 
 let pass = 0;
 let fail = 0;
@@ -189,7 +191,7 @@ async function main() {
 
   // --- template previews all still render ----------------------------------
   const p2 = await admin.req('GET', '/api/mail/templates/sla_warning/preview');
-  check('sla warning renders red brand', p2.status === 200 && p2.data.html.includes('#c20000'), `${p2.status}`);
+  check('sla warning renders red brand', p2.status === 200 && p2.data.html.includes(BRAND_RED), `${p2.status}`);
   check('no ClickUp purple remains', !p2.data.html.includes('7b68ee'));
 
   // --- one-tap sign-in link (admin-issued) ----------------------------------
@@ -257,6 +259,109 @@ async function main() {
   hit = await openLink(first);
   check('issuing a new link kills the previous one',
     hit.status === 302 && hit.headers.get('location') === '/login?linkError=invalid', `${hit.headers.get('location')}`);
+
+  // --- Stripe mirror -------------------------------------------------------
+  // No Stripe keys in a test run, so the webhook handler is driven directly.
+  // That is the whole point of keeping it a pure function of the event: the
+  // mirroring can be proven without a network or a secret.
+  {
+    const billingRoute = require('../routes/billing');
+    const { db } = require('../db/setup');
+
+    await admin.req('PUT', `/api/users/${clientId}`, {
+      allowedPages: ['tickets', 'progress', 'projects', 'billing', 'budget'],
+    });
+    await db.insert('billing', {
+      clientId, stripeCustomerId: 'cus_test_1', plan: 'standard', status: 'pending',
+      updatedAt: new Date().toISOString(),
+    });
+
+    const invoice = {
+      id: 'in_test_1',
+      customer: 'cus_test_1',
+      currency: 'usd',
+      amount_paid: 24900,
+      amount_due: 24900,
+      status: 'paid',
+      number: 'EW-9001',
+      hosted_invoice_url: 'https://invoice.stripe.com/i/test',
+      invoice_pdf: 'https://invoice.stripe.com/i/test.pdf',
+      billing_reason: 'subscription_cycle',
+      created: Math.floor(Date.now() / 1000),
+      status_transitions: { paid_at: Math.floor(Date.now() / 1000) },
+      lines: { data: [{ description: 'Website care plan', period: { start: 0, end: 0 } }] },
+      charge: { payment_method_details: { card: { brand: 'visa', last4: '4242' } } },
+    };
+
+    await billingRoute.handleEvent({ type: 'invoice.paid', data: { object: invoice } });
+
+    r = await client.req('GET', '/api/billing/payments');
+    check('a client can read their payment history', r.status === 200, `${r.status} ${r.text.slice(0, 160)}`);
+    const first = (r.data.payments || [])[0];
+    check('the Stripe invoice was mirrored', first?.stripeObjectId === 'in_test_1', JSON.stringify(first?.stripeObjectId));
+    check('the amount is converted out of minor units', Number(first?.amount) === 249, `${first?.amount}`);
+    check('the receipt links back to Stripe', first?.invoiceUrl === 'https://invoice.stripe.com/i/test');
+    check('the total matches the payment', Number(r.data.total) === 249, `${r.data.total}`);
+    check('the breakdown is grouped by what it was for',
+      (r.data.categories || [])[0]?.label === 'Website care plan', JSON.stringify(r.data.categories));
+
+    // Stripe retries; the mirror must not grow a second row for one payment.
+    await billingRoute.handleEvent({ type: 'invoice.paid', data: { object: invoice } });
+    r = await client.req('GET', '/api/billing/payments');
+    check('a replayed webhook does not duplicate the payment', (r.data.payments || []).length === 1,
+      `${(r.data.payments || []).length} rows`);
+
+    r = await admin.req('GET', '/api/mail/log');
+    const paidTemplates = (r.data.entries || []).filter((e) => e.template === 'paymentReceived');
+    check('the receipt email is sent once', paidTemplates.length === 1, `${paidTemplates.length} sent`);
+
+    // A declined card moves the plan and warns the client.
+    await billingRoute.handleEvent({
+      type: 'invoice.payment_failed',
+      data: {
+        object: {
+          ...invoice,
+          id: 'in_test_2',
+          status: 'open',
+          number: 'EW-9002',
+          last_finalization_error: { message: 'Your card was declined.' },
+        },
+      },
+    });
+    r = await client.req('GET', '/api/billing/status');
+    check('a failed payment puts the plan past due', r.data.billing?.status === 'past_due', JSON.stringify(r.data.billing?.status));
+    r = await client.req('GET', '/api/billing/payments');
+    const failed = (r.data.payments || []).find((x) => x.stripeObjectId === 'in_test_2');
+    check('the failed payment is on the record', failed?.status === 'failed', JSON.stringify(failed?.status));
+    check('a failed payment is left out of the total', Number(r.data.total) === 249, `${r.data.total}`);
+
+    // The subscription's own fields are mirrored for the plan card.
+    await billingRoute.handleEvent({
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_test_1',
+          customer: 'cus_test_1',
+          status: 'active',
+          current_period_end: Math.floor(Date.now() / 1000) + 30 * 86400,
+          cancel_at_period_end: false,
+          items: { data: [{ quantity: 1, price: { unit_amount: 24900, currency: 'usd', nickname: 'Care plan', recurring: { interval: 'month' } } }] },
+        },
+      },
+    });
+    r = await client.req('GET', '/api/billing/status');
+    check('the plan reads its price from Stripe', Number(r.data.billing?.amount) === 249, `${r.data.billing?.amount}`);
+    check('the plan reads its interval from Stripe', r.data.billing?.interval === 'month', `${r.data.billing?.interval}`);
+    check('a paid plan reads as active', r.data.billing?.status === 'active', `${r.data.billing?.status}`);
+
+    // And a client with billing switched off gets none of it.
+    await admin.req('PUT', `/api/users/${clientId}`, { allowedPages: ['tickets'] });
+    r = await client.req('GET', '/api/billing/payments');
+    check('page toggles gate the payment history', r.status === 403, `${r.status}`);
+    await admin.req('PUT', `/api/users/${clientId}`, {
+      allowedPages: ['tickets', 'progress', 'projects', 'billing'],
+    });
+  }
 
   // --- access control ------------------------------------------------------
   r = await client.req('GET', '/api/mail/log');

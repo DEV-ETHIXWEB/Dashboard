@@ -3,6 +3,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { db } = require('../db/setup');
 const { parseAllowedPages } = require('../utils/clientPages');
+const live = require('../utils/liveBus');
 
 const SESSION_COOKIE = 'ew_sid';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -111,6 +112,15 @@ async function notify(userId, message, type) {
   await db.insert('notifications', {
     id: uuidv4(), userId, message, type: type || 'general', read: false, createdAt: new Date().toISOString(),
   });
+  // Straight to that one person's open tabs. The event says only "you have
+  // notifications"; the browser fetches the text through the usual endpoint.
+  live.publish('notifications', { to: [userId] });
+}
+
+/** Force one account's tabs to re-read who they are -- role or page access moved. */
+function refreshSession(userId) {
+  if (!userId) return;
+  live.publish('session', { to: [userId] });
 }
 
 const PORTAL_PATH = {
@@ -125,5 +135,5 @@ module.exports = {
   SESSION_COOKIE,
   createSession, getSession, destroySession, promoteSession, safeUser, sessionTtlFor,
   requireAuth, requireRole, requireCSRF,
-  audit, notify, PORTAL_PATH,
+  audit, notify, refreshSession, PORTAL_PATH,
 };

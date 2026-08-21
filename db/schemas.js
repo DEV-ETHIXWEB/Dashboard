@@ -41,7 +41,23 @@ const SCHEMAS = {
     'content_base64', 'mime_type', 'size_bytes', 'uploaded_by', 'created_at',
   ],
   budget_items: ['id', 'client_id', 'label', 'amount', 'color', 'month'],
-  billing: ['id', 'client_id', 'stripe_customer_id', 'stripe_subscription_id', 'plan', 'status', 'updated_at'],
+  billing: [
+    'id', 'client_id', 'stripe_customer_id', 'stripe_subscription_id', 'plan', 'status', 'updated_at',
+    // Cached from Stripe so the portal can answer "what am I on and when does
+    // it renew?" without a round trip on every page load.
+    'currency', 'amount', 'interval', 'current_period_end', 'cancel_at_period_end',
+    'card_brand', 'card_last4', 'latest_invoice_url', 'synced_at',
+  ],
+  // One row per real money movement, mirrored from Stripe. Stripe stays the
+  // source of truth: nothing here is ever created by hand, and every row is
+  // keyed by its Stripe object id so a replayed webhook updates rather than
+  // duplicates.
+  payments: [
+    'id', 'client_id', 'stripe_customer_id', 'stripe_object_id', 'kind',
+    'description', 'amount', 'currency', 'status', 'paid_at', 'period_start', 'period_end',
+    'invoice_url', 'receipt_url', 'invoice_number', 'card_brand', 'card_last4',
+    'failure_message', 'created_at',
+  ],
   otp_codes: ['id', 'user_id', 'code', 'ip_address', 'created_at', 'expires_at', 'consumed', 'attempts'],
   // One-tap sign-in links emailed to clients. Only the SHA-256 of the secret
   // half of the link is stored, so a database leak cannot be replayed as a

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiUpload } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import type { UserRecord, Project, Task, Ticket, Domain, Report, BudgetItem, Billing, Notification } from "@/lib/entities";
+import type { UserRecord, Project, Task, Ticket, Domain, Report, BudgetItem, Billing, Notification, PaymentSummary } from "@/lib/entities";
 import { canSeePage } from "@/lib/permissions";
 import type { ClientPageKey, OtpLogEntry } from "@/lib/types";
 
@@ -253,6 +253,47 @@ export function useBillingStatus() {
     queryKey: ["billing"],
     queryFn: () => api<{ enabled: boolean; billing: Billing | Billing[] }>("GET", "/billing/status"),
     enabled: allowed,
+  });
+}
+
+/**
+ * The real payment history, mirrored from Stripe by the server.
+ *
+ * Clients get their own; staff get the whole workspace, or one account when a
+ * `clientId` is named. The figures are Stripe's, so nothing here is ever
+ * reconciled by hand.
+ */
+export function usePayments(clientId?: string) {
+  const allowed = useAllowedPage("billing");
+  return useQuery({
+    queryKey: ["payments", clientId ?? "all"],
+    queryFn: () =>
+      api<PaymentSummary>("GET", clientId ? `/billing/payments?clientId=${encodeURIComponent(clientId)}` : "/billing/payments"),
+    enabled: allowed,
+  });
+}
+
+/** Admin-only repair: pull everything Stripe has and mirror it locally. */
+export function useSyncStripe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (clientId?: string) =>
+      api<{ ok: boolean; synced: { name: string; payments?: number; error?: string }[] }>(
+        "POST",
+        "/billing/sync",
+        clientId ? { clientId } : {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["payments"] });
+      qc.invalidateQueries({ queryKey: ["billing"] });
+    },
+  });
+}
+
+/** Opens Stripe's own hosted page, where card details are entered. */
+export function useBillingPortal() {
+  return useMutation({
+    mutationFn: () => api<{ url: string }>("POST", "/billing/portal"),
   });
 }
 

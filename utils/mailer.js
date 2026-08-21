@@ -25,37 +25,48 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
-const { EMBLEM_CID, EMBLEM_SRC } = require('./emailTemplates');
+const { LOGO_CID, LOGO_SRC } = require('./emailTemplates');
 
 const MAX_LOG_HTML = 400_000; // a rendered email is ~20KB; this is a sanity cap
 
-const EMBLEM_PATH = path.join(__dirname, '..', 'public', 'emblem-mark.png');
-let emblemBase64 = null;
+const LOGO_PATH = path.join(__dirname, '..', 'public', 'ethixweb.png');
+const cache = new Map();
 
 /**
- * The emblem, as base64, read once and kept.
+ * The wordmark, as base64, read once and kept.
  *
  * It travels with the message rather than being linked, because a linked image
  * needs a publicly reachable URL and a deployment on a laptop has none -- the
- * header would fall back to a bare letter in every inbox. Returns null if the
- * file is missing, and the header then degrades to that letter rather than a
- * broken image.
+ * header would fall back to bare text in every inbox. Returns null if the file
+ * is missing, and the header then degrades to that text rather than a broken
+ * image.
  */
-function emblemAttachment() {
-  if (emblemBase64 === null) {
+function readImage(filePath, filename, cid) {
+  if (!cache.has(filePath)) {
     try {
-      emblemBase64 = fs.readFileSync(EMBLEM_PATH).toString('base64');
+      cache.set(filePath, fs.readFileSync(filePath).toString('base64'));
     } catch (err) {
-      console.warn(`[mail] Could not read the emblem at ${EMBLEM_PATH}: ${err.message}`);
-      emblemBase64 = '';
+      console.warn(`[mail] Could not read ${filePath}: ${err.message}`);
+      cache.set(filePath, '');
     }
   }
-  return emblemBase64 ? { filename: 'emblem-mark.png', contentType: 'image/png', base64: emblemBase64 } : null;
+  const base64 = cache.get(filePath);
+  return base64 ? { filename, contentType: 'image/png', base64, cid } : null;
 }
 
-/** Only attach the emblem to messages whose HTML actually references it. */
-function inlineEmblemFor(html) {
-  return html && html.includes(EMBLEM_SRC) ? emblemAttachment() : null;
+function logoAttachment() {
+  return readImage(LOGO_PATH, 'ethixweb.png', LOGO_CID);
+}
+
+/**
+ * Only attach the wordmark to messages whose HTML actually references it, so a
+ * plain-text-only send stays plain text. One file covers the masthead mark, the
+ * wash behind it, and the footer sign-off, so there is only ever one of these.
+ */
+function inlineImagesFor(html) {
+  if (!html || !html.includes(LOGO_SRC)) return [];
+  const logo = logoAttachment();
+  return logo ? [logo] : [];
 }
 
 function smtpConfigured() {
@@ -185,15 +196,17 @@ function cleanRecipients(to) {
 }
 
 async function sendViaSmtp({ to, subject, text, html }) {
-  const emblem = inlineEmblemFor(html);
+  const images = inlineImagesFor(html);
   const info = await getSmtpTransport().sendMail({
     from: fromAddress(),
     to: to.join(', '),
     subject,
     text,
     html: html || undefined,
-    attachments: emblem
-      ? [{ filename: emblem.filename, content: emblem.base64, encoding: 'base64', contentType: emblem.contentType, cid: EMBLEM_CID }]
+    attachments: images.length > 0
+      ? images.map((img) => ({
+        filename: img.filename, content: img.base64, encoding: 'base64', contentType: img.contentType, cid: img.cid,
+      }))
       : undefined,
   });
   if (info.rejected && info.rejected.length > 0) {
@@ -203,7 +216,7 @@ async function sendViaSmtp({ to, subject, text, html }) {
 }
 
 async function sendViaResend({ to, subject, text, html }) {
-  const emblem = inlineEmblemFor(html);
+  const images = inlineImagesFor(html);
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -216,9 +229,11 @@ async function sendViaResend({ to, subject, text, html }) {
       subject,
       text,
       html: html || undefined,
-      // Resend's own field name for an inline attachment's Content-Id.
-      attachments: emblem
-        ? [{ filename: emblem.filename, content: emblem.base64, content_type: emblem.contentType, content_id: EMBLEM_CID }]
+      // Resend's own field names for an inline attachment's Content-Id.
+      attachments: images.length > 0
+        ? images.map((img) => ({
+          filename: img.filename, content: img.base64, content_type: img.contentType, content_id: img.cid,
+        }))
         : undefined,
     }),
   });

@@ -138,7 +138,7 @@ export function CreateTicketModal({
         </div>
 
         {/* Two columns: what the request is on the left, how to route it on the right. */}
-        <div className="grid max-h-[70vh] gap-5 overflow-y-auto p-6 md:grid-cols-2">
+        <div className="no-scrollbar grid max-h-[72svh] gap-5 overflow-y-auto overscroll-contain p-6 md:grid-cols-2">
           <div className="space-y-5">
           {isStaff && (
             <div className="space-y-2">

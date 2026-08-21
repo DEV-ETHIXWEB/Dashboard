@@ -62,7 +62,13 @@ see "Local development" below.
   configured, otherwise in the database (4MB limit in that mode).
 - **Budget** - per-client spend tracking by category, with totals and a
   breakdown view.
-- **Billing** - client subscription management via Stripe Checkout.
+- **Billing & payments** - Stripe is the ledger. Invoices, charges, and
+  subscriptions are mirrored into the app's own `payments` and `billing`
+  tables, and every money figure the portal shows is rendered from that
+  mirror -- with a link to Stripe's own receipt beside it. Webhooks keep it
+  current; an admin's **Sync from Stripe** button repairs it if one goes
+  missing. Card details are entered on Stripe's hosted pages and never touch
+  this server. See [Money and Stripe](#money-and-stripe).
 - **Notifications** - per-user, with an unread count and a mark-all-read
   action.
 - **Client Access** - the admin-only console (`/portal/client-access`) that
@@ -90,6 +96,20 @@ see "Local development" below.
   [One-tap sign-in links](#one-tap-sign-in-links).
 - **Sign in with Google** - restricted to existing accounts; an admin must
   create the account first.
+- **Live updates** - one Server-Sent Events stream per signed-in tab
+  (`/api/events`). When staff move a ticket, upload a report, or change what
+  a client may open, that client's screen redraws within a second without a
+  refresh. The stream carries a topic and a timestamp and never a record, so
+  the browser always refetches through the same permission-checked endpoint
+  it would have used anyway. See
+  [The live wire](#the-live-wire-admin-to-client-updates).
+- **Client navigation** - clients get four destinations (Home, Work,
+  Requests, Money) plus a More sheet; staff keep the full grouped index.
+  Switching a section off for a client removes its tab and promotes the next
+  one, so the bar is never short and never has a dead tab in it.
+- **Installable on a phone** - a manifest, home-screen shortcuts, and a
+  service worker that caches the app shell but never a byte of `/api/`, so
+  a signed-out phone has nothing private left on disk.
 
 ## Environment variables
 
@@ -370,6 +390,11 @@ when you're on Postgres: every other feature keeps working.
 | CORS | Off by default. Both supported setups are same-origin (Express serves the SPA; Vite proxies `/api` server-side), so no cross-origin permission is granted at all. Opt in per-origin with `CORS_ORIGINS`. |
 | Transport | TLS enforced for any non-localhost database host; HSTS, `nosniff`, and `Referrer-Policy: no-referrer` via helmet. |
 | Availability | Pool capped per instance, 10s connection timeout, and an idle-client error handler — without which a routine dropped connection from a hosted provider crashes the Node process. |
+| Live stream | `/api/events` is behind `requireAuth`. Events carry a topic only; delivery is filtered per stream by role and by the client's `allowedPages`, and per-account topics (`notifications`, `session`) reach only the named account. Capped at 4 streams per user. |
+| Offline cache | The service worker refuses to cache any `/api/` response, and signing out wipes the caches it does hold. |
+| Card data | Never touches this server. Checkout and card changes happen on Stripe-hosted pages; the app stores only the brand and last four Stripe reports back. |
+| Webhook trust | `stripe.webhooks.constructEvent` verifies the signature before a single field of the body is read. An unsigned or mis-signed request is refused with a 400 and nothing is written. |
+| Payment replay | Every mirrored payment is keyed by its Stripe object id, so a replayed webhook updates one row instead of creating a second — and receipt emails only go out on first insert. |
 
 ## Login codes (OTP) flow
 
@@ -534,6 +559,81 @@ Settings (see Known limitations).
 3. Create a Drive folder for reports, share it with the service account's email (found in the JSON) as Editor.
 4. Copy the folder ID from its URL → `GOOGLE_DRIVE_FOLDER_ID`.
 
+## The live wire (admin to client updates)
+
+A client watching their dashboard should not have to refresh to find out that
+their ticket moved. One stream per tab handles that.
+
+```
+admin writes  ->  middleware/live.js  ->  utils/liveBus.js  ->  /api/events  ->  browser refetches
+```
+
+**What travels.** A frame is `{"topic":"budget","at":1723...}` and nothing
+else. No amount, no name, no id. The browser reacts by invalidating the
+matching React Query keys, which refetch through the ordinary endpoints --
+`requireAuth`, `requireRole`, and `requirePage` all still apply. That is the
+whole security argument: the stream cannot leak what it never carries, and it
+cannot bypass a check it never performs.
+
+**Who hears it.** `utils/liveBus.js` filters every event per open stream:
+
+- Staff hear everything their role covers, because their screens are the
+  operations view of the whole workspace.
+- A client hears a section-wide topic only if the admin left that section
+  switched on for them (`allowedPages`), and only if the change is theirs --
+  routes set `res.locals.liveAudience = [clientId]` where they know it.
+- `notifications` and `session` are about one person and reach only the
+  account named in the event.
+
+**When it is not there.** Serverless hosts and buffering proxies cannot hold a
+stream open. The browser notices, gives up after four failed attempts, and
+falls back to polling every 30 seconds plus a refetch whenever the tab regains
+focus or the device comes back online. Nothing on screen depends on the stream
+existing -- it only makes updates fast.
+
+**Wiring a new route.** Nothing to do, as long as it lives under a prefix in
+`PATH_TOPICS` (`middleware/live.js`). Every successful non-GET response
+publishes the topic for its prefix. Set `res.locals.liveAudience` when the
+handler knows whose data it just touched.
+
+## Money and Stripe
+
+Every amount a client reads -- the dashboard headline, "Where your money went",
+the payment history, the plan card -- comes from a Stripe object. Nothing is
+typed in by hand, and nothing is reconciled by hand.
+
+```
+Stripe  ->  webhook / sync  ->  utils/stripeSync.js  ->  payments + billing  ->  the portal
+```
+
+**Two ways in, and they agree.** `POST /api/billing/webhook` handles the moment
+something happens; `POST /api/billing/sync` (admin only) pulls a client's whole
+history over the API. Both land in the same upsert, keyed by the Stripe object
+id, so a webhook replayed three times updates one row three times rather than
+billing anyone three times over. If webhooks are not set up at all, the sync
+button alone keeps the portal correct.
+
+**What is stored.** One `payments` row per invoice or standalone charge: amount
+in major units, currency, status, the period it covers, the Stripe receipt and
+invoice URLs, and the card brand and last four. The `billing` row caches the
+subscription's price, interval, renewal date, and default card so the plan card
+renders without a round trip.
+
+**What is never stored.** Card numbers, and anything else that would make this
+server part of the cardholder data environment. Checkout and the "Manage
+payment method" button both hand off to Stripe's hosted pages.
+
+**Emails.** A first-time `invoice.paid` sends the client a receipt; an
+`invoice.payment_failed` sends the one email in the system that asks for
+something. Both are idempotent on the mirror, so a retried webhook does not
+re-thank or re-nag anyone. Preview them on the admin **Mail** page under
+*Payment received* and *Payment failed*.
+
+**Two different questions.** `budget_items` is what the team tracked spending on
+a client's behalf -- ad spend, project costs. `payments` is what the payment
+processor actually took from them. The portal shows both, labelled, and never
+adds them together.
+
 ## Deploying to Vercel
 
 1. Create a Postgres database: Vercel dashboard → project → Storage → Create Database → Postgres. This sets `DATABASE_URL` automatically.
@@ -570,7 +670,8 @@ listed here.
 | `domains` | `id, client_id, domain_name, platform, hosting_provider, hosting_region, registrar, ssl_status, expires_at, auto_renew, dns_status, notes` | |
 | `reports` | `id, client_id, name, category, storage_type, drive_file_id, drive_link, content_base64, mime_type, size_bytes, uploaded_by, created_at` | `storage_type` is `drive` or `database`; only one of `drive_file_id`/`content_base64` is populated depending on which. |
 | `budget_items` | `id, client_id, label, amount, color, month` | |
-| `billing` | `id, client_id, stripe_customer_id, stripe_subscription_id, plan, status, updated_at` | One row per client (`client_id` is `UNIQUE`). |
+| `billing` | `id, client_id, stripe_customer_id, stripe_subscription_id, plan, status, updated_at, currency, amount, interval, current_period_end, cancel_at_period_end, card_brand, card_last4, latest_invoice_url, synced_at` | One row per client (`client_id` is `UNIQUE`). Everything after `updated_at` is cached from Stripe so the plan card renders without a round trip. |
+| `payments` | `id, client_id, stripe_customer_id, stripe_object_id, kind, description, amount, currency, status, paid_at, period_start, period_end, invoice_url, receipt_url, invoice_number, card_brand, card_last4, failure_message, created_at` | One row per Stripe invoice or standalone charge, never written by hand. `stripe_object_id` is `UNIQUE`, which is what makes a replayed webhook idempotent. `amount` is in major units. See [Money and Stripe](#money-and-stripe). |
 
 ### The `db` data-access layer
 

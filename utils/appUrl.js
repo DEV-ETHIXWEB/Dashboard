@@ -3,8 +3,8 @@
 /**
  * The public address of this deployment.
  *
- * Email needs absolute URLs -- for the buttons, and for the EthixWeb emblem in
- * the header, which is served from this app's own public/ folder. APP_BASE_URL
+ * Email needs absolute URLs -- for the buttons, and for the EthixWeb wordmark
+ * in the header, which is served from this app's own public/ folder. APP_BASE_URL
  * is the authority when it is set. When it is not, the first real request is
  * used to learn the origin, so a fresh install still sends working links and a
  * visible logo instead of bare text.
@@ -58,7 +58,7 @@ function baseUrl() {
 /**
  * Whether an address is reachable from the outside world.
  *
- * A mail client fetches the emblem from its own network, so a localhost or
+ * A mail client fetches the logo from its own network, so a localhost or
  * private-LAN URL renders as a broken image in every inbox. Better to know
  * that here and fall back to the lettermark than to ship a broken box.
  */
@@ -81,7 +81,8 @@ function isPubliclyReachable(url) {
 }
 
 /**
- * The emblem shipped in public/, as an absolute URL mail clients can fetch.
+ * The EthixWeb wordmark shipped in public/, as an absolute URL mail clients
+ * can fetch.
  * Returns null when there is nothing an inbox could reach, which makes the
  * header fall back to the lettermark instead of a broken image.
  */
@@ -89,7 +90,7 @@ function logoUrl() {
   if (process.env.MAIL_LOGO_URL) return process.env.MAIL_LOGO_URL;
   const base = baseUrl();
   if (!base || !isPubliclyReachable(base)) return null;
-  return `${base}/emblem-mark.png`;
+  return `${base}/ethixweb.png`;
 }
 
 module.exports = { rememberFromRequest, baseUrl, logoUrl, isPubliclyReachable };

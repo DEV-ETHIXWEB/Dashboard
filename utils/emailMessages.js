@@ -71,7 +71,7 @@ function newTicketForStaff({ ticket, clientName, assigneeName, clickupUrl }) {
 
   const blocks = [
     t.paragraph(
-      `${clientName || 'A client'} raised a new ${String(ticket.priority || 'Normal').toLowerCase()} priority ticket. The first response clock is already running.`,
+      `New ${String(ticket.priority || 'Normal').toLowerCase()} priority ticket from ${clientName || 'a client'}. The response clock is running.`,
     ),
     t.taskCard({
       status: ticket.status || 'Open',
@@ -81,7 +81,7 @@ function newTicketForStaff({ ticket, clientName, assigneeName, clickupUrl }) {
       url: link,
     }),
     ticket.description ? t.comment({ author: clientName || 'Client', at: ticket.createdAt, body: ticket.description }) : '',
-    clickupUrl ? t.callout({ tone: 'info', title: 'Mirrored to ClickUp', body: clickupUrl }) : '',
+    clickupUrl ? t.callout({ tone: 'info', title: 'Also in ClickUp', body: clickupUrl }) : '',
   ].filter(Boolean);
 
   return {
@@ -89,12 +89,12 @@ function newTicketForStaff({ ticket, clientName, assigneeName, clickupUrl }) {
     html: t.renderEmail({
       preheader: `${clientName || 'A client'} raised "${ticket.subject}"`,
       eyebrow: 'New ticket',
-      title: `${clientName || 'A client'} raised a new ticket`,
+      title: `${clientName || 'A client'} raised a ticket`,
       actor: { name: clientName || 'Client', line: `${clientName || 'A client'} opened ${ticket.id}` },
       blocks,
       cta: link ? { label: 'Open ticket', url: link } : null,
       secondaryCta: clickupUrl ? { label: 'View in ClickUp', url: clickupUrl } : null,
-      reason: 'You are receiving this because you are on the support rota for this workspace.',
+      reason: 'Sent to everyone on the support rota.',
     }),
     text: t.renderText([
       `New ${ticket.priority || 'Normal'} ticket: ${ticket.subject}`,
@@ -119,10 +119,10 @@ function ticketReceiptForClient({ ticket, clientName, assigneeName }) {
     html: t.renderEmail({
       preheader: `Ticket ${ticket.id} is open and assigned.`,
       eyebrow: 'Request received',
-      title: 'Your request is in, and someone owns it',
+      title: 'We got your request',
       blocks: [
         t.paragraph(
-          `Thanks ${clientName || 'there'} -- your request is logged as ${ticket.id}. You can follow every step from your portal, including the live task board and the team's working notes.`,
+          `Thanks ${clientName || 'there'}. Your request is logged as ${ticket.id}. You can follow it from your portal, including the task board and the team's notes.`,
         ),
         t.taskCard({
           status: ticket.status || 'Open',
@@ -135,13 +135,13 @@ function ticketReceiptForClient({ ticket, clientName, assigneeName }) {
         t.paragraph('What happens next:', { muted: true, size: 13 }),
         t.bulletList([
           `A first reply is due by ${t.formatWhen(ticket.responseDueAt) || 'the agreed response window'}.`,
-          'Progress updates appear in your portal as the team moves the work forward.',
-          'Reply on the ticket any time -- the team sees it straight away.',
+          'The portal updates as the work moves.',
+          'Reply on the ticket any time. The team sees it.',
         ]),
       ],
       cta: link ? { label: 'Track this ticket', url: link } : null,
       secondaryCta: progressLink() ? { label: 'See all work progress', url: progressLink() } : null,
-      reason: 'You are receiving this because you raised a support request in your client portal.',
+      reason: 'Sent because you raised this request in your portal.',
     }),
     text: t.renderText([
       `Your request is logged as ${ticket.id}.`,
@@ -177,7 +177,7 @@ function ticketAssigned({ ticket, assigneeName, clientName, actorName }) {
         t.paragraph('Post your first note on the ticket to stop the response clock.', { muted: true, size: 13 }),
       ],
       cta: link ? { label: 'Open ticket', url: link } : null,
-      reason: 'You are receiving this because you were assigned this ticket.',
+      reason: 'Sent because this ticket was assigned to you.',
     }),
     text: t.renderText([
       `${actorName || 'A manager'} assigned you ticket ${ticket.id}: ${ticket.subject}`,
@@ -205,8 +205,8 @@ function ticketStatusChanged({ ticket, fromStatus, toStatus, clientName, assigne
       blocks: [
         t.paragraph(
           done
-            ? `Hi ${clientName || 'there'} -- the team finished the work on ${ticket.id}. If anything still looks wrong, reply on the ticket and it reopens with all its history intact.`
-            : `Hi ${clientName || 'there'} -- ${ticket.id} moved from ${fromStatus || 'Open'} to ${toStatus}.`,
+            ? `Hi ${clientName || 'there'}. The team finished ${ticket.id}. If something still looks wrong, reply on the ticket and it reopens.`
+            : `Hi ${clientName || 'there'}. ${ticket.id} moved from ${fromStatus || 'Open'} to ${toStatus}.`,
         ),
         t.taskCard({
           status: toStatus,
@@ -223,7 +223,7 @@ function ticketStatusChanged({ ticket, fromStatus, toStatus, clientName, assigne
         }),
       ],
       cta: link ? { label: done ? 'Review the work' : 'Track this ticket', url: link } : null,
-      reason: 'You are receiving this because you raised this support request.',
+      reason: 'Sent because you raised this request.',
     }),
     text: t.renderText([
       `${ticket.id} "${ticket.subject}" is now ${toStatus}.`,
@@ -263,8 +263,8 @@ function ticketComment({ ticket, authorName, body, progress, stage, forClient = 
       ].filter(Boolean),
       cta: link ? { label: 'Reply on the ticket', url: link } : null,
       reason: forClient
-        ? 'You are receiving this because you raised this support request.'
-        : 'You are receiving this because you are working on this ticket.',
+        ? 'Sent because you raised this request.'
+        : 'Sent because you are working on this ticket.',
     }),
     text: t.renderText([
       `${authorName} posted an update on ${ticket.id} "${ticket.subject}":`,
@@ -312,7 +312,7 @@ function ticketRequest({ ticket, kind, fromName, toName, note }) {
         t.paragraph('Accept or decline from the ticket timeline. Nothing changes until you answer.', { muted: true, size: 13 }),
       ].filter(Boolean),
       cta: link ? { label: 'Answer the request', url: link } : null,
-      reason: 'You are receiving this because a teammate sent you a request on a ticket.',
+      reason: 'Sent because a teammate asked you about a ticket.',
     }),
     text: t.renderText([
       handover
@@ -335,13 +335,13 @@ function slaWarning({ ticket, assigneeName, clientName, minutesLeft }) {
       ? `Overdue first response: ${ticket.id}`
       : `First response due in ${minutesLeft} min: ${ticket.id}`,
     html: t.renderEmail({
-      preheader: overdue ? `${ticket.id} has blown its first-response window` : `${minutesLeft} minutes left on ${ticket.id}`,
+      preheader: overdue ? `${ticket.id} is past its first-response deadline` : `${minutesLeft} minutes left on ${ticket.id}`,
       eyebrow: overdue ? 'Overdue' : 'Due soon',
-      title: overdue ? 'This ticket has no first response yet' : 'A first response is due shortly',
+      title: overdue ? 'This ticket has no first response yet' : 'A first response is due soon',
       blocks: [
         t.callout({
           tone: overdue ? 'danger' : 'warn',
-          title: overdue ? 'Past due' : 'Closing window',
+          title: overdue ? 'Past due' : 'Due soon',
           body: overdue
             ? `${ticket.id} passed its first-response deadline of ${t.formatWhen(ticket.responseDueAt)}.`
             : `${ticket.id} needs a first response by ${t.formatWhen(ticket.responseDueAt)}.`,
@@ -355,7 +355,7 @@ function slaWarning({ ticket, assigneeName, clientName, minutesLeft }) {
         }),
       ],
       cta: link ? { label: 'Respond now', url: link } : null,
-      reason: 'You are receiving this because you own this ticket or administer this workspace.',
+      reason: 'Sent because you own this ticket or administer this workspace.',
     }),
     text: t.renderText([
       overdue
@@ -384,62 +384,55 @@ function credentialsIssued({ user, temporaryPassword, expiresAt, sections, invit
       ? `Your ${t.brand().name} password was reset`
       : `Your ${t.brand().name} ${roleWord} login`,
     html: t.renderEmail({
-      preheader: isReset ? 'A new password for your account' : 'Your sign-in details are ready',
+      preheader: isReset ? 'A new password for your account' : 'Your password, or a one-tap link',
       eyebrow: isReset ? 'Password reset' : 'Welcome',
-      title: isReset ? 'Your password has been reset' : `You have access to the ${roleWord}`,
+      title: isReset ? 'Your password has been reset' : `Your ${roleWord} login`,
       actor: invitedBy ? { name: invitedBy, line: `${invitedBy} set this up for you` } : null,
       blocks: [
         t.paragraph(
           isReset
-            ? `Hi ${user.name} -- an administrator issued you a new password. Your previous one no longer works, and any other session has been signed out.`
-            : `Hi ${user.name} -- your account is ready. Sign in with the details below, then change the password from Settings.`,
+            ? `Hi ${user.name}. Your old password has stopped working. Here is the new one.`
+            : `Hi ${user.name}. Two ways in, whichever suits.`,
         ),
-        // Email and password sit side by side, and the access window next to
-        // the section list, so the message reads across the card instead of
-        // running down it. Both pairs stack again on a phone.
-        t.detailPanel({
-          tone: 'info',
-          title: 'Sign-in details',
-          mono: true,
-          fields: [
-            { label: 'Email', value: user.email },
-            { label: 'Password', value: temporaryPassword },
-          ],
-        }),
-        // The link sits directly under the ID and password, as the other way to
-        // do the same thing, rather than at the bottom of the message where a
-        // reader who already started typing would never look.
-        oneTap ? t.orDivider('or') : '',
-        oneTap ? t.button({ label: 'Sign in with link', url: oneTap }) : '',
-        oneTap
-          ? t.paragraph('That link signs you in on its own -- no password, no code. It works once, within 24 hours.', { muted: true, size: 13 })
-          : '',
+        // The two routes sit side by side as equals, so the message reads
+        // across the card instead of scrolling past one to reach the other.
+        // Below 720px they stack, password first.
         t.columns([
-          expiresAt
-            ? t.callout({ tone: 'warn', title: 'Access window', body: `This login stops working on ${t.formatWhen(expiresAt)}.` })
-            : null,
-          sections && sections.length > 0
-            ? [t.paragraph('Your account can open:', { muted: true, size: 13 }), t.bulletList(sections)].join('\n')
+          t.panel({
+            title: 'With your password',
+            // Only the password gets the black block. The email address is not
+            // a secret and nobody mistypes their own, so making both look like
+            // something to copy just adds weight.
+            html: [
+              t.fact('Email', user.email),
+              t.codeValue('Password', temporaryPassword, { hint: 'Tap to select' }),
+            ].join(''),
+          }),
+          oneTap
+            ? t.panel({
+              title: 'Or one tap',
+              html: [
+                t.button({ label: 'Sign in with link', url: oneTap, margin: '2px 0 10px' }),
+                t.paragraph('No password to type. Works once, for 24 hours.', { muted: true, size: 13 }),
+              ].join(''),
+            })
             : null,
         ]),
-        t.paragraph('Treat this email as a password. Delete it once you have signed in and set your own.', { muted: true, size: 13 }),
+        expiresAt ? t.fact('Access until', t.formatWhen(expiresAt)) : '',
       ].filter(Boolean),
-      cta: link ? { label: 'Sign in with password', url: link } : null,
-      reason: 'You are receiving this because an administrator created or reset this account.',
+      cta: null,
+      reason: 'Sent because an administrator created or reset this account.',
     }),
     text: t.renderText([
-      isReset ? 'Your password has been reset.' : 'Your account is ready.',
+      isReset ? 'Your password has been reset.' : 'Your login is ready.',
       '',
       `Email: ${user.email}`,
       `Password: ${temporaryPassword}`,
-      expiresAt ? `Access expires: ${t.formatWhen(expiresAt)}` : null,
+      link ? `Sign in: ${link}` : null,
       '',
-      oneTap ? 'Or sign in with this link -- no password needed, works once, within 24 hours:' : null,
+      oneTap ? 'Or use this link instead. Works once, for 24 hours:' : null,
       oneTap || null,
-      oneTap ? '' : null,
-      link ? `Sign in with your password: ${link}` : null,
-      '',
-      'Change this password from Settings once you are in.',
+      expiresAt ? `\nAccess until ${t.formatWhen(expiresAt)}.` : null,
     ]),
   };
 }
@@ -460,16 +453,16 @@ function loginCode({ user, code, expiresAt, ipAddress }) {
       eyebrow: 'Verification',
       title: 'Finish signing in',
       blocks: [
-        t.paragraph(`Hi ${user.name} -- enter this code to finish signing in. It expires in ${minutes} minutes.`),
+        t.paragraph(`Hi ${user.name}. Enter this code to finish signing in. It expires in ${minutes} minutes.`),
         t.callout({ tone: 'info', title: 'Your code', mono: true, body: code }),
         t.paragraph(
           ipAddress
-            ? `Requested from ${ipAddress}. If that was not you, do not enter the code -- change your password and tell an administrator.`
+            ? `Requested from ${ipAddress}. If that was not you, do not enter the code. Change your password and tell an administrator.`
             : 'If you did not try to sign in, ignore this email and tell an administrator.',
           { muted: true, size: 13 },
         ),
       ],
-      reason: 'You are receiving this because someone asked to sign in to your account.',
+      reason: 'Sent because someone asked to sign in to your account.',
     }),
     text: t.renderText([
       `Your ${t.brand().name} sign-in code is ${code}.`,
@@ -552,21 +545,21 @@ function progressDigest({ clientName, tickets = [], projects = [], period = 'thi
       eyebrow: 'Progress summary',
       title: `Where your work stands ${period}`,
       blocks: [
-        t.paragraph(`Hi ${clientName || 'there'} -- a short read on everything we are running for you.`),
+        t.paragraph(`Hi ${clientName || 'there'}. Here is where your work stands.`),
         t.callout({
           tone: 'info',
           title: 'At a glance',
           body: `${open.length} request${open.length === 1 ? '' : 's'} in flight\n${closed.length} finished ${period}\n${projects.length} active project${projects.length === 1 ? '' : 's'}`,
         }),
         ...cards,
-        open.length > 5 ? t.paragraph(`...and ${open.length - 5} more in your portal.`, { muted: true, size: 13 }) : '',
+        open.length > 5 ? t.paragraph(`And ${open.length - 5} more in your portal.`, { muted: true, size: 13 }) : '',
         t.divider(),
         projects.length > 0
-          ? [t.paragraph('Active projects', { muted: true, size: 13 }), t.bulletList(projects.map((p) => `${p.name} -- ${p.status}`))].join('\n')
+          ? [t.paragraph('Active projects', { muted: true, size: 13 }), t.bulletList(projects.map((p) => `${p.name}: ${p.status}`))].join('\n')
           : '',
       ].filter(Boolean),
       cta: link ? { label: 'Open the progress board', url: link } : null,
-      reason: 'You are receiving this because you have an active client portal account.',
+      reason: 'Sent because you have a client portal account.',
     }),
     text: t.renderText([
       `Progress summary ${period}`,
@@ -576,6 +569,180 @@ function progressDigest({ clientName, tickets = [], projects = [], period = 'thi
       ...open.slice(0, 8).map((x) => `- [${x.status}] ${x.id} ${x.subject} (${x.progress ?? 0}%)`),
       '',
       link ? `Open the progress board: ${link}` : null,
+    ]),
+  };
+}
+
+function billingLink() {
+  const base = baseUrl();
+  return base ? `${base}/portal/billing` : null;
+}
+
+/** Money exactly as Stripe reports it, in the currency Stripe reported it in. */
+function money(amount, currency) {
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: String(currency || 'usd').toUpperCase(),
+      maximumFractionDigits: 2,
+    }).format(Number(amount || 0));
+  } catch {
+    return `${Number(amount || 0).toFixed(2)} ${String(currency || '').toUpperCase()}`;
+  }
+}
+
+function cardLine(payment) {
+  if (!payment?.cardBrand && !payment?.cardLast4) return null;
+  const label = payment.cardBrand
+    ? payment.cardBrand.charAt(0).toUpperCase() + payment.cardBrand.slice(1)
+    : 'Card';
+  return payment.cardLast4 ? `${label} ending ${payment.cardLast4}` : label;
+}
+
+/**
+ * The receipt.
+ *
+ * Sent once per Stripe invoice, the first time it is seen as paid. Every
+ * figure comes from the Stripe object, so the number in this email and the
+ * number on the Stripe dashboard are the same number.
+ */
+function paymentReceived({ clientName, payment }) {
+  const link = payment?.invoiceUrl || payment?.receiptUrl || billingLink();
+  const amount = money(payment?.amount, payment?.currency);
+  const card = cardLine(payment);
+
+  return {
+    subject: `Payment received - ${amount}`,
+    html: t.renderEmail({
+      preheader: `${amount} received. Nothing further is needed.`,
+      eyebrow: 'Payment received',
+      title: `Thank you - ${amount} received`,
+      blocks: [
+        t.paragraph(`Hi ${clientName || 'there'}. Your payment went through, and there is nothing else for you to do.`),
+        t.detailPanel({
+          tone: 'success',
+          title: 'Receipt',
+          fields: [
+            { label: 'Amount', value: amount },
+            { label: 'Paid', value: t.formatWhen(payment?.paidAt) || 'Just now' },
+            payment?.invoiceNumber ? { label: 'Invoice', value: payment.invoiceNumber } : null,
+            card ? { label: 'Card', value: card } : null,
+          ].filter(Boolean),
+          note: payment?.description || null,
+        }),
+        payment?.periodStart && payment?.periodEnd
+          ? t.fact('Covers', `${t.formatWhen(payment.periodStart)} to ${t.formatWhen(payment.periodEnd)}`)
+          : '',
+        t.paragraph('Every payment on your account is listed in your portal, with a receipt you can download.', { muted: true, size: 13 }),
+      ].filter(Boolean),
+      cta: link ? { label: payment?.invoiceUrl ? 'View your invoice' : 'Open billing', url: link } : null,
+      secondaryCta: payment?.invoiceUrl && billingLink() ? { label: 'See all payments', url: billingLink() } : null,
+      reason: 'Sent because a payment was received on your account.',
+    }),
+    text: t.renderText([
+      `Payment received: ${amount}`,
+      '',
+      `Paid: ${t.formatWhen(payment?.paidAt) || 'just now'}`,
+      payment?.invoiceNumber ? `Invoice: ${payment.invoiceNumber}` : null,
+      card ? `Card: ${card}` : null,
+      payment?.description ? `For: ${payment.description}` : null,
+      '',
+      link ? `Receipt: ${link}` : null,
+    ]),
+  };
+}
+
+/**
+ * The one email in this file that asks for something.
+ *
+ * It says plainly what happened, what it does and does not affect, and the one
+ * action that fixes it. No threats, no countdown: a declined card is usually a
+ * bank being careful, not a customer refusing to pay.
+ */
+function paymentFailed({ clientName, payment }) {
+  const link = payment?.invoiceUrl || billingLink();
+  const amount = money(payment?.amount, payment?.currency);
+  const card = cardLine(payment);
+
+  return {
+    subject: `We could not take your payment of ${amount}`,
+    html: t.renderEmail({
+      preheader: 'Your card was declined. Updating it takes about a minute.',
+      eyebrow: 'Action needed',
+      title: 'We could not take your last payment',
+      blocks: [
+        t.paragraph(`Hi ${clientName || 'there'}. Your bank declined the payment below, so your plan is on hold. Nothing has been deleted and your work is untouched.`),
+        t.detailPanel({
+          tone: 'danger',
+          title: 'The payment that failed',
+          fields: [
+            { label: 'Amount', value: amount },
+            { label: 'Tried', value: t.formatWhen(payment?.paidAt) || 'Just now' },
+            card ? { label: 'Card', value: card } : null,
+          ].filter(Boolean),
+          note: payment?.failureMessage || 'The card was declined. Your bank can say why.',
+        }),
+        t.bulletList([
+          'Updating your card in the portal retries the payment straight away.',
+          'A different card works too - there is nothing tied to the old one.',
+          'If you think this is a mistake, reply to this email and a person will look.',
+        ]),
+      ],
+      cta: link ? { label: 'Update your card', url: link } : null,
+      reason: 'Sent because a payment on your account did not go through.',
+    }),
+    text: t.renderText([
+      `Payment failed: ${amount}`,
+      '',
+      payment?.failureMessage || 'The card was declined.',
+      card ? `Card: ${card}` : null,
+      '',
+      'Your plan is on hold until a payment goes through. Nothing has been deleted.',
+      link ? `Update your card: ${link}` : null,
+    ]),
+  };
+}
+
+/**
+ * The periodic "here is what you paid us" summary.
+ *
+ * Reads the same mirrored Stripe rows the portal draws, so the email and the
+ * screen can never disagree.
+ */
+function paymentSummary({ clientName, payments = [], total, currency = 'usd', period = 'this month' }) {
+  const link = billingLink();
+  const paid = payments.filter((p) => p.status === 'paid');
+  const failed = payments.filter((p) => p.status === 'failed');
+
+  return {
+    subject: `What you paid ${period}`,
+    html: t.renderEmail({
+      preheader: `${money(total, currency)} across ${paid.length} payment${paid.length === 1 ? '' : 's'}.`,
+      eyebrow: 'Payment summary',
+      title: `${money(total, currency)} ${period}`,
+      blocks: [
+        t.paragraph(`Hi ${clientName || 'there'}. Here is every payment on your account ${period}, straight from our payment provider.`),
+        paid.length > 0
+          ? t.bulletList(paid.map((p) => `${money(p.amount, p.currency)} - ${p.description || 'Payment'} (${t.formatWhen(p.paidAt) || 'paid'})`))
+          : t.paragraph('No payments were taken in this period.', { muted: true }),
+        failed.length > 0
+          ? t.callout({
+            tone: 'danger',
+            title: 'Needs your attention',
+            body: `${failed.length} payment${failed.length === 1 ? '' : 's'} did not go through. Updating your card retries them.`,
+          })
+          : '',
+      ].filter(Boolean),
+      cta: link ? { label: 'See every payment', url: link } : null,
+      reason: 'Sent because you have a client portal account.',
+    }),
+    text: t.renderText([
+      `Payments ${period}: ${money(total, currency)}`,
+      '',
+      ...paid.map((p) => `- ${money(p.amount, p.currency)} ${p.description || 'Payment'}`),
+      failed.length > 0 ? `${failed.length} failed payment(s) need a card update.` : null,
+      '',
+      link ? `See every payment: ${link}` : null,
     ]),
   };
 }
@@ -591,10 +758,10 @@ function testEmail({ requestedBy }) {
       title: 'Outbound email is working',
       actor: requestedBy ? { name: requestedBy, line: `${requestedBy} sent this test` } : null,
       blocks: [
-        t.paragraph('This is what every notification from this dashboard will look like: one card, one clear action, nothing else.'),
+        t.paragraph('This is what notifications from this dashboard look like.'),
         t.taskCard({
           status: 'In Progress',
-          title: 'Sample ticket -- homepage CTA not linking correctly',
+          title: 'Sample ticket: homepage button not linking correctly',
           breadcrumb: 'Support tickets / Website',
           meta: [
             { label: 'Ticket', value: 'ticket-1042' },
@@ -636,6 +803,20 @@ const SAMPLE_TICKET = {
   description: 'The "Book Now" button on mobile leads to a 404 page. Customers cannot book at all from phones.',
   createdAt: new Date().toISOString(),
   responseDueAt: Date.now() + 4 * 60 * 60 * 1000,
+};
+
+const SAMPLE_PAYMENT = {
+  amount: 249,
+  currency: 'usd',
+  status: 'paid',
+  description: 'Website care plan - monthly',
+  paidAt: new Date().toISOString(),
+  periodStart: new Date(Date.now() - 30 * 86400000).toISOString(),
+  periodEnd: new Date(Date.now() + 86400000).toISOString(),
+  invoiceNumber: 'EW-1042',
+  cardBrand: 'visa',
+  cardLast4: '4242',
+  invoiceUrl: 'https://invoice.stripe.com/i/example',
 };
 
 const TEMPLATES = {
@@ -684,7 +865,7 @@ const TEMPLATES = {
     description: 'Sent when a teammate is asked to take over or help.',
     render: () => ticketRequest({
       ticket: SAMPLE_TICKET, kind: 'handover', fromName: 'Ryan Coleman', toName: 'Jordan Brooks',
-      note: 'I am on leave from Friday -- can you carry this to done?',
+      note: 'I am on leave from Friday. Can you carry this to done?',
     }),
   },
   sla_warning: {
@@ -734,6 +915,40 @@ const TEMPLATES = {
       projects: [{ name: 'BrightPath Website Redesign', status: 'In Progress' }],
     }),
   },
+  payment_received: {
+    label: 'Payment received',
+    description: 'The receipt a client gets the first time Stripe reports an invoice paid.',
+    render: () => paymentReceived({ clientName: 'David Shaw', payment: SAMPLE_PAYMENT }),
+  },
+  payment_failed: {
+    label: 'Payment failed',
+    description: 'Sent when Stripe reports a declined card, with the one action that fixes it.',
+    render: () => paymentFailed({
+      clientName: 'David Shaw',
+      payment: {
+        ...SAMPLE_PAYMENT,
+        status: 'failed',
+        failureMessage: 'Your card was declined by the issuing bank.',
+      },
+    }),
+  },
+  payment_summary: {
+    label: 'Payment summary',
+    description: 'Periodic client-facing summary of what they paid, read from Stripe.',
+    render: () => paymentSummary({
+      clientName: 'David Shaw',
+      total: 498,
+      currency: 'usd',
+      payments: [
+        SAMPLE_PAYMENT,
+        {
+          ...SAMPLE_PAYMENT,
+          invoiceNumber: 'EW-1041',
+          paidAt: new Date(Date.now() - 30 * 86400000).toISOString(),
+        },
+      ],
+    }),
+  },
   test: {
     label: 'Test message',
     description: 'Deliverability check sent from the Mail page.',
@@ -754,14 +969,19 @@ function listTemplates() {
 /**
  * Render a template for the Mail page.
  *
- * The emblem is pinned to a same-origin path here: a preview is looked at in a
+ * The logo is pinned to a same-origin path here: a preview is looked at in a
  * browser that is already talking to this server, so it always resolves, even
- * on a laptop with no public URL. Real sends keep the absolute URL.
+ * on a laptop with no public URL. Real sends keep the absolute URL, or the
+ * inline attachment when there is no public address to link to.
  */
 function renderPreview(key) {
   const entry = TEMPLATES[key];
   if (!entry) return null;
-  const rendered = t.withBrandOverride({ logoUrl: '/emblem-mark.png' }, () => entry.render());
+  const rendered = t.withBrandOverride(
+    // A same-origin path: a `cid:` reference only resolves inside a mail client.
+    { logoUrl: '/ethixweb.png' },
+    () => entry.render(),
+  );
   return { key, label: entry.label, ...rendered };
 }
 
@@ -777,6 +997,9 @@ module.exports = {
   credentialsIssued,
   adminRosterChanged,
   progressDigest,
+  paymentReceived,
+  paymentFailed,
+  paymentSummary,
   testEmail,
   listTemplates,
   renderMessage,

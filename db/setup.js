@@ -233,6 +233,16 @@ async function initPostgresSchema() {
       id TEXT PRIMARY KEY, client_id TEXT UNIQUE, stripe_customer_id TEXT,
       stripe_subscription_id TEXT, plan TEXT, status TEXT, updated_at TEXT
     )`,
+    `CREATE TABLE IF NOT EXISTS payments (
+      id TEXT PRIMARY KEY, client_id TEXT, stripe_customer_id TEXT,
+      stripe_object_id TEXT UNIQUE, kind TEXT, description TEXT,
+      amount NUMERIC, currency TEXT, status TEXT, paid_at TEXT,
+      period_start TEXT, period_end TEXT, invoice_url TEXT, receipt_url TEXT,
+      invoice_number TEXT, card_brand TEXT, card_last4 TEXT,
+      failure_message TEXT, created_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_client ON payments(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON payments(paid_at DESC)`,
     `CREATE TABLE IF NOT EXISTS otp_codes (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, code TEXT NOT NULL, ip_address TEXT,
       created_at TEXT, expires_at BIGINT, consumed BOOLEAN DEFAULT FALSE, attempts INTEGER DEFAULT 0
@@ -271,6 +281,15 @@ async function initPostgresSchema() {
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS slack_channel_id TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS slack_thread_ts TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS resolved_notified_at BIGINT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS currency TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS amount NUMERIC`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS interval TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS current_period_end TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS cancel_at_period_end BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS card_brand TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS card_last4 TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS latest_invoice_url TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS synced_at TEXT`,
   ];
   for (const sql of alterations) {
     try {

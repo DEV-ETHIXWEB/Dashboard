@@ -167,6 +167,8 @@ router.post('/', requireCSRF, async (req, res, next) => {
       status: 'Open', description: description || '', createdAt: new Date().toISOString(),
       priority, responseDueAt: intake.responseDueAt(priority), firstResponseAt: null,
     });
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [clientId];
     await audit(req.user.id, 'create', 'ticket', ticket.id);
 
     // Auto-assign, start it in ClickUp, then alert the team in-app, on Slack,
@@ -202,6 +204,8 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
     delete patch.firstResponseAt;
 
     const updated = await db.update('tickets', req.params.id, patch);
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [ticket.clientId];
     await audit(req.user.id, 'update', 'ticket', req.params.id);
 
     // Any staff touch counts as the first response.

@@ -67,7 +67,7 @@ function Panel({
         {to && (
           <Link
             to={to}
-            className="focus-clear inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
+            className="focus-clear -mr-2 inline-flex shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-medium text-primary hover:underline coarse:min-h-11"
           >
             View all
             <ArrowRight className="size-3" />
@@ -198,7 +198,10 @@ export default function AdminHome() {
         <StatCard label="Active projects" value={String(projects?.length ?? 0)} icon={FolderKanban} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* minmax(0,1fr) rather than the default 1fr: without it a truncating
+          row inside a panel sets the track's minimum and the whole page grows
+          wider than the phone. */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-2">
         {/* New client requests lead: every one of these has a clock running. */}
         <Panel
           title="New from clients"
@@ -422,7 +425,9 @@ function TicketList({
           <li key={t.id} className="flex items-center gap-3 rounded-xl bg-secondary/40 px-3 py-2.5">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <p className="truncate text-sm font-medium text-foreground">{t.subject}</p>
+                {/* A truncating flex child still needs min-w-0, or its full
+                    text sets the minimum width of the whole page. */}
+                <p className="min-w-0 truncate text-sm font-medium text-foreground">{t.subject}</p>
                 <PriorityBadge priority={t.priority} />
                 <SlaBadge ticket={t} />
               </div>

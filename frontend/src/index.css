@@ -5,6 +5,12 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Thumbs, not cursors.
+   A 24px icon button is fine under a mouse and unusable under a thumb. This
+   variant keys off the input device rather than the viewport, so a narrow
+   desktop window stays dense and a large tablet still gets real targets. */
+@custom-variant coarse (@media (pointer: coarse));
+
 @theme inline {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-heading: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
@@ -231,11 +237,42 @@
   html {
     @apply font-sans;
     overflow-x: hidden;
+    /* A phone rotated or zoomed should not resize the type under the reader. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
   body {
     margin: 0;
     overflow-x: hidden;
+    /* The app owns the pull-down gesture, so the browser's own
+       pull-to-refresh and rubber-band must stay out of the way. */
+    overscroll-behavior-y: none;
     @apply bg-background text-foreground antialiased;
+  }
+
+  /* The grey flash Android paints over a tapped control is the loudest tell
+     that something is a web page. Our own :active styles replace it. */
+  a,
+  button,
+  [role="button"],
+  input,
+  select,
+  textarea,
+  label {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Chrome does not respect the reduced-motion setting for spring physics on
+     its own; anything that survives this is deliberate. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
@@ -331,5 +368,36 @@
   }
   .scrollbar-slim::-webkit-scrollbar-corner {
     background: transparent;
+  }
+}
+
+@layer utilities {
+  /* Chrome for the top and bottom of a phone: translucent, blurred, and
+     backed by a solid colour wherever backdrop-filter is unavailable. */
+  .app-chrome {
+    background-color: var(--background);
+  }
+
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .app-chrome {
+      background-color: color-mix(in oklch, var(--background) 80%, transparent);
+      backdrop-filter: blur(20px) saturate(1.5);
+      -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    }
+  }
+
+  /* Anything the thumb drives: no text selection, no long-press callout, no
+     double-tap zoom delay. */
+  .touch-control {
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
   }
 }

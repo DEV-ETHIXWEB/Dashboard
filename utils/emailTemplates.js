@@ -1,73 +1,103 @@
 'use strict';
 
 /**
- * HTML email renderer, built to match the look of a ClickUp notification email.
+ * HTML email renderer: a dark, branded product email.
  *
  * Everything here is table-based with inline styles, because that is the only
  * layout every mail client agrees on. No dependency, no build step: templates
  * are plain functions that return a full HTML document plus a plain-text twin.
  *
- * The layout is deliberately ClickUp's:
- *   - light page, single 600px white card, 12px radius, hairline border
+ * The shape:
+ *   - deep near-black page, one 700px card on it, 14px radius
+ *   - a masthead carrying the wordmark over the brand's own web pattern
  *   - small uppercase eyebrow, then a short bold sentence as the heading
- *   - a "task card" panel: status pill, title, breadcrumb, meta grid
+ *   - panels for the things that need to interrupt, typography for the rest
  *   - one pill button as the single call to action
  *   - quiet footer with the reason the message was sent
  *
- * The palette is EthixWeb's, not ClickUp's: the brand red from the app theme,
- * warm neutrals to sit beside it, and the real emblem in the header. Both the
- * colour and the logo are overridable, so a rebrand is two env vars.
+ * Dark on purpose, and dark in both modes. A light email inverted by a phone's
+ * dark mode is a lottery -- Gmail and Outlook each invert differently, and
+ * brand colours come out of it looking nothing like the brand. Committing to
+ * dark means the message that arrives is the message that was designed, and
+ * the red reads as the same red the app uses.
+ *
+ * Colour and logo are env-overridable, so a rebrand is two variables.
  */
 
 const appUrl = require('./appUrl');
 
 /**
- * Content-Id of the emblem, attached to every outgoing message by
+ * Content-Id of the logo, attached to every outgoing message by
  * utils/mailer.js and referenced as `cid:` in the header.
  *
  * A hosted URL only works when this deployment has a public address; on a
- * laptop it does not, and every inbox would fall back to a bare letter. An
- * inline attachment travels with the message, so the real emblem shows up in
- * Gmail whether the app is on localhost or a domain.
+ * laptop it does not, and every inbox would fall back to bare text. An inline
+ * attachment travels with the message, so the real wordmark shows up in Gmail
+ * whether the app is on localhost or a domain.
  */
-const EMBLEM_CID = 'ethixweb-emblem';
-const EMBLEM_SRC = `cid:${EMBLEM_CID}`;
+const LOGO_CID = 'ethixweb-logo';
+const LOGO_SRC = `cid:${LOGO_CID}`;
+
+/**
+ * The wordmark is the brand in this email: the mark on the masthead and the
+ * sign-off in the footer. The brand name never appears as typed text where the
+ * logo can carry it instead -- text is only the fallback, in the alt
+ * attribute, for a client that blocks images.
+ *
+ * There is deliberately no watermark behind the masthead. Email has no way to
+ * fade a background image -- no opacity, no blend mode that Outlook or Gmail
+ * will honour -- so a solid white wordmark tiled back there renders at full
+ * strength and fights the real logo in front of it. A pre-faded asset could
+ * work; a full-strength one cannot.
+ */
+/** Intrinsic size of public/ethixweb.png, drawn at half scale for retina. */
+const LOGO_WIDTH = 211;
+const LOGO_HEIGHT = 32;
 
 const TOKENS = {
-  page: '#f6f4f4',
-  card: '#ffffff',
-  border: '#e9e2e2',
-  panel: '#fbf8f8',
-  text: '#1f1a1a',
-  soft: '#5f5555',
-  muted: '#8d8080',
-  // EthixWeb red. Matches --primary in the app theme, oklch(0.50 0.22 29).
-  brand: '#c20000',
-  brandDeep: '#8f0000',
-  brandSoft: '#fdeceb',
-  brandInk: '#ffffff',
-  success: '#1f9d55',
-  warn: '#d97706',
-  danger: '#c20000',
+  // The ground the card sits on, and the masthead behind the wordmark.
+  page: '#07060a',
+  ink: '#0a0809',
+  card: '#141116',
+  border: '#2b2531',
+  panel: '#1c1820',
+  // A hair lighter than panel, for a strip inside a panel.
+  raised: '#241f28',
+  text: '#f5f2f7',
+  soft: '#c0b8c8',
+  muted: '#8d8598',
+  // EthixWeb red, brightened for a dark ground. Matches --primary in the app's
+  // own dark theme, oklch(0.62 0.22 29); the light-theme #c20000 goes muddy
+  // against near-black.
+  brand: '#ff4a38',
+  brandDeep: '#c20000',
+  brandSoft: '#2a100d',
+  // Text that sits on top of the brand red.
+  brandInk: '#1a0503',
+  success: '#3ad392',
+  warn: '#f0a742',
+  danger: '#ff5c4d',
+  // Empty half of a progress bar, and any other inert track.
+  track: '#2b2531',
   font: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
 };
 
 /** Status pill colours, keyed by the lowercase status word. */
 const STATUS_COLORS = {
-  open: '#c20000',
-  'to do': '#8d8080',
-  triage: '#8d8080',
-  'in progress': '#e0562a',
-  'waiting on client': '#d97706',
-  review: '#8f0000',
-  resolved: '#1f9d55',
-  done: '#1f9d55',
-  closed: '#6b6060',
-  complete: '#1f9d55',
-  urgent: '#8f0000',
-  high: '#c20000',
-  normal: '#e0562a',
-  low: '#8d8080',
+  open: '#ff4a38',
+  'to do': '#6f6878',
+  triage: '#6f6878',
+  'in progress': '#f0722a',
+  'waiting on client': '#f0a742',
+  review: '#a35bf0',
+  resolved: '#2fae76',
+  done: '#2fae76',
+  closed: '#544d5e',
+  complete: '#2fae76',
+  urgent: '#e01f1f',
+  high: '#ff4a38',
+  normal: '#f0722a',
+  low: '#6f6878',
 };
 
 /**
@@ -91,11 +121,11 @@ function brand() {
     ...brandOverride,
     name: process.env.MAIL_BRAND_NAME || 'EthixWeb',
     color: process.env.MAIL_BRAND_COLOR || TOKENS.brand,
-    // The EthixWeb emblem from this app's own public/ folder. A hosted URL is
-    // used when there is a publicly reachable one (utils/appUrl.js resolves it
-    // from APP_BASE_URL or the origin the app is served on); otherwise the
-    // emblem rides along as an inline attachment, so it renders either way.
-    logoUrl: appUrl.logoUrl() || EMBLEM_SRC,
+    // The EthixWeb wordmark from this app's own public/ folder. A hosted URL
+    // is used when there is a publicly reachable one (utils/appUrl.js resolves
+    // it from APP_BASE_URL or the origin the app is served on); otherwise the
+    // logo rides along as an inline attachment, so it renders either way.
+    logoUrl: appUrl.logoUrl() || LOGO_SRC,
     baseUrl: appUrl.baseUrl(),
     supportEmail: process.env.MAIL_SUPPORT_EMAIL || null,
     ...brandOverride,
@@ -121,8 +151,9 @@ function safeUrl(value) {
   if (!value) return null;
   const url = String(value).trim();
   if (url.startsWith('//')) return null; // protocol-relative: not ours to trust
-  // `cid:` is the inline emblem this renderer attaches itself, never template data.
-  if (url === EMBLEM_SRC) return url;
+  // `cid:` is the inline wordmark this renderer attaches itself, never
+  // anything that came in with template data.
+  if (url === LOGO_SRC) return url;
   if (!/^(https?:|mailto:|\/)/i.test(url)) return null;
   return escapeHtml(url);
 }
@@ -156,11 +187,17 @@ function paragraph(text, { muted = false, size = 15 } = {}) {
 
 /** Small uppercase label, the line ClickUp puts above the headline. */
 function eyebrow(text) {
-  return `<div style="margin:0 0 10px;font-family:${TOKENS.font};font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:${TOKENS.muted};">${escapeHtml(text)}</div>`;
+  return [
+    `<div style="margin:0 0 12px;font-family:${TOKENS.font};font-size:11px;font-weight:700;`,
+    `letter-spacing:.12em;text-transform:uppercase;color:${brand().color};">${escapeHtml(text)}</div>`,
+  ].join('');
 }
 
 function heading(text) {
-  return `<h1 style="margin:0 0 8px;font-family:${TOKENS.font};font-size:22px;line-height:1.32;font-weight:700;color:${TOKENS.text};">${escapeHtml(text)}</h1>`;
+  return [
+    `<h1 style="margin:0 0 14px;font-family:${TOKENS.font};font-size:26px;line-height:1.26;`,
+    `font-weight:700;letter-spacing:-.02em;color:${TOKENS.text};">${escapeHtml(text)}</h1>`,
+  ].join('');
 }
 
 function statusPill(status) {
@@ -242,7 +279,7 @@ function progressBar(pct) {
   return [
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">`,
     `<tr><td style="font-family:${TOKENS.font};font-size:11px;color:${TOKENS.muted};padding:0 0 6px;letter-spacing:.04em;text-transform:uppercase;">Progress &middot; ${value}%</td></tr>`,
-    `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:999px;background:#efe6e6;">`,
+    `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:999px;background:${TOKENS.track};">`,
     `<tr><td width="${value}%" style="height:6px;line-height:6px;font-size:0;border-radius:999px;background:${color};">&nbsp;</td>`,
     `<td width="${100 - value}%" style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>`,
     '</table></td></tr></table>',
@@ -282,14 +319,55 @@ function bulletList(items) {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px;">${rows}</table>`;
 }
 
+/**
+ * A bordered panel wrapping arbitrary block HTML.
+ *
+ * `callout` and `detailPanel` are the two fixed shapes; this is the one for a
+ * column holding a mix, such as a button and a line of small print. Same
+ * border and radius as the others so a row of them reads as a set.
+ */
+function panel({ tone = 'info', title, html = '' }) {
+  const accent = { info: brand().color, success: TOKENS.success, warn: TOKENS.warn, danger: TOKENS.danger }[tone] || brand().color;
+  return [
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px;border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
+    '<tr><td valign="top" style="padding:18px 20px;">',
+    title
+      ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:12px;">${escapeHtml(title)}</div>`
+      : '',
+    html,
+    '</td></tr></table>',
+  ].join('');
+}
+
+/**
+ * A value meant to be taken out of the message, on the masthead black so it
+ * reads as something to copy rather than something to read.
+ *
+ * `user-select:all` is the closest an email can get to a copy button: mail
+ * clients run no JavaScript, so nothing can reach the clipboard. One tap or
+ * click selects the whole string, which is the part people get wrong by hand.
+ */
+function codeValue(label, value, { hint = null } = {}) {
+  return [
+    `<div style="margin:0 0 4px;font-family:${TOKENS.font};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${TOKENS.muted};">${escapeHtml(label)}</div>`,
+    `<div style="margin:0 0 6px;padding:11px 13px;border-radius:8px;background:${TOKENS.ink};`,
+    "font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;font-size:16px;",
+    `letter-spacing:.06em;color:#ffffff;word-break:break-all;`,
+    `-webkit-user-select:all;-moz-user-select:all;user-select:all;">${escapeHtml(value)}</div>`,
+    hint
+      ? `<div style="margin:0 0 14px;font-family:${TOKENS.font};font-size:11px;color:${TOKENS.muted};">${escapeHtml(hint)}</div>`
+      : '<div style="height:10px;line-height:10px;font-size:0;">&nbsp;</div>',
+  ].join('');
+}
+
 /** Highlighted strip for credentials, warnings, and deadlines. */
 function callout({ tone = 'info', title, body, mono = false }) {
   const accent = { info: brand().color, success: TOKENS.success, warn: TOKENS.warn, danger: TOKENS.danger }[tone] || brand().color;
   return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-radius:10px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
-    '<tr><td style="padding:14px 16px;">',
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
+    '<tr><td style="padding:16px 18px;">',
     title
-      ? `<div style="font-family:${TOKENS.font};font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:${accent};padding-bottom:6px;">${escapeHtml(title)}</div>`
+      ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:7px;">${escapeHtml(title)}</div>`
       : '',
     `<div style="font-family:${mono ? "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" : TOKENS.font};`,
     `font-size:${mono ? 15 : 14}px;line-height:1.6;color:${TOKENS.text};white-space:pre-wrap;word-break:break-word;">${escapeHtml(body)}</div>`,
@@ -335,15 +413,15 @@ function detailPanel({ tone = 'info', title, fields = [], mono = false, note = n
   const cells = present.map((f) => [
     `<td class="ew-col" width="${cellWidth}%" valign="top" style="width:${cellWidth}%;padding:0 14px 0 0;font-family:${TOKENS.font};">`,
     `<div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:${TOKENS.muted};padding-bottom:4px;">${escapeHtml(f.label)}</div>`,
-    `<div style="font-family:${valueFont};font-size:14px;line-height:1.5;color:${TOKENS.text};word-break:break-word;">${escapeHtml(f.value)}</div>`,
+    `<div style="font-family:${valueFont};font-size:15px;font-weight:600;line-height:1.5;color:${TOKENS.text};word-break:break-word;">${escapeHtml(f.value)}</div>`,
     '</td>',
   ].join(''));
 
   return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-radius:10px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
-    '<tr><td style="padding:14px 16px;">',
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
+    '<tr><td style="padding:18px 20px;">',
     title
-      ? `<div style="font-family:${TOKENS.font};font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:${accent};padding-bottom:10px;">${escapeHtml(title)}</div>`
+      ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:12px;">${escapeHtml(title)}</div>`
       : '',
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${cells.join('')}</tr></table>`,
     note
@@ -354,19 +432,18 @@ function detailPanel({ tone = 'info', title, fields = [], mono = false, note = n
 }
 
 /**
- * "or" rule: a hairline with a word sitting in it, for offering a second way
- * to do the same thing right where the first one is.
+ * A label and its value, with no box around it.
+ *
+ * Boxes are for things that need to interrupt. Stacking bordered panels makes
+ * all of them stop meaning anything, so plain facts get typography instead.
  */
-function orDivider(label = 'or') {
-  const rule = `<td style="height:1px;line-height:1px;font-size:0;background:${TOKENS.border};">&nbsp;</td>`;
+function fact(label, value) {
+  if (value === null || value === undefined || value === '') return '';
   return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 14px;">`,
-    '<tr>',
-    rule,
-    `<td width="40" align="center" style="padding:0 10px;font-family:${TOKENS.font};font-size:11px;font-weight:700;`,
-    `letter-spacing:.08em;text-transform:uppercase;color:${TOKENS.muted};white-space:nowrap;">${escapeHtml(label)}</td>`,
-    rule,
-    '</tr></table>',
+    `<div style="margin:0 0 18px;font-family:${TOKENS.font};">`,
+    `<div style="font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${TOKENS.muted};padding-bottom:5px;">${escapeHtml(label)}</div>`,
+    `<div style="font-size:14px;line-height:1.55;color:${TOKENS.text};">${escapeHtml(value)}</div>`,
+    '</div>',
   ].join('');
 }
 
@@ -375,60 +452,51 @@ function divider() {
 }
 
 /** Pill button. The MSO comment gives Outlook a real rectangle to render. */
-function button({ label, url, tone = 'primary' }) {
+function button({ label, url, tone = 'primary', margin = '0 0 22px' }) {
   const href = safeUrl(url);
   if (!href) return '';
   const bg = tone === 'secondary' ? TOKENS.card : brand().color;
   const fg = tone === 'secondary' ? TOKENS.text : TOKENS.brandInk;
   const border = tone === 'secondary' ? TOKENS.border : brand().color;
   return [
-    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;">`,
-    '<tr><td align="center" style="border-radius:8px;" bgcolor="' + bg + '">',
-    `<a href="${href}" target="_blank" rel="noopener" style="display:inline-block;padding:13px 26px;border-radius:8px;`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:${margin};">`,
+    '<tr><td align="center" style="border-radius:10px;" bgcolor="' + bg + '">',
+    `<a href="${href}" target="_blank" rel="noopener" style="display:inline-block;padding:15px 32px;border-radius:10px;`,
     `border:1px solid ${border};background:${bg};color:${fg};font-family:${TOKENS.font};font-size:15px;`,
-    `font-weight:600;text-decoration:none;line-height:1;">${escapeHtml(label)}</a>`,
+    `font-weight:600;letter-spacing:.01em;text-decoration:none;line-height:1;">${escapeHtml(label)}</a>`,
     '</td></tr></table>',
   ].join('');
 }
 
 // --- document --------------------------------------------------------------
 
+/**
+ * The masthead: the wordmark on a black band, and nothing else.
+ *
+ * Two layers, each able to stand alone: the `bgcolor` every client honours, and
+ * the wordmark on top of it. Strip the image and the band still looks
+ * deliberate, with the brand name as alt text -- which is why the alt is the
+ * name rather than "logo".
+ */
 function header() {
   const b = brand();
   const logo = safeUrl(b.logoUrl);
-  // The emblem is a PNG on this app's own origin, 397x406 with the artwork
-  // running to the edge. It gets the same treatment as the sidebar: a dark
-  // rounded tile with breathing room, and its true aspect ratio kept, rather
-  // than being squeezed into a square and clipped by the corner radius.
-  // Clients that block images fall back to the alt text; the lettermark is
-  // only used when there is no absolute URL to point at at all.
+
   const mark = logo
-    ? [
-      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="background:#0d0d0d;border-radius:9px;">`,
-      `<tr><td align="center" valign="middle" width="36" height="36" style="width:36px;height:36px;padding:5px;line-height:0;">`,
-      `<img src="${logo}" alt="${escapeHtml(b.name)}" width="26" height="27" `,
-      `style="display:block;border:0;width:26px;height:27px;" />`,
-      '</td></tr></table>',
-    ].join('')
-    : [
-      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="background:${b.color};border-radius:9px;">`,
-      `<tr><td align="center" valign="middle" width="36" height="36" style="width:36px;height:36px;`,
-      `font-family:${TOKENS.font};font-size:16px;font-weight:700;color:#ffffff;">`,
-      `${escapeHtml(b.name.charAt(0).toUpperCase())}</td></tr></table>`,
-    ].join('');
+    ? `<img src="${logo}" alt="${escapeHtml(b.name)}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}" `
+      + `style="display:block;border:0;width:${LOGO_WIDTH}px;height:${LOGO_HEIGHT}px;max-width:100%;" />`
+    : `<div style="font-family:${TOKENS.font};font-size:20px;font-weight:700;letter-spacing:-.01em;color:#ffffff;">${escapeHtml(b.name)}</div>`;
 
   return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px;">`,
+    `<tr><td class="ew-band" bgcolor="${TOKENS.ink}" style="background-color:${TOKENS.ink};padding:28px 32px 26px;border-radius:14px 14px 0 0;">`,
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">`,
     '<tr>',
-    `<td width="48" valign="middle" style="padding-right:12px;">${mark}</td>`,
-    '<td valign="middle">',
-    `<div style="font-family:${TOKENS.font};font-size:16px;font-weight:700;color:${TOKENS.text};letter-spacing:-.01em;line-height:1.1;">${escapeHtml(b.name)}</div>`,
-    `<div style="font-family:${TOKENS.font};font-size:11px;color:${TOKENS.muted};letter-spacing:.06em;text-transform:uppercase;padding-top:2px;">Client portal</div>`,
-    '</td>',
+    `<td valign="middle" align="left">${mark}</td>`,
+    `<td valign="middle" align="right" style="font-family:${TOKENS.font};font-size:10px;font-weight:700;`,
+    `letter-spacing:.14em;text-transform:uppercase;color:${TOKENS.muted};white-space:nowrap;padding-left:16px;">Client portal</td>`,
     '</tr></table>',
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">`,
-    `<tr><td style="height:2px;line-height:2px;font-size:0;background:${b.color};border-radius:2px;">&nbsp;</td></tr>`,
-    '</table>',
+    '</td></tr>',
+    `<tr><td style="height:3px;line-height:3px;font-size:0;background:${b.color};">&nbsp;</td></tr>`,
   ].join('');
 }
 
@@ -440,14 +508,24 @@ function footer({ reason, links = [] }) {
     .map((l) => `<a href="${l.href}" style="color:${TOKENS.muted};text-decoration:underline;">${escapeHtml(l.label)}</a>`)
     .join(`<span style="color:${TOKENS.border};"> &nbsp;&middot;&nbsp; </span>`);
 
+  // The sign-off is the wordmark itself, at half the masthead's weight. The
+  // brand name survives as the alt text when images are blocked, so the footer
+  // still reads as "(c) 2026 EthixWeb" in a text-only client.
+  const logo = safeUrl(b.logoUrl);
+  const signOff = logo
+    ? `<img src="${logo}" alt="${escapeHtml(b.name)}" width="${Math.round(LOGO_WIDTH * 0.62)}" height="${Math.round(LOGO_HEIGHT * 0.62)}" `
+      + `style="display:inline-block;border:0;width:${Math.round(LOGO_WIDTH * 0.62)}px;height:${Math.round(LOGO_HEIGHT * 0.62)}px;max-width:100%;opacity:.85;" />`
+    : `<span style="font-family:${TOKENS.font};font-size:12px;font-weight:700;color:${TOKENS.soft};">${escapeHtml(b.name)}</span>`;
+
   return [
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 0;">`,
     '<tr><td align="center" style="padding:0 12px;">',
     reason
       ? `<div style="font-family:${TOKENS.font};font-size:12px;line-height:1.6;color:${TOKENS.muted};padding-bottom:8px;">${escapeHtml(reason)}</div>`
       : '',
-    linkHtml ? `<div style="font-family:${TOKENS.font};font-size:12px;padding-bottom:8px;">${linkHtml}</div>` : '',
-    `<div style="font-family:${TOKENS.font};font-size:11px;color:${TOKENS.muted};">&copy; ${new Date().getFullYear()} ${escapeHtml(b.name)}</div>`,
+    linkHtml ? `<div style="font-family:${TOKENS.font};font-size:12px;padding-bottom:10px;">${linkHtml}</div>` : '',
+    `<div style="padding-bottom:6px;line-height:1;">${signOff}</div>`,
+    `<div style="font-family:${TOKENS.font};font-size:11px;color:${TOKENS.muted};">&copy; ${new Date().getFullYear()}</div>`,
     '</td></tr></table>',
   ].join('');
 }
@@ -471,7 +549,7 @@ function renderEmail({
   const b = brand();
   const defaultLinks = [
     b.baseUrl ? { label: 'Open dashboard', url: b.baseUrl } : null,
-    b.baseUrl ? { label: 'Notification settings', url: `${b.baseUrl}/portal/settings` } : null,
+    b.baseUrl ? { label: 'Your alerts', url: `${b.baseUrl}/portal/notifications` } : null,
     b.supportEmail ? { label: 'Contact support', url: `mailto:${b.supportEmail}` } : null,
   ].filter(Boolean);
 
@@ -501,25 +579,34 @@ function renderEmail({
     '<meta charset="utf-8" />',
     '<meta name="viewport" content="width=device-width, initial-scale=1" />',
     '<meta name="x-apple-disable-message-reformatting" />',
-    '<meta name="color-scheme" content="light only" />',
+    // Dark by design, in both modes: this tells a client not to invert it.
+    '<meta name="color-scheme" content="dark" />',
+    '<meta name="supported-color-schemes" content="dark" />',
     `<title>${escapeHtml(title)}</title>`,
     '<style>',
-    '@media only screen and (max-width:660px){',
+    ':root{color-scheme:dark;supported-color-schemes:dark;}',
+    // Outlook.com rewrites colours under its own dark theme; these put them
+    // back. Everything else already ships the dark values inline.
+    `[data-ogsc] .ew-page{background:${TOKENS.page} !important;}`,
+    `[data-ogsc] .ew-card{background:${TOKENS.card} !important;}`,
+    `[data-ogsc] .ew-text{color:${TOKENS.text} !important;}`,
+    '@media only screen and (max-width:720px){',
     '.ew-card{width:100% !important;border-radius:0 !important;}',
     '.ew-pad{padding:24px 18px !important;}',
+    '.ew-band{padding:20px 18px !important;border-radius:0 !important;}',
     // Side-by-side halves become full-width rows: below this width there is
     // not enough room for two columns of readable text.
     '.ew-col{display:block !important;width:100% !important;padding:0 0 14px !important;}',
     '}',
     '</style>',
     '</head>',
-    `<body style="margin:0;padding:0;background:${TOKENS.page};-webkit-font-smoothing:antialiased;">`,
+    `<body class="ew-page" style="margin:0;padding:0;background:${TOKENS.page};-webkit-font-smoothing:antialiased;">`,
     `<div style="display:none;font-size:1px;color:${TOKENS.page};line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">${escapeHtml(preheader)}</div>`,
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${TOKENS.page};">`,
-    '<tr><td align="center" style="padding:32px 12px;">',
-    `<table role="presentation" class="ew-card" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px;max-width:640px;background:${TOKENS.card};border:1px solid ${TOKENS.border};border-top:4px solid ${b.color};border-radius:12px;">`,
-    '<tr><td class="ew-pad" style="padding:28px 32px 30px;">',
+    `<table role="presentation" class="ew-page" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${TOKENS.page}" style="background:${TOKENS.page};">`,
+    '<tr><td align="center" style="padding:40px 12px 44px;">',
+    `<table role="presentation" class="ew-card" width="700" cellpadding="0" cellspacing="0" border="0" bgcolor="${TOKENS.card}" style="width:700px;max-width:700px;background:${TOKENS.card};border:1px solid ${TOKENS.border};border-radius:14px;">`,
     header(),
+    '<tr><td class="ew-pad" style="padding:30px 34px 32px;">',
     body,
     '</td></tr></table>',
     footer({ reason, links: links || defaultLinks }),
@@ -538,8 +625,8 @@ function renderText(lines) {
 }
 
 module.exports = {
-  EMBLEM_CID,
-  EMBLEM_SRC,
+  LOGO_CID,
+  LOGO_SRC,
   TOKENS,
   brand,
   withBrandOverride,
@@ -559,8 +646,10 @@ module.exports = {
   bulletList,
   callout,
   columns,
+  panel,
+  codeValue,
   detailPanel,
-  orDivider,
+  fact,
   divider,
   button,
   renderEmail,

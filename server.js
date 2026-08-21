@@ -32,6 +32,8 @@ app.use(helmet({
       frameSrc: ["'self'", 'https://accounts.google.com']
         .concat(firebaseAuthDomain ? [`https://${firebaseAuthDomain}`] : []),
       objectSrc: ["'none'"],
+      manifestSrc: ["'self'"],
+      workerSrc: ["'self'"], // the offline shell service worker, nothing else
       baseUri: ["'self'"],
       formAction: ["'self'"],
       frameAncestors: ["'self'"], // no embedding this app in someone else's page
@@ -65,9 +67,9 @@ app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
     // Helmet defaults every response to Cross-Origin-Resource-Policy:
     // same-origin, which is right for the app bundle but wrong for the brand
-    // emblem: it is embedded by email clients and by the Mail page preview,
-    // both of which are a different origin. Only this one file opts out.
-    if (path.basename(filePath) === 'emblem-mark.png') {
+    // artwork: it is embedded by email clients and by the Mail page preview,
+    // both of which are a different origin. Only these files opt out.
+    if (['ethixweb.png', 'emblem-mark.png'].includes(path.basename(filePath))) {
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     }
   },
@@ -91,6 +93,11 @@ app.use((req, res, next) => {
   dbReadyPromise.then(() => next(), next);
 });
 
+// Every successful write nudges the open browsers on the live wire. Mounted
+// before the routers so the finish handler is in place when they reply.
+app.use(require('./middleware/live').broadcastChanges);
+
+app.use('/api/events', require('./routes/events'));
 app.use('/api/config', require('./routes/config'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));

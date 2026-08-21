@@ -1,11 +1,12 @@
 import { toast } from "sonner";
-import { CreditCard, CheckCircle2 } from "lucide-react";
+import { CreditCard, CheckCircle2, Loader2, RefreshCw, Settings2, Wallet } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { useBillingStatus, useUsers } from "@/hooks/useData";
+import { useBillingStatus, useBillingPortal, usePayments, useSyncStripe, useUsers } from "@/hooks/useData";
 import { api } from "@/lib/api";
-import { MoneyPanel, DataList, DataRow, BentoGrid, BentoColumns, bento } from "@/components/money/Money";
+import { MoneyPanel, DataList, DataRow, PanelEmpty, BentoGrid, BentoColumns, bento } from "@/components/money/Money";
 import { AttentionNotice, FeeBreakdown, TrustFooter } from "@/components/money/Trust";
+import { PaymentList, PlanSummary, paymentMoney } from "@/components/money/Payments";
 import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -49,6 +50,9 @@ export default function Billing() {
   const isStaff = user != null && ["admin", "sales", "project_manager"].includes(user.role);
   const { data, isLoading, isError, error, refetch } = useBillingStatus();
   const { data: users } = useUsers();
+  const { data: payments } = usePayments();
+  const sync = useSyncStripe();
+  const portal = useBillingPortal();
 
   const checkout = useMutation({
     mutationFn: () => api<{ url: string }>("POST", "/billing/checkout"),
@@ -57,6 +61,15 @@ export default function Billing() {
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "Checkout failed"),
   });
+
+  /** Card details are entered on Stripe's own page, never on ours. */
+  const openPortal = () =>
+    portal.mutate(undefined, {
+      onSuccess: (d) => {
+        window.location.href = d.url;
+      },
+      onError: (err) => toast.error(err instanceof Error ? err.message : "Could not open the payment settings"),
+    });
 
   if (isLoading) {
     return (
@@ -84,9 +97,37 @@ export default function Billing() {
 
     return (
       <BentoGrid className="mx-auto w-full max-w-6xl">
-        <header className={bento(4)}>
-          <h1 className="text-2xl leading-tight font-semibold tracking-tight">Payments</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Plan status for every client account.</p>
+        <header className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${bento(4)}`}>
+          <div>
+            <h1 className="text-2xl leading-tight font-semibold tracking-tight">Payments</h1>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Every plan and every payment, read straight from Stripe.
+            </p>
+          </div>
+          {user?.role === "admin" && (
+            <Button
+              variant="outline"
+              className="h-10 w-full gap-2 px-4 sm:w-auto"
+              disabled={sync.isPending || data?.enabled === false}
+              title={data?.enabled === false ? "Stripe is not configured yet" : "Pull the latest from Stripe"}
+              onClick={() =>
+                sync.mutate(undefined, {
+                  onSuccess: (r) => {
+                    const failed = r.synced.filter((x) => x.error);
+                    toast.success(
+                      failed.length === 0
+                        ? `Synced ${r.synced.length} account${r.synced.length === 1 ? "" : "s"} from Stripe`
+                        : `Synced with ${failed.length} problem${failed.length === 1 ? "" : "s"}: ${failed[0].error}`,
+                    );
+                  },
+                  onError: (err) => toast.error(err instanceof Error ? err.message : "Sync failed"),
+                })
+              }
+            >
+              {sync.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              Sync from Stripe
+            </Button>
+          )}
         </header>
 
         <MoneyPanel className={bento(4)} title="All client accounts" subtitle={`${rows.length} on record`}>
@@ -107,6 +148,26 @@ export default function Billing() {
                 );
               })}
             </DataList>
+          )}
+        </MoneyPanel>
+
+        <MoneyPanel
+          className={bento(4)}
+          title="Payments received"
+          subtitle={
+            payments && payments.count > 0
+              ? `${paymentMoney(payments.total, payments.currency)} across ${payments.count} payment${payments.count === 1 ? "" : "s"}`
+              : "Nothing recorded yet"
+          }
+        >
+          {!payments || payments.payments.length === 0 ? (
+            <PanelEmpty>
+              {data?.enabled === false
+                ? "Stripe is not configured, so there is nothing to mirror yet."
+                : "No payments have come through Stripe yet. Sync pulls in anything already on the account."}
+            </PanelEmpty>
+          ) : (
+            <PaymentList payments={payments.payments.slice(0, 25)} />
           )}
         </MoneyPanel>
 
@@ -169,13 +230,38 @@ export default function Billing() {
                     </>
                   )}
 
+                  <PlanSummary
+                    amount={billing?.amount}
+                    currency={billing?.currency}
+                    interval={billing?.interval}
+                    currentPeriodEnd={billing?.currentPeriodEnd}
+                    cancelAtPeriodEnd={billing?.cancelAtPeriodEnd}
+                    cardBrand={billing?.cardBrand}
+                    cardLast4={billing?.cardLast4}
+                  />
+
                   {billing?.updatedAt && (
                     <p className="mt-3 text-sm text-muted-foreground">
                       Last checked {plainDate(billing.updatedAt)}.
                     </p>
                   )}
 
-                  {!enabled ? (
+                  {billing?.stripeCustomerId && (
+                    <Button
+                      variant="outline"
+                      className="mt-4 h-11 w-full gap-2 px-4 sm:h-10 sm:w-auto"
+                      disabled={portal.isPending}
+                      onClick={openPortal}
+                    >
+                      {portal.isPending ? <Loader2 className="size-4 animate-spin" /> : <Settings2 className="size-4" />}
+                      Manage payment method
+                    </Button>
+                  )}
+
+                  {/* Only say "no payments set up" when that is actually true.
+                      A mirrored plan with real invoices behind it is set up,
+                      whether or not this deployment holds the Stripe key. */}
+                  {!enabled && !billing?.stripeCustomerId ? (
                     <p className="mt-4 rounded-lg bg-secondary px-3 py-2.5 text-sm leading-relaxed">
                       Payments are not switched on for this account yet. Nothing is being charged to
                       you. <span className="font-medium">There is nothing you need to do.</span>
@@ -210,6 +296,28 @@ export default function Billing() {
           ]}
         />
       </div>
+
+      <MoneyPanel
+        className={bento(4)}
+        title="What you have paid"
+        subtitle={
+          payments && payments.count > 0
+            ? `${paymentMoney(payments.total, payments.currency)} in total`
+            : "Nothing yet"
+        }
+      >
+        {!payments || payments.payments.length === 0 ? (
+          <PanelEmpty>
+            <span className="flex flex-col items-center gap-1">
+              <Wallet aria-hidden className="size-6 text-muted-foreground" />
+              You have not been charged anything yet. Every payment will be listed here with a
+              receipt you can download.
+            </span>
+          </PanelEmpty>
+        ) : (
+          <PaymentList payments={payments.payments} />
+        )}
+      </MoneyPanel>
 
       <TrustFooter className={bento(4)} />
     </BentoGrid>
