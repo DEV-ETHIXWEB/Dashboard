@@ -174,7 +174,10 @@ async function initPostgresSchema() {
       id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
       role TEXT NOT NULL, company TEXT, password TEXT, google_id TEXT,
       two_factor_enabled BOOLEAN DEFAULT FALSE, two_factor_contact TEXT,
-      password_expires_at BIGINT, allowed_pages TEXT
+      password_expires_at BIGINT, allowed_pages TEXT,
+      slack_channel_id TEXT, slack_channel_name TEXT,
+      is_super_admin BOOLEAN DEFAULT FALSE,
+      admin_trusted BOOLEAN DEFAULT FALSE, admin_trusted_at TEXT, admin_trusted_by TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT, client_id TEXT,
@@ -243,6 +246,15 @@ async function initPostgresSchema() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_payments_client ON payments(client_id)`,
     `CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON payments(paid_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS approval_requests (
+      id TEXT PRIMARY KEY, action TEXT NOT NULL, summary TEXT, payload TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      requested_by TEXT, requested_at TEXT, expires_at BIGINT,
+      decided_by TEXT, decided_at TEXT, decision_note TEXT,
+      executed_at TEXT, execution_error TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_approval_requests_requested_at ON approval_requests(requested_at DESC)`,
     `CREATE TABLE IF NOT EXISTS otp_codes (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, code TEXT NOT NULL, ip_address TEXT,
       created_at TEXT, expires_at BIGINT, consumed BOOLEAN DEFAULT FALSE, attempts INTEGER DEFAULT 0
@@ -290,6 +302,12 @@ async function initPostgresSchema() {
     `ALTER TABLE billing ADD COLUMN IF NOT EXISTS card_last4 TEXT`,
     `ALTER TABLE billing ADD COLUMN IF NOT EXISTS latest_invoice_url TEXT`,
     `ALTER TABLE billing ADD COLUMN IF NOT EXISTS synced_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_trusted BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_trusted_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_trusted_by TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_channel_id TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_channel_name TEXT`,
   ];
   for (const sql of alterations) {
     try {
@@ -317,8 +335,17 @@ async function seed() {
       // Two admins from the start: this workspace is multi-admin by design, and
       // seeding a single one makes it look like an owner account that cannot
       // be shared. Both have identical powers.
-      db.insert('users', { id: 'u-admin', name: 'Admin User', email: 'admin@ethixweb.local', role: 'admin', password: hash('Admin#2026!') }),
-      db.insert('users', { id: 'u-admin-2', name: 'Priya Nair', email: 'priya.nair@ethixweb.local', role: 'admin', password: hash('Admin#2026!') }),
+      // The seeded workspace has one super admin and one ordinary admin, so the
+      // approval flow is exercised the moment anyone tries it.
+      db.insert('users', {
+        id: 'u-admin', name: 'Admin User', email: 'admin@ethixweb.local', role: 'admin',
+        password: hash('Admin#2026!'), isSuperAdmin: true, adminTrusted: true,
+        adminTrustedAt: new Date().toISOString(), adminTrustedBy: 'system',
+      }),
+      db.insert('users', {
+        id: 'u-admin-2', name: 'Priya Nair', email: 'priya.nair@ethixweb.local', role: 'admin',
+        password: hash('Admin#2026!'), isSuperAdmin: false, adminTrusted: false,
+      }),
       db.insert('users', { id: 'u-sales', name: 'Emily Turner', email: 'emily.turner@ethixweb.local', role: 'sales', password: hash('Sales#2026!') }),
       db.insert('users', { id: 'u-pm', name: 'Ryan Coleman', email: 'ryan.coleman@ethixweb.local', role: 'project_manager', password: hash('Manager#2026!') }),
       db.insert('users', { id: 'u-employee', name: 'Jordan Brooks', email: 'jordan.brooks@ethixweb.local', role: 'employee', password: hash('Staff#2026!') }),

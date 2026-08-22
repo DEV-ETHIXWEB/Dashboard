@@ -85,7 +85,7 @@ function PriorityFilter({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
-      <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Priority</span>
+      <span className="t-label text-muted-foreground">Priority</span>
 
       <button
         type="button"
@@ -304,7 +304,7 @@ function SpaceBrowser({ onOpenTask }: { onOpenTask: (task: ClickUpTask) => void 
             >
               <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", isOpen && "rotate-90")} />
               <span className="min-w-0 flex-1 truncate">{space.name}</span>
-              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{listCount}</span>
+              <span className="shrink-0 numeric text-xs text-muted-foreground">{listCount}</span>
             </button>
 
             {isOpen && (
@@ -324,7 +324,7 @@ function SpaceBrowser({ onOpenTask }: { onOpenTask: (task: ClickUpTask) => void 
                   <div key={folder.id} className="mt-3 first:mt-1">
                     <div className="flex items-center gap-1.5 px-2 pb-1">
                       <Building2 aria-hidden className="size-3 shrink-0 text-primary" />
-                      <span className="min-w-0 truncate text-[11px] font-semibold tracking-wider text-foreground uppercase">
+                      <span className="min-w-0 truncate t-label text-foreground">
                         {folder.name}
                       </span>
                       <span aria-hidden className="h-px flex-1 bg-border" />
@@ -369,7 +369,7 @@ function SpaceBrowser({ onOpenTask }: { onOpenTask: (task: ClickUpTask) => void 
 
       {/* Desktop: sticky tree with its own scroll, so a long workspace doesn't stretch the page. */}
       <Panel className="scrollbar-slim hidden lg:sticky lg:top-4 lg:block lg:max-h-[calc(100svh-6rem)] lg:overflow-y-auto">
-        <div className="sticky top-0 z-10 rounded-t-2xl border-b border-border bg-card px-4 py-2.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        <div className="sticky top-0 z-10 rounded-t-2xl border-b border-border bg-card px-4 py-2.5 t-label text-muted-foreground">
           {tree.data.workspace.name}
         </div>
         {nav}
@@ -382,7 +382,7 @@ function SpaceBrowser({ onOpenTask }: { onOpenTask: (task: ClickUpTask) => void 
           <Panel className="overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
               <div className="min-w-0">
-                <p className="truncate text-xs tracking-wide text-muted-foreground uppercase">
+                <p className="truncate t-label text-muted-foreground">
                   {selected.folder ? `${selected.space} / ${selected.folder}` : selected.space}
                 </p>
                 <h2 className="truncate text-base font-semibold tracking-tight text-foreground">{selected.name}</h2>
@@ -470,7 +470,7 @@ function ListButton({
     >
       <span className="min-w-0 truncate">{list.name}</span>
       {list.taskCount != null && (
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{list.taskCount}</span>
+        <span className="shrink-0 numeric text-xs text-muted-foreground">{list.taskCount}</span>
       )}
     </button>
   );
@@ -603,7 +603,7 @@ function UrgencyView({ onOpenTask }: { onOpenTask: (task: ClickUpTask) => void }
         <Panel className="overflow-hidden">
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold tracking-tight text-foreground">{BUCKET_LABELS[active.bucket]}</h2>
-            <span className="text-xs tabular-nums text-muted-foreground">
+            <span className="numeric text-xs text-muted-foreground">
               {visible.length === active.tasks.length
                 ? `${active.tasks.length} ${active.tasks.length === 1 ? "task" : "tasks"}`
                 : `${visible.length} of ${active.tasks.length}`}

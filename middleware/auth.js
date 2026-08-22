@@ -57,6 +57,11 @@ function safeUser(user) {
   // Stored as JSON text on Postgres, as an array on Firestore -- callers always
   // get an array, or null meaning "no page restrictions".
   rest.allowedPages = parseAllowedPages(rest.allowedPages);
+  // Postgres hands these back as booleans and Firestore may hand back strings;
+  // callers should never have to care which.
+  const roles = require('../utils/roles');
+  rest.isSuperAdmin = roles.isSuperAdmin(user);
+  rest.adminTrusted = roles.isTrustedAdmin(user);
   return rest;
 }
 

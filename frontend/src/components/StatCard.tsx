@@ -25,8 +25,8 @@ export function StatCard({
     <div className="glass-card rounded-2xl p-5 hover:-translate-y-0.5 transition-all duration-300 cursor-default group">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-medium text-muted-foreground tracking-wide uppercase">{label}</p>
-          <p className="mt-1.5 text-2xl font-bold tracking-tight text-foreground">{value}</p>
+          <p className="t-label text-muted-foreground">{label}</p>
+          <p className="mt-1.5 text-2xl font-semibold tracking-tight text-foreground">{value}</p>
           {trend && <p className="mt-1 text-xs text-muted-foreground">{trend}</p>}
         </div>
         <div className={cn(

@@ -28,6 +28,7 @@ const PATH_TOPICS = [
   [/^\/api\/domains\b/, ['domains']],
   [/^\/api\/notifications\b/, ['notifications']],
   [/^\/api\/users\b/, ['users']],
+  [/^\/api\/mail\b/, ['mail']],
   [/^\/api\/integrations\b/, ['tasks', 'progress']],
 ];
 

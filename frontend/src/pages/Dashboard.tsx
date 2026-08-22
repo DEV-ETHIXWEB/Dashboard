@@ -105,7 +105,7 @@ export default function Dashboard() {
     <BentoGrid className="mx-auto w-full max-w-6xl">
       <header className={`flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between ${bento(4)}`}>
         <div>
-          <h1 className="text-2xl leading-tight font-semibold tracking-tight text-foreground">
+          <h1 className="t-title text-foreground">
             Hello, {user?.name?.split(" ")[0] ?? "there"}
           </h1>
           <p className="mt-0.5 text-sm text-muted-foreground">

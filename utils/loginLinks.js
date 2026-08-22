@@ -22,6 +22,31 @@ const TOKEN_TTL_MS = 15 * 60 * 1000;
  * waiting. Still single-use.
  */
 const WELCOME_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How long an admin may make a link live for.
+ *
+ * A sign-in link is a bearer credential: whoever holds it is the client. So the
+ * range is bounded at both ends rather than being a free-text field. Five
+ * minutes is short enough to hand over on a call; seven days is the longest
+ * that is still defensible for something sitting in a WhatsApp thread.
+ */
+const MIN_TTL_MS = 5 * 60 * 1000;
+const MAX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Turn whatever an admin asked for into a usable lifetime.
+ *
+ * Anything unparseable falls back to the default rather than erroring: the
+ * point of the field is convenience, and a typo should not block handing
+ * somebody a link.
+ */
+function resolveTtl(minutes) {
+  const asNumber = Number(minutes);
+  if (!Number.isFinite(asNumber) || asNumber <= 0) return TOKEN_TTL_MS;
+  const ms = Math.round(asNumber) * 60 * 1000;
+  return Math.min(Math.max(ms, MIN_TTL_MS), MAX_TTL_MS);
+}
 const SECRET_BYTES = 32;
 
 /** Fresh id + secret + the hash to store. The secret is never persisted. */
@@ -92,6 +117,9 @@ async function issueFor(user, { ipAddress = null, ttlMs = TOKEN_TTL_MS } = {}) {
 module.exports = {
   TOKEN_TTL_MS,
   WELCOME_TOKEN_TTL_MS,
+  MIN_TTL_MS,
+  MAX_TTL_MS,
+  resolveTtl,
   issueToken,
   issueFor,
   hashSecret,

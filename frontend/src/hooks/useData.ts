@@ -23,7 +23,9 @@ export function useOtpLogs() {
   return useQuery({
     queryKey: ["otp-logs"],
     queryFn: () => api<{ logs: OtpLogEntry[] }>("GET", "/auth/otp-logs").then((d) => d.logs),
-    refetchInterval: 5000,
+    // A code now arrives on the `otp` topic the moment it is issued; five
+    // second polling was how this used to feel immediate.
+    refetchInterval: 60_000,
   });
 }
 
@@ -110,10 +112,16 @@ export function useCreateUser() {
       password?: string;
       passwordExpiresAt?: number | null;
       allowedPages?: string[] | null;
+      /** The one Slack channel a client may read and write. Clients only. */
+      slackChannelId?: string | null;
+      slackChannelName?: string | null;
       /** Defaults to true on the server: mail the credentials to the new user. */
       sendEmail?: boolean;
     }) =>
-      api<{ user: UserRecord; temporaryPassword: string; emailed: boolean; emailConfigured: boolean }>(
+      api<{
+        user: UserRecord; temporaryPassword: string; emailed: boolean; emailConfigured: boolean;
+        slackChannel?: { joined: boolean; message?: string };
+      }>(
         "POST",
         "/users",
         body,
@@ -305,7 +313,8 @@ export function useNotifications() {
     // Every role now receives notifications -- staff get handover and
     // collaboration requests, not just clients.
     enabled: Boolean(user),
-    refetchInterval: 30_000,
+    // Pushed on the `notifications` topic; this is only a safety net.
+    refetchInterval: 120_000,
   });
 }
 

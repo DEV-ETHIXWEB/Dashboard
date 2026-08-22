@@ -6,6 +6,18 @@ const SCHEMAS = {
     'two_factor_enabled', 'two_factor_contact', 'password_expires_at',
     // JSON array of client page keys (see utils/clientPages.js). NULL = no restriction.
     'allowed_pages',
+    // A super admin is an admin with two extra powers: they can appoint other
+    // admins, and they can act without a second signature. Deliberately a flag
+    // on top of role 'admin' rather than a role of its own -- every existing
+    // `role === 'admin'` check in the app therefore grants it automatically,
+    // and no permission can be forgotten by omission. See utils/roles.js.
+    // The one Slack channel this client can see and write into. Set when the
+    // login is issued; nothing else in Slack is ever reachable from the portal.
+    'slack_channel_id', 'slack_channel_name',
+    'is_super_admin',
+    // A newly appointed admin starts untrusted: their sensitive changes are
+    // held for a second signature until a super admin vouches for them.
+    'admin_trusted', 'admin_trusted_at', 'admin_trusted_by',
   ],
   projects: ['id', 'name', 'type', 'client_id', 'assigned_pm_id', 'status', 'description', 'created_at'],
   tasks: ['id', 'project_id', 'name', 'assignee_id', 'status', 'priority', 'due'],
@@ -57,6 +69,15 @@ const SCHEMAS = {
     'description', 'amount', 'currency', 'status', 'paid_at', 'period_start', 'period_end',
     'invoice_url', 'receipt_url', 'invoice_number', 'card_brand', 'card_last4',
     'failure_message', 'created_at',
+  ],
+  // A sensitive change proposed by an admin who cannot yet make it alone.
+  // `action` names an entry in utils/approvals.js ACTIONS; `payload` is the
+  // arguments that action will be executed with, once and only once.
+  approval_requests: [
+    'id', 'action', 'summary', 'payload', 'status',
+    'requested_by', 'requested_at', 'expires_at',
+    'decided_by', 'decided_at', 'decision_note',
+    'executed_at', 'execution_error',
   ],
   otp_codes: ['id', 'user_id', 'code', 'ip_address', 'created_at', 'expires_at', 'consumed', 'attempts'],
   // One-tap sign-in links emailed to clients. Only the SHA-256 of the secret

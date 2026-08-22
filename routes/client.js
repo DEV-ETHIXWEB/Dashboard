@@ -20,7 +20,8 @@ const express = require('express');
 const router = express.Router();
 
 const { db } = require('../db/setup');
-const { requireAuth, requireCSRF } = require('../middleware/auth');
+const { requireAuth, requireCSRF, audit } = require('../middleware/auth');
+const live = require('../utils/liveBus');
 const { requirePage } = require('../utils/clientPages');
 const clickup = require('../utils/clickup');
 const slack = require('../utils/slack');
@@ -28,7 +29,6 @@ const workflow = require('../utils/ticketWorkflow');
 const messages = require('../utils/emailMessages');
 
 router.use(requireAuth);
-router.use(requirePage('progress'));
 
 const STAFF_ROLES = ['admin', 'project_manager', 'sales', 'employee'];
 
@@ -97,7 +97,7 @@ async function boardStateFor(ticket) {
  * The progress board: every ticket this client has, with the live task-board
  * state attached where one exists.
  */
-router.get('/progress', async (req, res, next) => {
+router.get('/progress', requirePage('progress'), async (req, res, next) => {
   try {
     const client = await resolveScope(req);
     if (!client) return res.json({ client: null, tickets: [], projects: [], summary: emptySummary(), integrations: integrationFlags() });
@@ -175,7 +175,7 @@ async function loadOwnTicket(req, res, next) {
  * is reported rather than hidden, so "no updates yet" never gets confused with
  * "the integration is down".
  */
-router.get('/tickets/:id/activity', loadOwnTicket, async (req, res, next) => {
+router.get('/tickets/:id/activity', requirePage('progress'), loadOwnTicket, async (req, res, next) => {
   try {
     const ticket = req.ticket;
     const [updates, users] = await Promise.all([workflow.listUpdates(ticket.id), db.all('users')]);
@@ -258,7 +258,7 @@ router.get('/tickets/:id/activity', loadOwnTicket, async (req, res, next) => {
  * ticket timeline uses, so it lands in the Slack thread and on the ClickUp task
  * exactly like a reply posted anywhere else.
  */
-router.post('/tickets/:id/reply', requireCSRF, loadOwnTicket, async (req, res, next) => {
+router.post('/tickets/:id/reply', requirePage('progress'), requireCSRF, loadOwnTicket, async (req, res, next) => {
   try {
     const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
     if (!body) return res.status(400).json({ error: 'Write something before sending.' });
@@ -270,6 +270,121 @@ router.post('/tickets/:id/reply', requireCSRF, loadOwnTicket, async (req, res, n
     });
   } catch (err) {
     if (err instanceof workflow.WorkflowError) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+
+// --- the client's own Slack channel ---------------------------------------
+
+/** The invisible marker that tells a portal message from a Slack one. */
+const PORTAL_MARKER = '\u200b';
+
+/**
+ * One channel, named on the client's own record.
+ *
+ * The channel id is read from the signed-in user, never from the request, so
+ * there is no parameter to tamper with: a client cannot ask for a channel that
+ * is not theirs because they never name one. Staff may look at a client's
+ * channel by naming the client, and get exactly what that client sees.
+ *
+ * Everything in the channel is shown. That is the point of designating one --
+ * it is the shared room, the way a Slack Connect channel is, and the admin
+ * screen says so when it is chosen. Internal chatter belongs in another
+ * channel.
+ */
+async function channelFor(req) {
+  const client = await resolveScope(req);
+  if (!client) return { client: null, channelId: null, channelName: null };
+  return {
+    client,
+    channelId: client.slackChannelId || null,
+    channelName: client.slackChannelName || null,
+  };
+}
+
+router.get('/channel', requirePage('messages'), async (req, res, next) => {
+  try {
+    const { client, channelId, channelName } = await channelFor(req);
+    if (!client) return res.json({ enabled: slack.isEnabled(), channel: null, messages: [] });
+
+    if (!slack.isEnabled() || !channelId) {
+      return res.json({
+        enabled: slack.isEnabled(),
+        channel: null,
+        messages: [],
+        client: { id: client.id, name: client.name },
+      });
+    }
+
+    const messages = await slack.fetchChannelMessages(channelId, { limit: 50 });
+    res.json({
+      enabled: true,
+      channel: { id: channelId, name: channelName },
+      client: { id: client.id, name: client.name },
+      messages: messages
+        .map((m) => ({
+          id: m.id,
+          author: m.authorName,
+          body: m.text,
+          at: m.at,
+          isBot: m.isBot,
+          // Anything the portal posted carries the marker below, so the client
+          // can tell their own words from the team's.
+          fromPortal: typeof m.text === 'string' && m.text.includes(PORTAL_MARKER),
+        }))
+        .sort((a, b) => Number(a.at) - Number(b.at)),
+    });
+  } catch (err) {
+    // A channel the bot cannot reach is a setup problem with an instruction
+    // attached, not a server fault. The page shows the sentence.
+    if (err && err.name === 'SlackError') {
+      return res.json({ enabled: true, channel: null, messages: [], slackError: err.message });
+    }
+    next(err);
+  }
+});
+
+
+/**
+ * Write into the channel from the portal.
+ *
+ * Posted as the app's bot, because a client has no Slack account -- so the
+ * message carries their name explicitly. Without that the team would see an
+ * unattributed line from a bot and have to guess who sent it.
+ */
+router.post('/channel/messages', requirePage('messages'), requireCSRF, async (req, res, next) => {
+  try {
+    const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
+    if (!body) return res.status(400).json({ error: 'Write something before sending.' });
+    if (body.length > 4000) return res.status(400).json({ error: 'Keep a message under 4000 characters.' });
+
+    const { client, channelId } = await channelFor(req);
+    if (!client) return res.status(404).json({ error: 'No client account for this request' });
+    if (!slack.isEnabled() || !channelId) {
+      return res.status(503).json({ error: 'Messaging is not set up for this account yet.' });
+    }
+
+    // A client writes as themselves; staff writing from the client's board
+    // write as themselves too, so the channel reads as a real conversation.
+    const who = req.user.role === 'client'
+      ? `${req.user.name}${client.company ? ` (${client.company})` : ''}`
+      : `${req.user.name} · EthixWeb`;
+
+    await slack.withChannelAccess(channelId, () =>
+      slack.postMessage({
+        channelId,
+        text: `${PORTAL_MARKER}*${who}*
+${body}`,
+      }));
+
+    await audit(req.user.id, 'send', 'client_message', client.id);
+    live.publish('messages', { to: [client.id] });
+
+    res.status(201).json({ ok: true, at: Date.now() });
+  } catch (err) {
+    // A SlackError already carries a status and a sentence an admin can act on.
+    if (err && err.name === 'SlackError') return res.status(err.status || 502).json({ error: err.message });
     next(err);
   }
 });

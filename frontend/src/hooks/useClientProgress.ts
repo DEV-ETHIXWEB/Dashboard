@@ -21,7 +21,9 @@ export function useProgressBoard(clientId?: string | null) {
     queryFn: () =>
       api<ProgressBoard>("GET", clientId ? `/client/progress?clientId=${encodeURIComponent(clientId)}` : "/client/progress"),
     enabled: allowed,
-    // The board mirrors ClickUp and Slack, so it goes stale on its own schedule.
+    // App-side changes arrive on the `progress` topic. The interval remains
+    // because the board also mirrors ClickUp, and nothing tells this app when
+    // somebody drags a card over there.
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

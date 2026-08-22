@@ -43,7 +43,8 @@ export function useMyTicketRequests() {
     queryKey: ["ticket-requests", "mine"],
     queryFn: () => api<{ requests: TicketUpdate[] }>("GET", "/tickets/requests/mine").then((d) => d.requests),
     enabled: Boolean(user),
-    refetchInterval: 60_000,
+    // Covered by the `tickets` topic; kept long as a fallback.
+    refetchInterval: 120_000,
   });
 }
 

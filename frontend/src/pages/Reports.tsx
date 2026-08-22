@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { FileText, Plus, Trash2, Loader2, X, Upload as UploadIcon } from "lucide-react";
+import { Download, Eye, FileText, Plus, Trash2, Loader2, X, Upload as UploadIcon } from "lucide-react";
 import { useReports, useUsers, useUploadReport, useDeleteReport } from "@/hooks/useData";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
@@ -8,7 +9,8 @@ import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { MoneyPanel, DataList, DataRow, BentoGrid, bento } from "@/components/money/Money";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -212,24 +214,47 @@ export default function Reports() {
                   .filter(Boolean)
                   .join(" · ")}
                 action={
-                  <div className="flex shrink-0 items-center gap-1">
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {/* Open shows it; Download saves it. They were one link
+                        before, and because the server always sent
+                        `attachment` the new tab downloaded and shut itself --
+                        which looks like nothing happened. */}
+                    {/* Opens inside the portal rather than handing the file to
+                        the browser, which downloads it for anyone whose Chrome
+                        is set to "download PDFs instead of opening them". */}
+                    <Link
+                      to={`/portal/reports/${r.id}`}
+                      aria-label={`Open ${r.name}`}
+                      className={cn(
+                        buttonVariants({ variant: "outline", size: "sm" }),
+                        "h-9 gap-1.5 px-3 coarse:h-10",
+                      )}
+                    >
+                      <Eye aria-hidden className="size-3.5" />
+                      Open
+                    </Link>
                     <a
                       href={apiUrl(`/reports/${r.id}/download`)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="tap-target focus-clear -mr-2 inline-flex shrink-0 items-center justify-center rounded-lg px-2 text-sm font-medium text-link hover:underline"
+                      download={r.name}
+                      aria-label={`Download ${r.name}`}
+                      title="Download"
+                      className={cn(
+                        buttonVariants({ variant: "ghost", size: "icon-sm" }),
+                        "size-9 text-muted-foreground hover:text-foreground coarse:size-10",
+                      )}
                     >
-                      Open
+                      <Download aria-hidden className="size-4" />
                     </a>
                     {canDelete && (
                       <Button
                         variant="ghost"
-                        size="icon-xs"
+                        size="icon-sm"
                         aria-label={`Delete ${r.name}`}
-                        className="hover:bg-destructive/10 hover:text-destructive text-destructive/80"
+                        title="Delete"
+                        className="size-9 text-destructive/80 hover:bg-destructive/10 hover:text-destructive coarse:size-10"
                         onClick={() => remove(r.id, r.name)}
                       >
-                        <Trash2 aria-hidden className="size-3.5" />
+                        <Trash2 aria-hidden className="size-4" />
                       </Button>
                     )}
                   </div>

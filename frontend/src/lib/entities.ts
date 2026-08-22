@@ -9,6 +9,9 @@ export interface UserRecord {
   passwordExpiresAt?: number | null;
   /** null = every client section; an array = only these. */
   allowedPages?: ClientPageKey[] | null;
+  /** Admin standing. See utils/roles.js -- a super admin is a flagged admin. */
+  isSuperAdmin?: boolean;
+  adminTrusted?: boolean;
 }
 
 export interface Project {
@@ -80,6 +83,8 @@ export interface Report {
   sizeBytes: number;
   uploadedBy: string;
   createdAt: string;
+  /** False when the record exists but its bytes do not. */
+  hasFile?: boolean;
 }
 
 export interface BudgetItem {

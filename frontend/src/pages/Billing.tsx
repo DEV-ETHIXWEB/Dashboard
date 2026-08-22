@@ -99,7 +99,7 @@ export default function Billing() {
       <BentoGrid className="mx-auto w-full max-w-6xl">
         <header className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${bento(4)}`}>
           <div>
-            <h1 className="text-2xl leading-tight font-semibold tracking-tight">Payments</h1>
+            <h1 className="t-title">Payments</h1>
             <p className="mt-0.5 text-sm text-muted-foreground">
               Every plan and every payment, read straight from Stripe.
             </p>
@@ -184,7 +184,7 @@ export default function Billing() {
   return (
     <BentoGrid className="mx-auto w-full max-w-6xl">
       <header className={bento(4)}>
-        <h1 className="text-2xl leading-tight font-semibold tracking-tight">Your payments</h1>
+        <h1 className="t-title">Your payments</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
           What you pay, when you pay it, and exactly what it covers.
         </p>
@@ -216,7 +216,7 @@ export default function Billing() {
               node: (
                 <section className="rounded-2xl bg-card px-4 py-4 ring-1 ring-foreground/10 sm:px-5 sm:py-5">
                   <p className="text-sm font-medium text-muted-foreground">Your plan</p>
-                  <p className="mt-1 text-2xl leading-tight font-semibold tracking-tight">
+                  <p className="mt-1 t-title">
                     {billing?.plan ?? "No plan yet"}
                   </p>
 

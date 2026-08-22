@@ -37,7 +37,7 @@ export function SummaryCard({
         <Icon className="size-5" />
       </div>
       <div className="min-w-0">
-        <div className="text-2xl font-bold tracking-tight text-foreground tabular-nums">{value}</div>
+        <div className="numeric-display text-2xl font-semibold text-foreground">{value}</div>
         <div className="truncate text-xs font-medium text-muted-foreground">{label}</div>
       </div>
     </div>

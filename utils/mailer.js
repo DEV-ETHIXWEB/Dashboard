@@ -264,6 +264,9 @@ async function sendViaWebhook({ to, subject, text, html }) {
  */
 async function logEmail(entry) {
   try {
+    // The Mail page used to poll every 30 seconds to notice a send. It does
+    // not need to: this is the moment a send becomes a fact.
+    require('./liveBus').publish('mail');
     // Required lazily so requiring the mailer never pulls in a database
     // connection -- template previews and tests do not need one.
     const { db } = require('../db/setup');
@@ -291,9 +294,63 @@ async function logEmail(entry) {
  *
  * `template`, `entity`, and `entityId` are metadata for the Mail page only.
  */
+/**
+ * A test inbox to send everything to instead of the real recipient.
+ *
+ * Resend's sandbox, and most providers' free tiers, refuse any address except
+ * the account owner's. Without this the whole app looks broken in testing:
+ * every client email fails with a provider error that has nothing to do with
+ * the app. Set MAIL_REDIRECT_TO and outbound mail goes to that one inbox with
+ * the intended recipient named in the subject, so the flow can still be walked
+ * end to end. Unset in production and nothing about delivery changes.
+ */
+function redirectTo() {
+  const value = String(process.env.MAIL_REDIRECT_TO || '').trim();
+  return isAddress(value) ? value : null;
+}
+
+/**
+ * Provider errors, in words the person reading them can act on.
+ *
+ * A 403 from Resend arrives as a JSON blob about domain verification. Dropping
+ * that into a toast tells an admin nothing they can use; the raw text still
+ * goes to the mail log, where somebody debugging will look for it.
+ */
+function explainSendError(message) {
+  const raw = String(message || '');
+
+  if (/only send testing emails to your own email address/i.test(raw)) {
+    const own = raw.match(/\(([^)]+@[^)]+)\)/)?.[1];
+    return `Your email provider is still in test mode: it will only deliver to ${own || 'the account owner'}. `
+      + 'Verify a sending domain, or set MAIL_REDIRECT_TO to that address to keep testing.';
+  }
+  if (/\b(401|403)\b/.test(raw) && /api[_ ]?key|unauthor/i.test(raw)) {
+    return 'The email provider refused our credentials. Check the API key.';
+  }
+  if (/domain is not verified|not verified/i.test(raw)) {
+    return 'The sending domain is not verified with the email provider yet.';
+  }
+  if (/rate.?limit|too many requests|\b429\b/i.test(raw)) {
+    return 'The email provider is rate limiting us. Try again shortly.';
+  }
+  if (/ECONNREFUSED|ETIMEDOUT|ENOTFOUND|getaddrinfo/i.test(raw)) {
+    return 'Could not reach the mail server. Check the host and port.';
+  }
+  if (/Invalid login|authentication failed|535/i.test(raw)) {
+    return 'The mail server rejected our username or password.';
+  }
+  return raw.length > 160 ? `${raw.slice(0, 157)}...` : raw;
+}
+
 async function sendMail({ to, subject, text, html, template, entity, entityId }) {
-  const recipients = cleanRecipients(to);
-  if (recipients.length === 0) return { ok: false, skipped: 'no valid recipients' };
+  const requested = cleanRecipients(to);
+  if (requested.length === 0) return { ok: false, skipped: 'no valid recipients' };
+
+  // The log always records who the message was *for*, even when a test inbox
+  // is where it physically went -- otherwise the record is a lie.
+  const redirect = redirectTo();
+  const recipients = redirect ? [redirect] : requested;
+  const outSubject = redirect ? `[to: ${requested.join(', ')}] ${subject}` : subject;
 
   const transport = transportName();
   if (transport === 'none') {
@@ -308,13 +365,20 @@ async function sendMail({ to, subject, text, html, template, entity, entityId })
 
   try {
     const send = { smtp: sendViaSmtp, resend: sendViaResend, webhook: sendViaWebhook }[transport];
-    const result = await send({ to: recipients, subject, text, html });
-    await logEmail({ to: recipients, subject, html, template, entity, entityId, status: 'sent', transport: result.transport });
-    return { ...result, recipients };
+    const result = await send({ to: recipients, subject: outSubject, text, html });
+    await logEmail({
+      to: requested, subject, html, template, entity, entityId,
+      status: 'sent',
+      transport: result.transport,
+      error: redirect ? `Redirected to ${redirect} by MAIL_REDIRECT_TO` : null,
+    });
+    return { ...result, recipients: requested, redirectedTo: redirect };
   } catch (err) {
-    console.error('Email send failed:', err.message);
-    await logEmail({ to: recipients, subject, html, template, entity, entityId, status: 'failed', error: err.message });
-    return { ok: false, error: err.message, recipients };
+    const friendly = explainSendError(err.message);
+    // Short line for a person, full text for whoever debugs it later.
+    console.error('Email send failed:', friendly);
+    await logEmail({ to: requested, subject, html, template, entity, entityId, status: 'failed', error: err.message });
+    return { ok: false, error: friendly, detail: err.message, recipients: requested };
   }
 }
 
@@ -347,6 +411,8 @@ async function recentLog(limit = 100) {
 }
 
 module.exports = {
+  redirectTo,
+  explainSendError,
   isEnabled,
   transportName,
   smtpConfigured,

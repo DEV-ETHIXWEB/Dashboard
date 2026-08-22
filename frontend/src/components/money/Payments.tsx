@@ -86,7 +86,7 @@ export function PaymentList({ payments }: { payments: Payment[] }) {
             <div className="shrink-0 text-right">
               <p
                 className={cn(
-                  "text-sm font-semibold tabular-nums",
+                  "numeric text-sm font-semibold",
                   payment.status === "failed" && "text-destructive",
                   payment.status === "refunded" && "text-muted-foreground",
                 )}
@@ -154,7 +154,7 @@ export function PlanSummary({
     <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
       {lines.map((line, i) => (
         <div key={line} className="rounded-xl bg-secondary/60 px-3 py-2">
-          <dt className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+          <dt className="t-label text-muted-foreground">
             {i === 0 ? "Amount" : i === 1 ? (cancelAtPeriodEnd ? "Ends" : "Next payment") : "Card"}
           </dt>
           <dd className="mt-0.5 text-sm font-medium">{line}</dd>
