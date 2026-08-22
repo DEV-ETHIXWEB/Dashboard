@@ -85,10 +85,18 @@ app.use('/api', rateLimit({
 let dbReadyPromise = null;
 app.use((req, res, next) => {
   if (!dbReadyPromise) {
-    dbReadyPromise = seed().catch((err) => {
-      dbReadyPromise = null;
-      throw err;
-    });
+    dbReadyPromise = seed()
+      // A workspace with admins but no super admin has nobody who can appoint
+      // one, so the first boot after this feature shipped elects the
+      // longest-standing admin (or SUPER_ADMIN_EMAIL, when it is set).
+      .then(() => require('./utils/roles').ensureSuperAdmin())
+      // Watches client Slack channels and pushes changes down the live
+      // wire, so no browser has to poll Slack for itself.
+      .then(() => require('./utils/slackWatch').start())
+      .catch((err) => {
+        dbReadyPromise = null;
+        throw err;
+      });
   }
   dbReadyPromise.then(() => next(), next);
 });
@@ -112,6 +120,7 @@ app.use('/api/billing', require('./routes/billing'));
 app.use('/api/integrations', require('./routes/integrations'));
 app.use('/api/mail', require('./routes/mail'));
 app.use('/api/client', require('./routes/client'));
+app.use('/api/approvals', require('./routes/approvals'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 

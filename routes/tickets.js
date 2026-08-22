@@ -4,6 +4,7 @@ const express = require('express');
 const router = express.Router();
 
 const { db } = require('../db/setup');
+const approvals = require('../utils/approvals');
 const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
 const { requirePage } = require('../utils/clientPages');
 const clickup = require('../utils/clickup');
@@ -12,6 +13,7 @@ const intake = require('../utils/ticketIntake');
 const mailer = require('../utils/mailer');
 const messages = require('../utils/emailMessages');
 const slaWatch = require('../utils/slaWatch');
+const ticketStatus = require('../utils/ticketStatus');
 
 router.use(requireAuth);
 router.use(requirePage('tickets'));
@@ -49,49 +51,6 @@ function handleWorkflow(fn) {
       next(err);
     }
   };
-}
-
-/** Keep the mirrored ClickUp task in step when a ticket is closed or reopened. */
-async function syncStatusToClickUp(ticket, status) {
-  if (!ticket.clickupTaskId || !clickup.isEnabled()) return;
-  try {
-    await clickup.updateTask(ticket.clickupTaskId, {
-      status: ['Resolved', 'Closed'].includes(status) ? 'complete' : 'to do',
-    });
-  } catch (err) {
-    console.error(`Could not sync ticket ${ticket.id} status to ClickUp:`, err.message);
-  }
-}
-
-/**
- * Tell the client their ticket moved, by email and in their Slack thread.
- * Never throws: the status change is already saved.
- */
-async function announceStatusChange(ticket, fromStatus, toStatus, actor) {
-  try {
-    const [client, assignee] = await Promise.all([
-      ticket.clientId ? db.find('users', ticket.clientId) : null,
-      ticket.assigneeId ? db.find('users', ticket.assigneeId) : null,
-    ]);
-
-    await intake.echoActivity(ticket, `🔁 *${actor.name}* moved ${ticket.id} from ${fromStatus} to *${toStatus}*`);
-
-    if (!client?.email) return;
-    await mailer.sendTemplate({
-      to: client.email,
-      message: messages.ticketStatusChanged({
-        ticket, fromStatus, toStatus, clientName: client.name, assigneeName: assignee?.name || null,
-      }),
-      template: 'ticket_status',
-      entity: 'ticket',
-      entityId: ticket.id,
-    });
-    if (['Resolved', 'Closed'].includes(toStatus)) {
-      await db.update('tickets', ticket.id, { resolvedNotifiedAt: Date.now() });
-    }
-  } catch (err) {
-    console.error(`Could not announce the status change on ticket ${ticket.id}:`, err.message);
-  }
 }
 
 /** Tell the new owner, by email, that a ticket is now theirs. */
@@ -203,6 +162,26 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
     }
     delete patch.firstResponseAt;
 
+    const closing = patch.status
+      && patch.status !== ticket.status
+      && ticketStatus.isClosing(patch.status);
+
+    // Telling a client their request is finished is not a change you take back,
+    // so an admin nobody has vouched for proposes it and a trusted admin
+    // confirms. Everything else about the ticket saves as normal.
+    if (closing) {
+      const gate = await approvals.gate(req, res, {
+        action: 'ticket.close',
+        summary: `Mark "${ticket.subject}" (${ticket.id}) as ${patch.status} and tell the client`,
+        payload: {
+          ticketId: req.params.id,
+          toStatus: patch.status,
+          patch: (({ status, ...rest }) => rest)(patch),
+        },
+      });
+      if (gate.held) return;
+    }
+
     const updated = await db.update('tickets', req.params.id, patch);
     // Tell this client's open tabs, not everyone's.
     res.locals.liveAudience = [ticket.clientId];
@@ -213,8 +192,8 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
 
     if (patch.status && patch.status !== ticket.status) {
       await notify(ticket.clientId, `Your ticket "${ticket.subject}" is now ${patch.status}`, 'ticket');
-      await syncStatusToClickUp(ticket, patch.status);
-      await announceStatusChange(updated, ticket.status, patch.status, req.user);
+      await ticketStatus.syncToClickUp(ticket, patch.status);
+      await ticketStatus.announce(updated, ticket.status, patch.status, req.user);
     }
     if (patch.assigneeId && patch.assigneeId !== ticket.assigneeId) {
       await notify(patch.assigneeId, `You were assigned ticket: "${ticket.subject}"`, 'ticket');
@@ -228,6 +207,16 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
 
 router.delete('/:id', requireCSRF, requireRole('admin'), async (req, res, next) => {
   try {
+    const existing = await db.find('tickets', req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Ticket not found' });
+
+    const gate = await approvals.gate(req, res, {
+      action: 'ticket.delete',
+      summary: `Delete the ticket "${existing.subject}" (${existing.id})`,
+      payload: { ticketId: req.params.id },
+    });
+    if (gate.held) return;
+
     const ok = await db.remove('tickets', req.params.id);
     if (!ok) return res.status(404).json({ error: 'Ticket not found' });
     await audit(req.user.id, 'delete', 'ticket', req.params.id);

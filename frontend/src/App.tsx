@@ -13,6 +13,7 @@ const Tasks = lazy(() => import("@/pages/Tasks"));
 const Tickets = lazy(() => import("@/pages/Tickets"));
 const Domains = lazy(() => import("@/pages/Domains"));
 const Reports = lazy(() => import("@/pages/Reports"));
+const DocumentView = lazy(() => import("@/pages/DocumentView"));
 const Budget = lazy(() => import("@/pages/Budget"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const Team = lazy(() => import("@/pages/Team"));
@@ -21,9 +22,12 @@ const OtpMonitor = lazy(() => import("@/pages/OtpMonitor"));
 const AdminHome = lazy(() => import("@/pages/AdminHome"));
 const ClickUpTasks = lazy(() => import("@/pages/ClickUpTasks"));
 const WorkProgress = lazy(() => import("@/pages/WorkProgress"));
+const Messages = lazy(() => import("@/pages/Messages"));
 const MailCenter = lazy(() => import("@/pages/MailCenter"));
 const SlackMessages = lazy(() => import("@/pages/SlackMessages"));
 const Notifications = lazy(() => import("@/pages/Notifications"));
+const Approvals = lazy(() => import("@/pages/Approvals"));
+const AuditLog = lazy(() => import("@/pages/AuditLog"));
 
 function RouteFallback() {
   return (
@@ -40,6 +44,13 @@ function RouteFallback() {
 function PortalHome() {
   const { user } = useAuth();
   return user?.role === "admin" ? <AdminHome /> : <Dashboard />;
+}
+
+/** Bounces an admin who is not a super admin away from a super-admin screen. */
+function SuperAdminOnly({ children }: { children: React.ReactNode }) {
+  const { can } = useAuth();
+  if (!can.canReadAuditLog) return <Navigate to="/portal" replace />;
+  return <>{children}</>;
 }
 
 function App() {
@@ -82,6 +93,14 @@ function App() {
           />
           <Route path="/portal/tickets" element={<RoleRoute><Tickets /></RoleRoute>} />
           <Route
+            path="/portal/messages"
+            element={
+              <RoleRoute roles={["admin", "sales", "project_manager", "client"]}>
+                <Messages />
+              </RoleRoute>
+            }
+          />
+          <Route
             path="/portal/domains"
             element={
               <RoleRoute roles={["admin", "sales", "project_manager", "client"]}>
@@ -94,6 +113,15 @@ function App() {
             element={
               <RoleRoute roles={["admin", "sales", "project_manager", "client"]}>
                 <Reports />
+              </RoleRoute>
+            }
+          />
+          {/* One document, on its own page. Same guard as the list it came from. */}
+          <Route
+            path="/portal/reports/:id"
+            element={
+              <RoleRoute roles={["admin", "sales", "project_manager", "client"]}>
+                <DocumentView />
               </RoleRoute>
             }
           />
@@ -162,6 +190,26 @@ function App() {
             }
           />
           <Route path="/portal/notifications" element={<RoleRoute><Notifications /></RoleRoute>} />
+          <Route
+            path="/portal/approvals"
+            element={
+              <RoleRoute roles={["admin"]}>
+                <Approvals />
+              </RoleRoute>
+            }
+          />
+          {/* The log is super-admin only. RoleRoute lets any admin through, so
+              the page itself refuses the rest -- and so does the API. */}
+          <Route
+            path="/portal/audit"
+            element={
+              <RoleRoute roles={["admin"]}>
+                <SuperAdminOnly>
+                  <AuditLog />
+                </SuperAdminOnly>
+              </RoleRoute>
+            }
+          />
 
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />

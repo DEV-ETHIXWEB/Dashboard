@@ -1,7 +1,7 @@
 import {
-  IconBilling, IconBudget, IconClickUp, IconClientAccess, IconDashboard, IconDomains, IconHome,
-  IconLoginCodes, IconMail, IconNotifications, IconProgress, IconProjects, IconReports, IconSlack,
-  IconTasks, IconTeam, IconTickets, type EthixIcon,
+  IconApprovals, IconAuditLog, IconBilling, IconBudget, IconClickUp, IconClientAccess, IconDashboard,
+  IconDomains, IconHome, IconLoginCodes, IconMail, IconMessages, IconNotifications, IconProgress,
+  IconProjects, IconReports, IconSlack, IconTasks, IconTeam, IconTickets, type EthixIcon,
 } from "@/components/icons/ethix";
 import { canSeePage, pageKeyForPath } from "@/lib/permissions";
 import type { Role, User } from "@/lib/types";
@@ -9,6 +9,8 @@ import type { Role, User } from "@/lib/types";
 export interface NavItem {
   to: string;
   label: string;
+  /** Hidden from an ordinary admin; the route and the API refuse it too. */
+  superAdminOnly?: boolean;
   /** Shorter wording for the phone's tab bar, where a slot is 75px wide. */
   short?: string;
   icon: EthixIcon;
@@ -33,6 +35,8 @@ const STAFF_NAV: NavItem[] = [
   { to: "/portal/domains", label: "Domains", icon: IconDomains, roles: ["admin", "sales", "project_manager"] },
   { to: "/portal/progress", label: "Work progress", short: "Progress", icon: IconProgress, roles: ["admin", "sales", "project_manager"] },
   { to: "/portal/tickets", label: "Tickets", icon: IconTickets },
+  { to: "/portal/messages", label: "Client messages", short: "Chat", icon: IconMessages,
+    roles: ["admin", "sales", "project_manager"] },
   { to: "/portal/reports", label: "Reports", icon: IconReports, roles: ["admin", "sales", "project_manager"] },
   { to: "/portal/budget", label: "Budget", icon: IconBudget, roles: ["admin", "project_manager"] },
   { to: "/portal/billing", label: "Billing", icon: IconBilling, roles: ["admin"] },
@@ -42,14 +46,16 @@ const STAFF_NAV: NavItem[] = [
   { to: "/portal/client-access", label: "Client Access", icon: IconClientAccess, roles: ["admin"] },
   { to: "/portal/otp-monitor", label: "Login Codes", icon: IconLoginCodes, roles: ["admin"] },
   { to: "/portal/mail", label: "Mail", icon: IconMail, roles: ["admin"] },
+  { to: "/portal/approvals", label: "Approvals", short: "Approvals", icon: IconApprovals, roles: ["admin"] },
+  { to: "/portal/audit", label: "Audit log", short: "Log", icon: IconAuditLog, roles: ["admin"], superAdminOnly: true },
   { to: "/portal/notifications", label: "Notifications", icon: IconNotifications },
 ];
 
 const STAFF_GROUPS: { heading: string; labels: string[] }[] = [
   { heading: "Workspace", labels: ["Dashboard", "Projects", "Tasks", "Domains"] },
-  { heading: "Operations & Finance", labels: ["Work progress", "Tickets", "Reports", "Budget", "Billing"] },
+  { heading: "Operations & Finance", labels: ["Work progress", "Tickets", "Client messages", "Reports", "Budget", "Billing"] },
   { heading: "Integrations", labels: ["ClickUp", "Slack"] },
-  { heading: "Administration", labels: ["Team", "Client Access", "Login Codes", "Mail"] },
+  { heading: "Administration", labels: ["Team", "Client Access", "Approvals", "Audit log", "Login Codes", "Mail"] },
   { heading: "Account", labels: ["Notifications"] },
 ];
 
@@ -70,6 +76,7 @@ const CLIENT_PRIMARY: NavItem[] = [
 
 /** Everything else a client owns, one tap away behind More. */
 const CLIENT_SECONDARY: NavItem[] = [
+  { to: "/portal/messages", label: "Chat", icon: IconMessages },
   { to: "/portal/projects", label: "Projects", icon: IconProjects },
   { to: "/portal/domains", label: "Websites", icon: IconDomains },
   { to: "/portal/reports", label: "Documents", icon: IconReports },
@@ -77,12 +84,13 @@ const CLIENT_SECONDARY: NavItem[] = [
   { to: "/portal/notifications", label: "Alerts", icon: IconNotifications },
 ];
 
-type Viewer = Pick<User, "role"> & { allowedPages?: User["allowedPages"] };
+type Viewer = Pick<User, "role"> & { allowedPages?: User["allowedPages"]; isSuperAdmin?: boolean };
 
 /** Role allows it and the admin left the section switched on. */
 function visibleTo(user: Viewer | null | undefined, item: NavItem): boolean {
   if (!user) return false;
   if (item.roles && !item.roles.includes(user.role)) return false;
+  if (item.superAdminOnly && !user.isSuperAdmin) return false;
   return canSeePage(user, pageKeyForPath(item.to));
 }
 
@@ -115,7 +123,9 @@ export function navFor(user: Viewer | null | undefined): {
       if (next) primary.push(next);
     }
 
-    return { primary, secondary, groups: [] };
+    // The bar has five slots and one belongs to More. Anything past the fourth
+    // destination goes back to the sheet rather than off the edge of a phone.
+    return { primary: primary.slice(0, 4), secondary: [...primary.slice(4), ...secondary], groups: [] };
   }
 
   const items = STAFF_NAV.filter((i) => visibleTo(user, i));

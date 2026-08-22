@@ -221,7 +221,7 @@ export default function SlackMessages() {
       <div className="grid gap-4 lg:grid-cols-[minmax(0,17rem)_minmax(0,1fr)]">
         <aside className="rounded-2xl bg-card p-3 ring-1 ring-foreground/10">
           <div className="flex items-center justify-between px-1 pb-2">
-            <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Channels</span>
+            <span className="t-label text-muted-foreground">Channels</span>
             {selected.length > 0 && (
               <button
                 type="button"
@@ -482,7 +482,7 @@ function MessageCard({
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
           <span className="text-sm font-medium text-foreground">{message.authorName}</span>
           {message.isBot && (
-            <span className="rounded bg-secondary px-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+            <span className="rounded bg-secondary px-1 t-label text-muted-foreground">
               app
             </span>
           )}
@@ -660,7 +660,7 @@ function RedditThreadSection({ message }: { message: SlackMessage }) {
 
   return (
     <div className="mt-3.5 border-l-2 border-primary/40 dark:border-primary/30 pl-3.5 sm:pl-4 space-y-3 pt-1 transition-all">
-      <div className="flex items-center justify-between text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+      <div className="flex items-center justify-between t-label text-muted-foreground">
         <span className="flex items-center gap-1.5 text-primary">
           <MessageSquare className="size-3.5" />
           Thread Discussion ({childReplies.length})
@@ -949,7 +949,7 @@ function ThreadViewerDialog({
             <FormattedSlackText text={message.text} />
           </div>
 
-          <div className="border-t border-border pt-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          <div className="border-t border-border pt-2 t-label text-muted-foreground tracking-wide">
             Replies ({replies ? Math.max(0, replies.length - 1) : 0})
           </div>
 

@@ -24,6 +24,7 @@ const MAX_STREAMS_PER_USER = 4;
 const TOPIC_PAGE = {
   tickets: 'tickets',
   progress: 'progress',
+  messages: 'messages',
   projects: 'projects',
   reports: 'reports',
   budget: 'budget',
@@ -33,8 +34,16 @@ const TOPIC_PAGE = {
   // Always-on sections: everyone signed in may hear these.
   notifications: 'notifications',
   session: 'settings',
-  users: null, // staff-only, see deliverableTo()
+  // Staff-only topics. `null` here is not "everyone" -- STAFF_ONLY below is the
+  // list that decides, and anything in it never reaches a client.
+  users: null,
+  approvals: null,
+  mail: null,
+  otp: null,
 };
+
+/** Topics that exist for the people running the workspace, never for clients. */
+const STAFF_ONLY = ['users', 'approvals', 'mail', 'otp'];
 
 const TOPICS = Object.keys(TOPIC_PAGE);
 
@@ -51,7 +60,7 @@ function isStaff(user) {
 
 /** Whether this account is ever allowed to hear about this topic. */
 function mayHear(user, topic) {
-  if (topic === 'users') return isStaff(user);
+  if (STAFF_ONLY.includes(topic)) return isStaff(user);
   if (isStaff(user)) return true;
   if (user.role !== 'client') return false;
   const page = TOPIC_PAGE[topic];
@@ -151,4 +160,4 @@ function stats() {
   return { users: streams.size, streams: total };
 }
 
-module.exports = { TOPICS, TOPIC_PAGE, publish, subscribe, stats, MAX_STREAMS_PER_USER };
+module.exports = { TOPICS, TOPIC_PAGE, STAFF_ONLY, publish, subscribe, stats, MAX_STREAMS_PER_USER };

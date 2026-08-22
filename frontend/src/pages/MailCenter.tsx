@@ -2,11 +2,11 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle, CheckCircle2, Clock, Eye, Inbox, Loader2, Mail, MailCheck, MailX,
-  PlugZap, RefreshCw, Send, ShieldCheck, Users,
+  PlugZap, RefreshCw, Send, ShieldCheck, Users, Globe,
 } from "lucide-react";
 import {
   useMailLog, useMailLogEntry, useMailPreview, useMailStatus, useMailTemplates,
-  useRunSlaSweep, useSendTestEmail, useVerifyTransport,
+  useRunDomainSweep, useRunSlaSweep, useSendTestEmail, useVerifyTransport,
 } from "@/hooks/useMail";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
@@ -62,6 +62,7 @@ export default function MailCenter() {
         actions={
           <>
             <DeadlineCheckButton />
+      <DomainCheckButton />
             <TestEmailDialog configured={status.data?.configured ?? false} />
           </>
         }
@@ -122,7 +123,7 @@ export default function MailCenter() {
                   if (items.length === 0) return null;
                   return (
                     <div key={group.heading}>
-                      <div className="px-1 pb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                      <div className="px-1 pb-1.5 t-label text-muted-foreground">
                         {group.heading}
                       </div>
                       <div className="space-y-1">
@@ -203,6 +204,38 @@ function DeadlineCheckButton() {
     >
       {sweep.isPending ? <Loader2 className="size-4 animate-spin" /> : <Clock className="size-4" />}
       Check deadlines
+    </Button>
+  );
+}
+
+/**
+ * Expiry reminders normally ride along on domain traffic, at most once an hour.
+ * This runs the same sweep on demand -- what you want after correcting an
+ * expiry date, or when nobody has opened the Domains page in a while.
+ */
+function DomainCheckButton() {
+  const sweep = useRunDomainSweep();
+  return (
+    <Button
+      variant="outline"
+      className="h-10 gap-2 px-4 font-medium"
+      disabled={sweep.isPending}
+      onClick={() =>
+        sweep.mutate(undefined, {
+          onSuccess: (r) =>
+            toast.success(
+              r.sent > 0
+                ? `Reminded ${r.sent} client${r.sent === 1 ? "" : "s"} about an expiring address`
+                : r.due > 0
+                  ? "Everyone due a reminder has already had one"
+                  : "No website addresses are due a reminder",
+            ),
+          onError: (err) => toast.error(err instanceof Error ? err.message : "Could not run the check"),
+        })
+      }
+    >
+      {sweep.isPending ? <Loader2 className="size-4 animate-spin" /> : <Globe className="size-4" />}
+      Check domains
     </Button>
   );
 }
@@ -325,7 +358,7 @@ function TemplatePreview({ templateKey }: { templateKey: string | null }) {
     <div className="min-w-0 rounded-2xl bg-card ring-1 ring-foreground/10">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 p-4">
         <div className="min-w-0">
-          <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Subject</div>
+          <div className="t-label text-muted-foreground">Subject</div>
           <div className="truncate text-sm font-semibold">
             {preview.data?.subject ?? (preview.isLoading ? "Loading…" : "—")}
           </div>

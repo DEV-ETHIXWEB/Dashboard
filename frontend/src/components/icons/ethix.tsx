@@ -106,6 +106,16 @@ export const IconTickets: EthixIcon = (p) => (
   </Icon>
 );
 
+/** Two slots, one in front of the other -- a conversation, not a notice. */
+export const IconMessages: EthixIcon = (p) => (
+  <Icon {...p}>
+    <path d="M6.6 15.4H5.4a2.4 2.4 0 0 1-2.4-2.4V6.2a2.4 2.4 0 0 1 2.4-2.4h9.2a2.4 2.4 0 0 1 2.4 2.4v1" />
+    <rect x="7" y="8.6" width="14" height="9.6" rx="2.4" />
+    <path d="M10.6 18.2v2.6l3.2-2.6" />
+    <Node cx={17} cy={13.4} />
+  </Icon>
+);
+
 /** A sheet with its lines set as bars, shortest last. */
 export const IconReports: EthixIcon = (p) => (
   <Icon {...p}>
@@ -196,6 +206,26 @@ export const IconMail: EthixIcon = (p) => (
   <Icon {...p}>
     <rect x="2.8" y="5.4" width="18.4" height="13.2" rx="2.6" />
     <path d="M3.8 7.2l7.1 5.3a1.8 1.8 0 0 0 2.2 0l7.1-5.3" />
+  </Icon>
+);
+
+/** A proposal and the tick it is waiting on; the node is the second signature. */
+export const IconApprovals: EthixIcon = (p) => (
+  <Icon {...p}>
+    <rect x="3.4" y="3.4" width="17.2" height="17.2" rx="3.4" />
+    <path d="M7.8 12.4l2.9 2.9 5.5-5.9" />
+    <Node cx={16.2} cy={9.4} />
+  </Icon>
+);
+
+/** The record: an entry per bar, each one stamped. Only the newest is filled. */
+export const IconAuditLog: EthixIcon = (p) => (
+  <Icon {...p}>
+    <rect x="3.2" y="3.4" width="17.6" height="17.2" rx="2.8" />
+    <path d="M10.8 8.2h6.2M10.8 12h6.2M10.8 15.8h4" />
+    <Node cx={7.2} cy={8.2} />
+    <circle cx="7.2" cy="12" r="1.15" />
+    <circle cx="7.2" cy="15.8" r="1.15" />
   </Icon>
 );
 

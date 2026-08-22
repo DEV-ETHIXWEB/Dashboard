@@ -46,7 +46,8 @@ export function useMailLog(limit = 100) {
     queryFn: () =>
       api<{ entries: EmailLogEntry[]; configured: boolean }>("GET", `/mail/log?limit=${limit}`),
     enabled: isAdmin,
-    refetchInterval: 30_000,
+    // Every logged send publishes `mail`, so this is a safety net only.
+    refetchInterval: 120_000,
   });
 }
 
@@ -87,11 +88,24 @@ export function useRunSlaSweep() {
   });
 }
 
+/** Run the domain expiry reminders now instead of waiting for traffic. */
+export function useRunDomainSweep() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<{ checked: number; due: number; sent: number; skipped: number }>("POST", "/mail/domain-sweep"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["mail", "log"] }),
+  });
+}
+
 export function useSendProgressDigest() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (clientId: string) =>
-      api<{ ok: boolean; skipped: string | null; to: string }>("POST", `/mail/digest/${clientId}`),
+      api<{ ok: boolean; skipped: string | null; to: string; redirectedTo: string | null }>(
+        "POST",
+        `/mail/digest/${clientId}`,
+      ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["mail", "log"] }),
   });
 }

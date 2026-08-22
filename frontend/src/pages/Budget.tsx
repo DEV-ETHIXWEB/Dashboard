@@ -98,7 +98,7 @@ export default function Budget() {
     <BentoGrid className="mx-auto w-full max-w-6xl">
       <header className={`flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between ${bento(4)}`}>
         <div>
-          <h1 className="text-2xl leading-tight font-semibold tracking-tight">Your spending</h1>
+          <h1 className="t-title">Your spending</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
             {isStaff
               ? "Every amount on this client's account, grouped by what it was for."

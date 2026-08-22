@@ -17,6 +17,7 @@ const mailer = require('../utils/mailer');
 const messages = require('../utils/emailMessages');
 const admins = require('../utils/admins');
 const slaWatch = require('../utils/slaWatch');
+const domainWatch = require('../utils/domainWatch');
 
 router.use(requireAuth, requireRole('admin'));
 
@@ -178,6 +179,17 @@ router.post('/sla-sweep', requireCSRF, async (req, res, next) => {
   }
 });
 
+/** Run the domain expiry sweep now instead of waiting for traffic. */
+router.post('/domain-sweep', requireCSRF, async (req, res, next) => {
+  try {
+    const result = await domainWatch.runSweep();
+    await audit(req.user.id, 'send', 'domain_sweep', String(result.sent));
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 /**
  * Send a client their progress summary now, rather than waiting for whatever
  * schedule the deployment runs this on.
@@ -208,7 +220,12 @@ router.post('/digest/:clientId', requireCSRF, async (req, res, next) => {
     await audit(req.user.id, 'send', 'email_digest', client.id);
 
     if (!result.ok && !result.skipped) return res.status(502).json({ error: result.error || 'The summary could not be sent.' });
-    res.json({ ok: Boolean(result.ok), skipped: result.skipped || null, to: client.email });
+    res.json({
+      ok: Boolean(result.ok),
+      skipped: result.skipped || null,
+      to: client.email,
+      redirectedTo: result.redirectedTo || null,
+    });
   } catch (err) {
     next(err);
   }
