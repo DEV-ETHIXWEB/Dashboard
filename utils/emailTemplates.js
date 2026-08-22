@@ -1,25 +1,27 @@
 'use strict';
 
 /**
- * HTML email renderer: a dark, branded product email.
+ * HTML email renderer: a light, branded product email.
  *
  * Everything here is table-based with inline styles, because that is the only
  * layout every mail client agrees on. No dependency, no build step: templates
  * are plain functions that return a full HTML document plus a plain-text twin.
  *
  * The shape:
- *   - deep near-black page, one 700px card on it, 14px radius
- *   - a masthead carrying the wordmark over the brand's own web pattern
- *   - small uppercase eyebrow, then a short bold sentence as the heading
+ *   - light grey page, one 700px white card on it, 14px radius
+ *   - a near-black masthead carrying the wordmark and the web in its corner
+ *   - small uppercase kicker, then a short sentence as the heading
  *   - panels for the things that need to interrupt, typography for the rest
- *   - one pill button as the single call to action
- *   - quiet footer with the reason the message was sent
+ *   - centred call to action, and a black footer closing the message
  *
- * Dark on purpose, and dark in both modes. A light email inverted by a phone's
- * dark mode is a lottery -- Gmail and Outlook each invert differently, and
- * brand colours come out of it looking nothing like the brand. Committing to
- * dark means the message that arrives is the message that was designed, and
- * the red reads as the same red the app uses.
+ * Light on purpose. The people reading these mostly run a white inbox, and a
+ * dark email dropped into a white Gmail is the thing that looks broken. The
+ * two dark bands top and bottom carry the brand instead, and because they are
+ * explicit backgrounds rather than inverted ones, they survive a client's own
+ * dark theme intact.
+ *
+ * Weights stay at 600 and below: at email sizes anything heavier reads as
+ * shouting, especially on the Windows rasteriser.
  *
  * Colour and logo are env-overridable, so a rebrand is two variables.
  */
@@ -39,6 +41,38 @@ const LOGO_CID = 'ethixweb-logo';
 const LOGO_SRC = `cid:${LOGO_CID}`;
 
 /**
+ * Fact icons, drawn in the product's own line and rasterised to PNG because
+ * email cannot use SVG -- Gmail strips it outright. They ride along as inline
+ * attachments exactly like the wordmark, so they render on localhost and on a
+ * real domain alike. utils/mailer.js attaches only the ones a message names.
+ */
+const ICON_CID_PREFIX = 'ethixweb-icon-';
+const ICONS = [
+  'assignment-tile', 'ticket-tile', 'category-tile', 'priority-tile', 'client-tile',
+  'owner-tile', 'due-tile', 'progress-tile', 'history-tile', 'stage-tile',
+  'check-badge', 'web-corner',
+  'bar-000', 'bar-010', 'bar-020', 'bar-030', 'bar-040', 'bar-050', 'bar-060', 'bar-070', 'bar-080', 'bar-090', 'bar-100',
+];
+
+/** Map a fact's label onto a glyph. Unknown labels fall back to the kicker. */
+function iconFor(label) {
+  const k = String(label || '').toLowerCase();
+  // 'assignment' before 'assignee' -- the kicker names the event, the fact
+  // names the person, and they take different glyphs.
+  if (k.includes('assignment')) return 'assignment-tile';
+  if (k.includes('previous') || k.includes('was ')) return 'history-tile';
+  if (k.includes('stage')) return 'stage-tile';
+  if (k.includes('ticket')) return 'ticket-tile';
+  if (k.includes('categor')) return 'category-tile';
+  if (k.includes('priorit')) return 'priority-tile';
+  if (k.includes('client')) return 'client-tile';
+  if (k.includes('owner') || k.includes('assign')) return 'owner-tile';
+  if (k.includes('due') || k.includes('response') || k.includes('date')) return 'due-tile';
+  if (k.includes('progress')) return 'progress-tile';
+  return 'assignment-tile';
+}
+
+/**
  * The wordmark is the brand in this email: the mark on the masthead and the
  * sign-off in the footer. The brand name never appears as typed text where the
  * logo can carry it instead -- text is only the fallback, in the alt
@@ -55,31 +89,46 @@ const LOGO_WIDTH = 211;
 const LOGO_HEIGHT = 32;
 
 const TOKENS = {
-  // The ground the card sits on, and the masthead behind the wordmark.
-  page: '#07060a',
-  ink: '#0a0809',
-  card: '#141116',
-  border: '#2b2531',
-  panel: '#1c1820',
-  // A hair lighter than panel, for a strip inside a panel.
-  raised: '#241f28',
-  text: '#f5f2f7',
-  soft: '#c0b8c8',
-  muted: '#8d8598',
-  // EthixWeb red, brightened for a dark ground. Matches --primary in the app's
-  // own dark theme, oklch(0.62 0.22 29); the light-theme #c20000 goes muddy
-  // against near-black.
-  brand: '#ff4a38',
-  brandDeep: '#c20000',
-  brandSoft: '#2a100d',
-  // Text that sits on top of the brand red.
-  brandInk: '#1a0503',
-  success: '#3ad392',
-  warn: '#f0a742',
-  danger: '#ff5c4d',
-  // Empty half of a progress bar, and any other inert track.
-  track: '#2b2531',
-  font: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+  // Light by design. Most people reading these run a white inbox, and a dark
+  // email dropped into a white Gmail is the thing that looks broken -- so the
+  // body is paper, and the brand shows up in the masthead and the accents.
+  page: '#eef0f4',
+  ink: '#ffffff',
+  card: '#ffffff',
+  border: '#e2e5ea',
+  panel: '#f7f8fa',
+  raised: '#f1f3f6',
+  text: '#0e1014',
+  soft: '#454952',
+  muted: '#767b86',
+  brand: '#e8341f',
+  brandDeep: '#7d0b04',
+  brandSoft: '#fdece9',
+  brandInk: '#5c0a04',
+  success: '#127a4d',
+  warn: '#9a5b06',
+  danger: '#c62612',
+  track: '#e4e7ec',
+  hairline: '#edeff3',
+  // Inter first, matching the app. Apple Mail and iOS honour the webfont; the
+  // clients that strip it (Outlook, Gmail's web view) land on the system stack
+  // below and still render a clean sans, never a serif fallback.
+  font: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+};
+
+/**
+ * The footer stays black on purpose: it closes the message the way the
+ * masthead opens it, and it is the one place the white wordmark can sit
+ * without an outline. Its own tokens, because nothing else on the page is
+ * dark any more.
+ */
+const FOOT = {
+  bg: '#0b0b0d',
+  border: '#26262b',
+  text: '#ffffff',
+  soft: '#b7bac1',
+  muted: '#83879160',
+  mutedSolid: '#838791',
 };
 
 /** Status pill colours, keyed by the lowercase status word. */
@@ -180,32 +229,94 @@ function formatWhen(value) {
 // --- blocks ----------------------------------------------------------------
 // Each returns an HTML string meant to sit inside the card's content cell.
 
-function paragraph(text, { muted = false, size = 15 } = {}) {
-  const color = muted ? TOKENS.soft : TOKENS.text;
-  return `<p style="margin:0 0 16px;font-family:${TOKENS.font};font-size:${size}px;line-height:1.6;color:${color};">${escapeHtml(text)}</p>`;
+function paragraph(text, { muted = false, size = 15, align = 'center' } = {}) {
+  return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+    + `<tr><td align="${align}" style="font-family:${TOKENS.font};font-size:${size}px;line-height:1.62;`
+    + `color:${muted ? TOKENS.muted : TOKENS.soft};padding:0 0 10px;">${escapeHtml(text)}</td></tr></table>`;
+}
+
+/** The short brand rule that closes a centred intro. */
+function ruleAccent() {
+  return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:20px auto 34px;">'
+    + `<tr><td width="64" height="3" style="width:64px;height:3px;background:${TOKENS.brand};`
+    + 'border-radius:999px;font-size:0;line-height:0;">&nbsp;</td></tr></table>';
 }
 
 /** Small uppercase label, the line ClickUp puts above the headline. */
-function eyebrow(text) {
+/**
+ * The kicker block: icon slot, the category in brand red, and the one line
+ * saying who caused this message. Replaces the old bare eyebrow + separate
+ * actor row, which read as two unrelated things stacked.
+ */
+function eyebrow(text, { line = null, icon = null, hero = null } = {}) {
   return [
-    `<div style="margin:0 0 12px;font-family:${TOKENS.font};font-size:11px;font-weight:700;`,
-    `letter-spacing:.12em;text-transform:uppercase;color:${brand().color};">${escapeHtml(text)}</div>`,
+    hero ? heroBadge(hero) : '',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 6px;">',
+    `<tr><td align="center" style="font-family:${TOKENS.font};font-size:12px;font-weight:600;`
+      + `letter-spacing:.18em;text-transform:uppercase;color:${TOKENS.brand};padding-bottom:${line ? '6px' : '0'};">`
+      + `${escapeHtml(text)}</td></tr>`,
+    line
+      ? `<tr><td align="center" style="font-family:${TOKENS.font};font-size:14px;color:${TOKENS.muted};">${escapeHtml(line)}</td></tr>`
+      : '',
+    '</table>',
   ].join('');
 }
 
 function heading(text) {
+  // A trailing "is resolved" style clause reads better with the state picked
+  // out in brand red, so the last word after " is " is highlighted when the
+  // caller writes the title that way.
+  const raw = String(text || '');
+  const m = raw.match(/^(.*\bis )([A-Za-z ]+)$/);
+  const html = m
+    ? `${escapeHtml(m[1])}<span style="color:${TOKENS.brand};">${escapeHtml(m[2])}</span>`
+    : escapeHtml(raw);
+  return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+    + `<tr><td align="center" style="font-family:${TOKENS.font};font-size:30px;line-height:1.24;`
+    + `font-weight:600;letter-spacing:-.015em;color:${TOKENS.text};padding:10px 0 14px;">${html}</td></tr></table>`;
+}
+
+/**
+ * The icon slot used by the eyebrow and every fact cell.
+ *
+ * Email cannot rely on SVG -- Gmail strips it -- so the mark is drawn with
+ * table cells instead: the node motif from the product's own icon set, which
+ * renders in every client. When hosted or cid: icons exist, swap the inner
+ * table for an <img> and every call site inherits it.
+ */
+function iconTile({ size = 46, icon = 'assignment-tile' } = {}) {
+  const name = ICONS.includes(icon) ? icon : 'assignment-tile';
+  // The art is 128px square with the body inset for its shadow, so the drawn
+  // tile reads about 10% smaller than the box it sits in.
+  const box = Math.round(size * 1.28);
+  return `<img src="cid:${ICON_CID_PREFIX}${name}" alt="" width="${box}" height="${box}" `
+    + `style="display:block;border:0;width:${box}px;height:${box}px;" />`;
+}
+
+/** The circular badge that opens a status message. */
+function heroBadge(icon = 'check-badge', size = 96) {
   return [
-    `<h1 style="margin:0 0 14px;font-family:${TOKENS.font};font-size:26px;line-height:1.26;`,
-    `font-weight:700;letter-spacing:-.02em;color:${TOKENS.text};">${escapeHtml(text)}</h1>`,
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto 18px;">',
+    `<tr><td align="center"><img src="cid:${ICON_CID_PREFIX}${icon}" alt="" width="${size}" height="${size}" `
+      + `style="display:block;border:0;width:${size}px;height:${size}px;" /></td></tr>`,
+    '</table>',
   ].join('');
 }
 
+/** Solid, fully rounded, with a lit dot -- the state reads before the words. */
 function statusPill(status) {
-  const color = statusColor(status);
+  const label = String(status || 'Open');
+  const color = statusColor(label);
   return [
-    `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${color};`,
-    `font-family:${TOKENS.font};font-size:10px;font-weight:700;letter-spacing:.07em;`,
-    `text-transform:uppercase;color:#ffffff;">${escapeHtml(status)}</span>`,
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px;">',
+    `<tr><td bgcolor="${color}" style="background:${color};border-radius:999px;padding:8px 16px;">`,
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>',
+    '<td width="7" height="7" style="width:7px;height:7px;background:#ffffff;border-radius:999px;font-size:0;line-height:0;">&nbsp;</td>',
+    '<td width="8" style="width:8px;font-size:0;line-height:0;">&nbsp;</td>',
+    `<td style="font-family:${TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.08em;`
+      + `text-transform:uppercase;color:#ffffff;white-space:nowrap;">${escapeHtml(label)}</td>`,
+    '</tr></table>',
+    '</td></tr></table>',
   ].join('');
 }
 
@@ -213,10 +324,13 @@ function statusPill(status) {
 function avatarCircle(name, { size = 32, color } = {}) {
   const bg = color || brand().color;
   return [
-    `<span style="display:inline-block;width:${size}px;height:${size}px;line-height:${size}px;`,
-    `border-radius:${size}px;background:${bg};color:#ffffff;text-align:center;`,
-    `font-family:${TOKENS.font};font-size:${Math.round(size * 0.4)}px;font-weight:700;">`,
-    `${escapeHtml(initialsOf(name))}</span>`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="${size}" height="${size}" `
+      + `style="width:${size}px;height:${size}px;border-radius:${size}px;background:${bg};">`,
+    `<tr><td align="center" valign="middle" height="${size}" `
+      + `style="height:${size}px;text-align:center;vertical-align:middle;font-family:${TOKENS.font};`
+      + `font-size:${Math.round(size * 0.38)}px;line-height:${size}px;font-weight:600;color:#ffffff;">`,
+    `${escapeHtml(initialsOf(name))}`,
+    '</td></tr></table>',
   ].join('');
 }
 
@@ -225,65 +339,84 @@ function avatarCircle(name, { size = 32, color } = {}) {
  * lives in, and a two-column grid of the fields that matter.
  */
 function taskCard({ status, title, breadcrumb, meta = [], progress = null, url = null }) {
-  const rows = [];
+  const rows = meta.filter((m) => m && m.value !== null && m.value !== undefined && m.value !== '');
+  const pairs = [];
+  for (let i = 0; i < rows.length; i += 2) pairs.push([rows[i], rows[i + 1] || null]);
 
-  if (status) rows.push(`<tr><td style="padding:0 0 12px;">${statusPill(status)}</td></tr>`);
+  const cell = (m) => (m ? [
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>',
+    `<td width="72" valign="middle" style="padding-right:14px;">${iconTile({ icon: iconFor(m.label) })}</td>`,
+    `<td valign="middle" style="font-family:${TOKENS.font};">`,
+    `<div style="font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;`
+      + `color:${TOKENS.muted};padding-bottom:5px;">${escapeHtml(m.label)}</div>`,
+    `<div style="font-size:16px;line-height:1.35;color:${TOKENS.text};">${escapeHtml(String(m.value))}</div>`,
+    '</td></tr></table>',
+  ].join('') : '&nbsp;');
 
-  const link = safeUrl(url);
-  const titleHtml = link
-    ? `<a href="${link}" style="color:${TOKENS.text};text-decoration:none;">${escapeHtml(title)}</a>`
-    : escapeHtml(title);
-  rows.push(
-    `<tr><td style="padding:0;font-family:${TOKENS.font};font-size:17px;font-weight:700;line-height:1.4;color:${TOKENS.text};">${titleHtml}</td></tr>`,
-  );
+  const grid = rows.length
+    ? [
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 0;">',
+      pairs.map(([a, bCell], i) => {
+        const top = i ? `border-top:1px solid ${TOKENS.hairline};` : '';
+        return '<tr>'
+          + `<td class="ew-col" width="50%" valign="top" style="width:50%;padding:16px 18px 16px 0;${top}">${cell(a)}</td>`
+          + `<td class="ew-col" width="50%" valign="top" style="width:50%;padding:16px 0 16px 18px;`
+          + `border-left:1px solid ${TOKENS.hairline};${top}">${cell(bCell)}</td>`
+          + '</tr>';
+      }).join(''),
+      '</table>',
+    ].join('')
+    : '';
 
-  if (breadcrumb) {
-    rows.push(
-      `<tr><td style="padding:6px 0 0;font-family:${TOKENS.font};font-size:12px;color:${TOKENS.muted};">${escapeHtml(breadcrumb)}</td></tr>`,
-    );
-  }
+  // Progress sits on its own rule, label at the left and the bar filling the
+  // rest, so it reads as the summary of everything above it.
+  const pct = progress === null || progress === undefined ? null : Math.max(0, Math.min(100, Number(progress)));
+  const progressHtml = pct === null ? '' : [
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid ${TOKENS.hairline};">`,
+    '<tr>',
+    `<td width="72" valign="middle" style="padding:18px 14px 16px 0;">${iconTile({ icon: 'progress-tile' })}</td>`,
+    `<td width="150" valign="middle" style="padding:18px 16px 16px 0;font-family:${TOKENS.font};">`,
+    `<div style="font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:${TOKENS.muted};">Progress</div>`,
+    `<div style="font-size:16px;color:${TOKENS.text};padding-top:4px;">${pct}%</div>`,
+    '</td>',
+    `<td valign="middle" style="padding:18px 0 16px;">${progressBar(pct)}</td>`,
+    '</tr></table>',
+  ].join('');
 
-  const visibleMeta = meta.filter((m) => m && m.value !== null && m.value !== undefined && m.value !== '');
-  if (visibleMeta.length > 0) {
-    const cells = visibleMeta
-      .map(
-        (m) => [
-          `<td width="50%" style="padding:10px 0 0;vertical-align:top;font-family:${TOKENS.font};">`,
-          `<div style="font-size:11px;color:${TOKENS.muted};letter-spacing:.04em;text-transform:uppercase;">${escapeHtml(m.label)}</div>`,
-          `<div style="font-size:14px;color:${TOKENS.text};font-weight:600;padding-top:2px;">${escapeHtml(m.value)}</div>`,
-          '</td>',
-        ].join(''),
-      );
-    const metaRows = [];
-    for (let i = 0; i < cells.length; i += 2) {
-      metaRows.push(`<tr>${cells[i]}${cells[i + 1] || '<td width="50%"></td>'}</tr>`);
-    }
-    rows.push(
-      `<tr><td style="padding:6px 0 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${metaRows.join('')}</table></td></tr>`,
-    );
-  }
-
-  if (progress !== null && progress !== undefined) rows.push(`<tr><td style="padding:16px 0 0;">${progressBar(progress)}</td></tr>`);
+  const head = [
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>',
+    `<td width="22" valign="middle" style="padding-right:10px;">`
+      + `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>`
+      + `<td width="12" height="12" bgcolor="${statusColor(status)}" style="width:12px;height:12px;`
+      + `background:${statusColor(status)};border-radius:999px;font-size:0;line-height:0;">&nbsp;</td>`
+      + '</tr></table></td>',
+    `<td valign="middle" style="font-family:${TOKENS.font};font-size:19px;line-height:1.35;`
+      + `font-weight:600;color:${TOKENS.text};">${escapeHtml(String(title || ''))}</td>`,
+    '</tr></table>',
+    breadcrumb
+      ? `<div style="font-family:${TOKENS.font};font-size:13px;color:${TOKENS.muted};padding:6px 0 0 22px;">${escapeHtml(String(breadcrumb))}</div>`
+      : '',
+  ].join('');
 
   return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;border:1px solid ${TOKENS.border};border-radius:10px;background:${TOKENS.panel};">`,
-    `<tr><td style="padding:18px 20px;">`,
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows.join('')}</table>`,
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${TOKENS.panel}" `
+      + `style="background:${TOKENS.panel};border-radius:20px;margin:0 0 30px;">`,
+    '<tr><td class="ew-pad" style="padding:28px 30px 24px;">',
+    head,
+    grid,
+    progressHtml,
     '</td></tr></table>',
   ].join('');
 }
 
 function progressBar(pct) {
-  const value = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-  const color = value >= 100 ? TOKENS.success : brand().color;
-  return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">`,
-    `<tr><td style="font-family:${TOKENS.font};font-size:11px;color:${TOKENS.muted};padding:0 0 6px;letter-spacing:.04em;text-transform:uppercase;">Progress &middot; ${value}%</td></tr>`,
-    `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:999px;background:${TOKENS.track};">`,
-    `<tr><td width="${value}%" style="height:6px;line-height:6px;font-size:0;border-radius:999px;background:${color};">&nbsp;</td>`,
-    `<td width="${100 - value}%" style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>`,
-    '</table></td></tr></table>',
-  ].join('');
+  // Baked, one image per 10% step: the gloss, the bead highlights and the
+  // shadow together are past what a mail client will draw from CSS. Only the
+  // single step a message actually uses gets attached to it.
+  const value = Math.max(0, Math.min(100, Number(pct) || 0));
+  const step = String(Math.round(value / 10) * 10).padStart(3, '0');
+  return `<img src="cid:${ICON_CID_PREFIX}bar-${step}" alt="${value}% complete" width="300" height="32" `
+    + 'style="display:block;border:0;width:100%;max-width:300px;height:auto;" />';
 }
 
 /** A comment, the way ClickUp renders one: avatar, name, time, quoted body. */
@@ -294,7 +427,7 @@ function comment({ author, at, body, source = null }) {
     '<tr>',
     `<td width="42" valign="top" style="padding:2px 10px 0 0;">${avatarCircle(author)}</td>`,
     '<td valign="top">',
-    `<div style="font-family:${TOKENS.font};font-size:14px;font-weight:700;color:${TOKENS.text};">${escapeHtml(author)}`,
+    `<div style="font-family:${TOKENS.font};font-size:14px;font-weight:600;color:${TOKENS.text};">${escapeHtml(author)}`,
     when ? `<span style="font-weight:400;color:${TOKENS.muted};font-size:12px;"> &middot; ${escapeHtml(when)}</span>` : '',
     source ? `<span style="font-weight:400;color:${TOKENS.muted};font-size:12px;"> &middot; ${escapeHtml(source)}</span>` : '',
     '</div>',
@@ -332,7 +465,7 @@ function panel({ tone = 'info', title, html = '' }) {
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px;border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
     '<tr><td valign="top" style="padding:18px 20px;">',
     title
-      ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:12px;">${escapeHtml(title)}</div>`
+      ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:12px;">${escapeHtml(title)}</div>`
       : '',
     html,
     '</td></tr></table>',
@@ -349,7 +482,7 @@ function panel({ tone = 'info', title, html = '' }) {
  */
 function codeValue(label, value, { hint = null } = {}) {
   return [
-    `<div style="margin:0 0 4px;font-family:${TOKENS.font};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${TOKENS.muted};">${escapeHtml(label)}</div>`,
+    `<div style="margin:0 0 4px;font-family:${TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:${TOKENS.muted};">${escapeHtml(label)}</div>`,
     `<div style="margin:0 0 6px;padding:11px 13px;border-radius:8px;background:${TOKENS.ink};`,
     "font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;font-size:16px;",
     `letter-spacing:.06em;color:#ffffff;word-break:break-all;`,
@@ -367,7 +500,7 @@ function callout({ tone = 'info', title, body, mono = false }) {
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
     '<tr><td style="padding:16px 18px;">',
     title
-      ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:7px;">${escapeHtml(title)}</div>`
+      ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:7px;">${escapeHtml(title)}</div>`
       : '',
     `<div style="font-family:${mono ? "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" : TOKENS.font};`,
     `font-size:${mono ? 15 : 14}px;line-height:1.6;color:${TOKENS.text};white-space:pre-wrap;word-break:break-word;">${escapeHtml(body)}</div>`,
@@ -412,7 +545,7 @@ function detailPanel({ tone = 'info', title, fields = [], mono = false, note = n
   const cellWidth = present.length > 0 ? Math.round(100 / present.length) : 100;
   const cells = present.map((f) => [
     `<td class="ew-col" width="${cellWidth}%" valign="top" style="width:${cellWidth}%;padding:0 14px 0 0;font-family:${TOKENS.font};">`,
-    `<div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:${TOKENS.muted};padding-bottom:4px;">${escapeHtml(f.label)}</div>`,
+    `<div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:${TOKENS.muted};padding-bottom:4px;">${escapeHtml(f.label)}</div>`,
     `<div style="font-family:${valueFont};font-size:15px;font-weight:600;line-height:1.5;color:${TOKENS.text};word-break:break-word;">${escapeHtml(f.value)}</div>`,
     '</td>',
   ].join(''));
@@ -421,7 +554,7 @@ function detailPanel({ tone = 'info', title, fields = [], mono = false, note = n
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
     '<tr><td style="padding:18px 20px;">',
     title
-      ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:12px;">${escapeHtml(title)}</div>`
+      ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:12px;">${escapeHtml(title)}</div>`
       : '',
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${cells.join('')}</tr></table>`,
     note
@@ -441,7 +574,7 @@ function fact(label, value) {
   if (value === null || value === undefined || value === '') return '';
   return [
     `<div style="margin:0 0 18px;font-family:${TOKENS.font};">`,
-    `<div style="font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${TOKENS.muted};padding-bottom:5px;">${escapeHtml(label)}</div>`,
+    `<div style="font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:${TOKENS.muted};padding-bottom:5px;">${escapeHtml(label)}</div>`,
     `<div style="font-size:14px;line-height:1.55;color:${TOKENS.text};">${escapeHtml(value)}</div>`,
     '</div>',
   ].join('');
@@ -452,21 +585,53 @@ function divider() {
 }
 
 /** Pill button. The MSO comment gives Outlook a real rectangle to render. */
-function button({ label, url, tone = 'primary', margin = '0 0 22px' }) {
+function button({ label, url, tone = 'primary', margin = '0' }) {
   const href = safeUrl(url);
   if (!href) return '';
-  const bg = tone === 'secondary' ? TOKENS.card : brand().color;
-  const fg = tone === 'secondary' ? TOKENS.text : TOKENS.brandInk;
-  const border = tone === 'secondary' ? TOKENS.border : brand().color;
+  const primary = tone !== 'secondary';
+
+  // The same skeuomorphism the icon tiles use, in CSS rather than baked art:
+  // the label has to stay live text, so it cannot be an image. Every layer
+  // degrades on its own -- Outlook drops the gradient and the shadow and is
+  // left with the solid bgcolor, which is the mid stop of the same ramp.
+  const solid = primary ? TOKENS.brand : TOKENS.raised;
+  const ramp = primary
+    ? 'linear-gradient(180deg,#ff4b33 0%,#ef3a24 46%,#d81c0c 78%,#cf1408 100%)'
+    : `linear-gradient(180deg,#ffffff 0%,${TOKENS.raised} 100%)`;
+  const shadow = primary
+    ? '0 8px 18px rgba(190,20,10,.34), inset 0 1px 0 rgba(255,255,255,.45)'
+    : '0 3px 8px rgba(16,18,22,.10), inset 0 1px 0 rgba(255,255,255,.9)';
+  const fg = primary ? '#ffffff' : TOKENS.text;
+  const edge = primary ? '#c81207' : TOKENS.border;
+
   return [
-    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:${margin};">`,
-    '<tr><td align="center" style="border-radius:10px;" bgcolor="' + bg + '">',
-    `<a href="${href}" target="_blank" rel="noopener" style="display:inline-block;padding:15px 32px;border-radius:10px;`,
-    `border:1px solid ${border};background:${bg};color:${fg};font-family:${TOKENS.font};font-size:15px;`,
-    `font-weight:600;letter-spacing:.01em;text-decoration:none;line-height:1;">${escapeHtml(label)}</a>`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" `
+      + `style="margin:${margin};min-width:260px;">`,
+    `<tr><td align="center" bgcolor="${solid}" `
+      + `style="background-color:${solid};background-image:${ramp};border:1px solid ${edge};`
+      + `border-radius:999px;min-width:260px;box-shadow:${shadow};">`,
+    `<a href="${href}" style="display:block;padding:17px 40px;font-family:${TOKENS.font};`
+      + `font-size:16px;font-weight:600;color:${fg};text-decoration:none;text-align:center;`
+      + `white-space:nowrap;text-shadow:${primary ? '0 1px 1px rgba(140,14,6,.35)' : 'none'};">`
+      + `${escapeHtml(label)}</a>`,
     '</td></tr></table>',
   ].join('');
 }
+
+/** Both calls to action as one centred stack, with air between them. */
+function ctaGroup(primary, secondary) {
+  const rows = [];
+  if (primary) rows.push(`<tr><td align="center">${button(primary)}</td></tr>`);
+  if (primary && secondary) rows.push('<tr><td height="14" style="height:14px;font-size:0;line-height:0;">&nbsp;</td></tr>');
+  if (secondary) rows.push(`<tr><td align="center">${button({ ...secondary, tone: 'secondary' })}</td></tr>`);
+  if (!rows.length) return '';
+  return [
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 4px;">',
+    rows.join(''),
+    '</table>',
+  ].join('');
+}
+
 
 // --- document --------------------------------------------------------------
 
@@ -481,51 +646,120 @@ function button({ label, url, tone = 'primary', margin = '0 0 22px' }) {
 function header() {
   const b = brand();
   const logo = safeUrl(b.logoUrl);
+  const word = escapeHtml(String(b.name).toUpperCase());
 
   const mark = logo
-    ? `<img src="${logo}" alt="${escapeHtml(b.name)}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}" `
+    ? `<img src="${logo}" alt="${word}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}" `
       + `style="display:block;border:0;width:${LOGO_WIDTH}px;height:${LOGO_HEIGHT}px;max-width:100%;" />`
-    : `<div style="font-family:${TOKENS.font};font-size:20px;font-weight:700;letter-spacing:-.01em;color:#ffffff;">${escapeHtml(b.name)}</div>`;
+    : `<div style="font-family:${TOKENS.font};font-size:32px;line-height:1;font-weight:600;`
+      + `letter-spacing:.02em;color:#ffffff;">${word}</div>`;
 
+  // Near-black carrying a maroon wash, not a bright band: the wordmark and the
+  // web are the only things meant to catch the eye up here.
+  const wash = 'linear-gradient(105deg,#121013 0%,#171114 34%,#241318 62%,#2c1417 82%,#180f12 100%)';
+
+  // The padding lives on the logo cell, not on the band, so the web can sit
+  // hard against the top and right edges. Inset by the band's own padding it
+  // read as floating in the middle of the header rather than anchored to it.
   return [
-    `<tr><td class="ew-band" bgcolor="${TOKENS.ink}" style="background-color:${TOKENS.ink};padding:28px 32px 26px;border-radius:14px 14px 0 0;">`,
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">`,
-    '<tr>',
-    `<td valign="middle" align="left">${mark}</td>`,
-    `<td valign="middle" align="right" style="font-family:${TOKENS.font};font-size:10px;font-weight:700;`,
-    `letter-spacing:.14em;text-transform:uppercase;color:${TOKENS.muted};white-space:nowrap;padding-left:16px;">Client portal</td>`,
+    `<tr><td class="ew-band" bgcolor="#141013" style="background-color:#141013;`
+      + `background-image:${wash};padding:0;border-radius:14px 14px 0 0;">`,
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>',
+    `<td valign="middle" align="left" style="padding:34px 20px 34px 30px;">${mark}</td>`,
+    // font-size/line-height 0 kills the descender gap that would otherwise
+    // leave a hairline of background under the image.
+    `<td valign="top" align="right" width="220" `
+      + `style="width:220px;padding:0;font-size:0;line-height:0;">`
+      + `<img src="cid:${ICON_CID_PREFIX}web-corner" alt="" width="220" height="132" `
+      + `style="display:block;border:0;width:220px;height:132px;max-width:100%;`
+      + `border-radius:0 14px 0 0;" /></td>`,
     '</tr></table>',
     '</td></tr>',
-    `<tr><td style="height:3px;line-height:3px;font-size:0;background:${b.color};">&nbsp;</td></tr>`,
+
   ].join('');
 }
 
-function footer({ reason, links = [] }) {
+/**
+ * Two columns: who sent it on the right, who we are on the left. The rule
+ * between them is a border on the right-hand cell, so it disappears by itself
+ * when the columns stack on a phone.
+ */
+function footer({ reason, links = [], actor = null }) {
   const b = brand();
+  const tagline = process.env.MAIL_BRAND_TAGLINE
+    || 'We run the tech.\nYou run the business.';
+
   const linkHtml = links
     .map((l) => ({ label: l.label, href: safeUrl(l.url) }))
     .filter((l) => l.href)
-    .map((l) => `<a href="${l.href}" style="color:${TOKENS.muted};text-decoration:underline;">${escapeHtml(l.label)}</a>`)
-    .join(`<span style="color:${TOKENS.border};"> &nbsp;&middot;&nbsp; </span>`);
+    .map((l) => `<a href="${l.href}" style="color:${FOOT.soft};text-decoration:underline;">${escapeHtml(l.label)}</a>`)
+    .join(`<span style="color:${FOOT.border};"> &nbsp;&middot;&nbsp; </span>`);
 
-  // The sign-off is the wordmark itself, at half the masthead's weight. The
-  // brand name survives as the alt text when images are blocked, so the footer
-  // still reads as "(c) 2026 EthixWeb" in a text-only client.
+  const social = (process.env.MAIL_SOCIAL_LINKS || '')
+    .split(',').map((x) => x.trim()).filter(Boolean)
+    .map((pair) => {
+      const [label, url] = pair.split('|');
+      const href = safeUrl(url);
+      if (!href || !label) return '';
+      return `<td style="padding-right:10px;"><a href="${href}" style="display:inline-block;width:34px;height:34px;`
+        + `line-height:32px;text-align:center;border:1px solid ${FOOT.border};border-radius:999px;`
+        + `font-family:${TOKENS.font};font-size:11px;font-weight:600;color:${FOOT.soft};`
+        + `text-decoration:none;">${escapeHtml(label.slice(0, 2))}</a></td>`;
+    }).join('');
+
   const logo = safeUrl(b.logoUrl);
   const signOff = logo
-    ? `<img src="${logo}" alt="${escapeHtml(b.name)}" width="${Math.round(LOGO_WIDTH * 0.62)}" height="${Math.round(LOGO_HEIGHT * 0.62)}" `
-      + `style="display:inline-block;border:0;width:${Math.round(LOGO_WIDTH * 0.62)}px;height:${Math.round(LOGO_HEIGHT * 0.62)}px;max-width:100%;opacity:.85;" />`
-    : `<span style="font-family:${TOKENS.font};font-size:12px;font-weight:700;color:${TOKENS.soft};">${escapeHtml(b.name)}</span>`;
+    ? `<img src="${logo}" alt="${escapeHtml(String(b.name).toUpperCase())}" width="${Math.round(LOGO_WIDTH * 0.78)}" `
+      + `height="${Math.round(LOGO_HEIGHT * 0.78)}" style="display:block;border:0;`
+      + `width:${Math.round(LOGO_WIDTH * 0.78)}px;height:${Math.round(LOGO_HEIGHT * 0.78)}px;max-width:100%;" />`
+    : `<div style="font-family:${TOKENS.font};font-size:22px;font-weight:600;letter-spacing:.02em;`
+      + `color:${FOOT.text};">${escapeHtml(String(b.name).toUpperCase())}</div>`;
+
+  const brandCol = [
+    `<div style="padding-bottom:12px;line-height:1;">${signOff}</div>`,
+    `<div style="font-family:${TOKENS.font};font-size:13px;line-height:1.6;color:${FOOT.mutedSolid};">`
+      + `${escapeHtml(tagline).replace(/\n/g, '<br />')}</div>`,
+    social
+      ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:16px 0 0;"><tr>${social}</tr></table>`
+      : '',
+  ].join('');
+
+  const actorCol = actor
+    ? [
+      '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>',
+      `<td width="60" valign="middle" style="padding-right:14px;">${avatarCircle(actor.name, { size: 54, color: actor.color })}</td>`,
+      `<td valign="middle" style="font-family:${TOKENS.font};">`,
+      `<div style="font-size:15px;font-weight:600;color:${FOOT.text};">${escapeHtml(actor.name || '')}</div>`,
+      actor.role || actor.company
+        ? `<div style="font-size:13px;color:${FOOT.mutedSolid};padding-top:3px;">`
+          + `${escapeHtml([actor.role, actor.company].filter(Boolean).join(' \u00b7 '))}</div>`
+        : '',
+      actor.email
+        ? `<div style="font-size:13px;padding-top:8px;"><span style="color:${TOKENS.brand};">&#9993;</span> `
+          + `<a href="mailto:${escapeHtml(actor.email)}" style="color:${FOOT.soft};text-decoration:none;">${escapeHtml(actor.email)}</a></div>`
+        : '',
+      '</td></tr></table>',
+    ].join('')
+    : '';
 
   return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 0;">`,
-    '<tr><td align="center" style="padding:0 12px;">',
+    `<table role="presentation" width="700" cellpadding="0" cellspacing="0" border="0" class="ew-card ew-foot" `
+      + `bgcolor="${FOOT.bg}" style="width:700px;max-width:700px;margin:0;background:${FOOT.bg};`
+      + `border-radius:0 0 14px 14px;">`,
+    '<tr><td class="ew-pad" style="padding:30px 34px 8px;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>',
+    `<td class="ew-col" width="52%" valign="top" style="width:52%;padding-right:24px;">${brandCol}</td>`,
+    actorCol
+      ? `<td class="ew-col" width="48%" valign="middle" style="width:48%;padding-left:26px;border-left:1px solid ${FOOT.border};">${actorCol}</td>`
+      : '<td class="ew-col">&nbsp;</td>',
+    '</tr></table>',
+    '</td></tr>',
+    '<tr><td class="ew-pad" align="center" style="padding:22px 34px 26px;">',
     reason
-      ? `<div style="font-family:${TOKENS.font};font-size:12px;line-height:1.6;color:${TOKENS.muted};padding-bottom:8px;">${escapeHtml(reason)}</div>`
+      ? `<div style="font-family:${TOKENS.font};font-size:12px;line-height:1.6;color:${FOOT.mutedSolid};padding-bottom:8px;">${escapeHtml(reason)}</div>`
       : '',
     linkHtml ? `<div style="font-family:${TOKENS.font};font-size:12px;padding-bottom:10px;">${linkHtml}</div>` : '',
-    `<div style="padding-bottom:6px;line-height:1;">${signOff}</div>`,
-    `<div style="font-family:${TOKENS.font};font-size:11px;color:${TOKENS.muted};">&copy; ${new Date().getFullYear()}</div>`,
+    `<div style="font-family:${TOKENS.font};font-size:11px;color:${FOOT.mutedSolid};">&copy; ${new Date().getFullYear()} ${escapeHtml(b.name)}</div>`,
     '</td></tr></table>',
   ].join('');
 }
@@ -538,6 +772,7 @@ function footer({ reason, links = [] }) {
 function renderEmail({
   preheader = '',
   eyebrow: eyebrowText = null,
+  hero = null,
   title,
   actor = null,
   blocks = [],
@@ -553,23 +788,12 @@ function renderEmail({
     b.supportEmail ? { label: 'Contact support', url: `mailto:${b.supportEmail}` } : null,
   ].filter(Boolean);
 
-  const actorRow = actor
-    ? [
-      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 14px;">`,
-      '<tr>',
-      `<td width="34" valign="middle" style="padding-right:10px;">${avatarCircle(actor.name, { color: actor.color })}</td>`,
-      `<td valign="middle" style="font-family:${TOKENS.font};font-size:13px;color:${TOKENS.soft};">${escapeHtml(actor.line || actor.name)}</td>`,
-      '</tr></table>',
-    ].join('')
-    : '';
 
   const body = [
-    eyebrowText ? eyebrow(eyebrowText) : '',
-    actorRow,
+    eyebrowText ? eyebrow(eyebrowText, { line: actor ? actor.line : null, hero }) : '',
     heading(title),
     ...blocks,
-    cta ? button(cta) : '',
-    secondaryCta ? button({ ...secondaryCta, tone: 'secondary' }) : '',
+    ctaGroup(cta, secondaryCta),
   ].join('\n');
 
   return [
@@ -580,20 +804,28 @@ function renderEmail({
     '<meta name="viewport" content="width=device-width, initial-scale=1" />',
     '<meta name="x-apple-disable-message-reformatting" />',
     // Dark by design, in both modes: this tells a client not to invert it.
-    '<meta name="color-scheme" content="dark" />',
-    '<meta name="supported-color-schemes" content="dark" />',
+    '<meta name="color-scheme" content="light" />',
+    '<meta name="supported-color-schemes" content="light" />',
     `<title>${escapeHtml(title)}</title>`,
+    // Apple Mail and iOS Mail load this; Outlook and Gmail's web view drop it
+    // and fall through to the system stack in TOKENS.font.
+    '<link rel="preconnect" href="https://fonts.googleapis.com" />',
+    '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />',
     '<style>',
-    ':root{color-scheme:dark;supported-color-schemes:dark;}',
+    ':root{color-scheme:light;supported-color-schemes:light;}',
+    "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');",
     // Outlook.com rewrites colours under its own dark theme; these put them
     // back. Everything else already ships the dark values inline.
     `[data-ogsc] .ew-page{background:${TOKENS.page} !important;}`,
     `[data-ogsc] .ew-card{background:${TOKENS.card} !important;}`,
     `[data-ogsc] .ew-text{color:${TOKENS.text} !important;}`,
+    `[data-ogsc] .ew-foot{background:${FOOT.bg} !important;}`,
     '@media only screen and (max-width:720px){',
     '.ew-card{width:100% !important;border-radius:0 !important;}',
+    '.ew-foot{border-radius:0 !important;}',
     '.ew-pad{padding:24px 18px !important;}',
-    '.ew-band{padding:20px 18px !important;border-radius:0 !important;}',
+    '.ew-band{border-radius:0 !important;}',
+    '.ew-band img{border-radius:0 !important;}',
     // Side-by-side halves become full-width rows: below this width there is
     // not enough room for two columns of readable text.
     '.ew-col{display:block !important;width:100% !important;padding:0 0 14px !important;}',
@@ -606,10 +838,10 @@ function renderEmail({
     '<tr><td align="center" style="padding:40px 12px 44px;">',
     `<table role="presentation" class="ew-card" width="700" cellpadding="0" cellspacing="0" border="0" bgcolor="${TOKENS.card}" style="width:700px;max-width:700px;background:${TOKENS.card};border:1px solid ${TOKENS.border};border-radius:14px;">`,
     header(),
-    '<tr><td class="ew-pad" style="padding:30px 34px 32px;">',
+    '<tr><td class="ew-pad" style="padding:48px 40px 40px;">',
     body,
     '</td></tr></table>',
-    footer({ reason, links: links || defaultLinks }),
+    footer({ reason, links: links || defaultLinks, actor }),
     '</td></tr></table>',
     '</body></html>',
   ].join('\n');
@@ -625,6 +857,10 @@ function renderText(lines) {
 }
 
 module.exports = {
+  heroBadge,
+  ruleAccent,
+  ICON_CID_PREFIX,
+  ICONS,
   LOGO_CID,
   LOGO_SRC,
   TOKENS,

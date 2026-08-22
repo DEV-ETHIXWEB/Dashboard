@@ -45,6 +45,35 @@ function stageLabel(stage) {
   return STAGE_LABELS[stage] || String(stage);
 }
 
+const ROLE_LABELS = {
+  admin: 'Administrator',
+  project_manager: 'Project Manager',
+  sales: 'Sales',
+  employee: 'Team Member',
+  client: 'Client',
+};
+
+/** How a person is introduced in the sign-off, from their role. */
+function roleLabel(role) {
+  return ROLE_LABELS[role] || 'Team Member';
+}
+
+/**
+ * The sign-off card: who caused this message. Callers may pass a full user
+ * row as `actor`, or just `actorName` -- the older shape still works, it
+ * simply produces a card without the role and address.
+ */
+function actorCard(actor, actorName, line) {
+  const name = (actor && actor.name) || actorName || 'Dashboard';
+  return {
+    name,
+    line,
+    role: actor && actor.role ? roleLabel(actor.role) : null,
+    company: (actor && actor.company) || null,
+    email: (actor && actor.email) || null,
+  };
+}
+
 function ticketMeta(ticket, { clientName, assigneeName } = {}) {
   return [
     { label: 'Ticket', value: ticket.id },
@@ -90,7 +119,12 @@ function newTicketForStaff({ ticket, clientName, assigneeName, clickupUrl }) {
       preheader: `${clientName || 'A client'} raised "${ticket.subject}"`,
       eyebrow: 'New ticket',
       title: `${clientName || 'A client'} raised a ticket`,
-      actor: { name: clientName || 'Client', line: `${clientName || 'A client'} opened ${ticket.id}` },
+      actor: {
+        name: clientName || 'Client',
+        line: `${clientName || 'A client'} opened ${ticket.id}`,
+        role: 'Client',
+        company: ticket.clientCompany || null,
+      },
       blocks,
       cta: link ? { label: 'Open ticket', url: link } : null,
       secondaryCta: clickupUrl ? { label: 'View in ClickUp', url: clickupUrl } : null,
@@ -154,17 +188,18 @@ function ticketReceiptForClient({ ticket, clientName, assigneeName }) {
 }
 
 /** Someone now owns this ticket -- the ClickUp "assigned to you" moment. */
-function ticketAssigned({ ticket, assigneeName, clientName, actorName }) {
+function ticketAssigned({ ticket, assigneeName, clientName, actorName, actor = null }) {
   const meta = ticketMeta(ticket, { clientName, assigneeName });
   const link = ticketLink(ticket.id);
+  const who = (actor && actor.name) || actorName || 'A manager';
 
   return {
     subject: `Assigned to you: ${ticket.subject} (${ticket.id})`,
     html: t.renderEmail({
-      preheader: `${actorName || 'A manager'} assigned you ${ticket.id}`,
+      preheader: `${who} assigned you ${ticket.id}`,
       eyebrow: 'Assignment',
-      title: `${actorName || 'A manager'} assigned you a ticket`,
-      actor: { name: actorName || 'Dashboard', line: `${actorName || 'A manager'} assigned this to you` },
+      title: `${who} assigned you a ticket`,
+      actor: actorCard(actor, actorName, `${who} assigned this to you`),
       blocks: [
         t.taskCard({
           status: ticket.status || 'Open',
@@ -180,7 +215,7 @@ function ticketAssigned({ ticket, assigneeName, clientName, actorName }) {
       reason: 'Sent because this ticket was assigned to you.',
     }),
     text: t.renderText([
-      `${actorName || 'A manager'} assigned you ticket ${ticket.id}: ${ticket.subject}`,
+      `${who} assigned you ticket ${ticket.id}: ${ticket.subject}`,
       '',
       ...metaTextLines(meta),
       '',
@@ -201,6 +236,7 @@ function ticketStatusChanged({ ticket, fromStatus, toStatus, clientName, assigne
     html: t.renderEmail({
       preheader: `${fromStatus || 'Open'} to ${toStatus}`,
       eyebrow: 'Status update',
+      hero: done ? 'check-badge' : null,
       title: done ? 'Your request is resolved' : `Your request moved to ${toStatus}`,
       blocks: [
         t.paragraph(
@@ -208,6 +244,7 @@ function ticketStatusChanged({ ticket, fromStatus, toStatus, clientName, assigne
             ? `Hi ${clientName || 'there'}. The team finished ${ticket.id}. If something still looks wrong, reply on the ticket and it reopens.`
             : `Hi ${clientName || 'there'}. ${ticket.id} moved from ${fromStatus || 'Open'} to ${toStatus}.`,
         ),
+        t.ruleAccent(),
         t.taskCard({
           status: toStatus,
           title: ticket.subject,
@@ -986,6 +1023,7 @@ function renderPreview(key) {
 }
 
 module.exports = {
+  roleLabel,
   newTicketForStaff,
   ticketReceiptForClient,
   ticketAssigned,

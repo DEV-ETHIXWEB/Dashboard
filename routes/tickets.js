@@ -107,7 +107,7 @@ async function announceAssignment(ticket, assigneeId, actor) {
     await mailer.sendTemplate({
       to: assignee.email,
       message: messages.ticketAssigned({
-        ticket, assigneeName: assignee.name, clientName: client?.name || null, actorName: actor.name,
+        ticket, assigneeName: assignee.name, clientName: client?.name || null, actorName: actor.name, actor,
       }),
       template: 'ticket_assigned',
       entity: 'ticket',

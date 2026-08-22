@@ -42,10 +42,23 @@ router.get('/templates', (req, res) => {
 });
 
 /** JSON preview: subject, HTML, and the plain-text twin side by side. */
+/**
+ * A browser cannot resolve cid: -- those only exist inside a sent message.
+ * Point them at the same files on this server so the on-page preview shows
+ * the artwork an inbox will actually get.
+ */
+function previewable(html) {
+  return String(html || '')
+    // Match the full asset name: hyphens ("web-corner") and digits ("bar-030")
+    // both appear in it. A narrower class stops mid-name and yields a 404.
+    .replace(/cid:ethixweb-icon-([a-z0-9-]+)/g, '/mail-icons/$1.png')
+    .replace(/cid:ethixweb-logo/g, '/ethixweb.png');
+}
+
 router.get('/templates/:key/preview', (req, res) => {
   const preview = messages.renderPreview(req.params.key);
   if (!preview) return res.status(404).json({ error: 'Unknown email template' });
-  res.json(preview);
+  res.json({ ...preview, html: previewable(preview.html) });
 });
 
 /**
@@ -62,7 +75,7 @@ router.get('/templates/:key/preview.html', (req, res) => {
   // 'self' matters in development: the preview loads the emblem from this same
     // origin over plain http, which an https-only img-src silently blocks.
     res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:;");
-  res.send(preview.html);
+  res.send(previewable(preview.html));
 });
 
 /** Newest first. The stored HTML is dropped here to keep the list light. */

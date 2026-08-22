@@ -1,8 +1,8 @@
 import {
-  Activity, Bell, CreditCard, FileText, FolderKanban, Globe, Home, KeyRound, LayoutDashboard,
-  LifeBuoy, ListChecks, ListTodo, Mail, MessageSquare, PieChart, ShieldCheck, Ticket,
-  Users, type LucideIcon,
-} from "lucide-react";
+  IconBilling, IconBudget, IconClickUp, IconClientAccess, IconDashboard, IconDomains, IconHome,
+  IconLoginCodes, IconMail, IconNotifications, IconProgress, IconProjects, IconReports, IconSlack,
+  IconTasks, IconTeam, IconTickets, type EthixIcon,
+} from "@/components/icons/ethix";
 import { canSeePage, pageKeyForPath } from "@/lib/permissions";
 import type { Role, User } from "@/lib/types";
 
@@ -11,7 +11,7 @@ export interface NavItem {
   label: string;
   /** Shorter wording for the phone's tab bar, where a slot is 75px wide. */
   short?: string;
-  icon: LucideIcon;
+  icon: EthixIcon;
   roles?: Role[];
   badge?: number;
 }
@@ -27,22 +27,22 @@ export interface NavGroup {
  * the team does daily, and hiding them behind a menu costs more than it saves.
  */
 const STAFF_NAV: NavItem[] = [
-  { to: "/portal", label: "Dashboard", short: "Home", icon: LayoutDashboard },
-  { to: "/portal/projects", label: "Projects", icon: FolderKanban, roles: ["admin", "sales", "project_manager"] },
-  { to: "/portal/tasks", label: "Tasks", icon: ListChecks, roles: ["admin", "project_manager", "employee"] },
-  { to: "/portal/domains", label: "Domains", icon: Globe, roles: ["admin", "sales", "project_manager"] },
-  { to: "/portal/progress", label: "Work progress", short: "Progress", icon: Activity, roles: ["admin", "sales", "project_manager"] },
-  { to: "/portal/tickets", label: "Tickets", icon: Ticket },
-  { to: "/portal/reports", label: "Reports", icon: FileText, roles: ["admin", "sales", "project_manager"] },
-  { to: "/portal/budget", label: "Budget", icon: PieChart, roles: ["admin", "project_manager"] },
-  { to: "/portal/billing", label: "Billing", icon: CreditCard, roles: ["admin"] },
-  { to: "/portal/clickup", label: "ClickUp", icon: ListTodo, roles: ["admin"] },
-  { to: "/portal/slack", label: "Slack", icon: MessageSquare, roles: ["admin"] },
-  { to: "/portal/team", label: "Team", icon: Users, roles: ["admin"] },
-  { to: "/portal/client-access", label: "Client Access", icon: ShieldCheck, roles: ["admin"] },
-  { to: "/portal/otp-monitor", label: "Login Codes", icon: KeyRound, roles: ["admin"] },
-  { to: "/portal/mail", label: "Mail", icon: Mail, roles: ["admin"] },
-  { to: "/portal/notifications", label: "Notifications", icon: Bell },
+  { to: "/portal", label: "Dashboard", short: "Home", icon: IconDashboard },
+  { to: "/portal/projects", label: "Projects", icon: IconProjects, roles: ["admin", "sales", "project_manager"] },
+  { to: "/portal/tasks", label: "Tasks", icon: IconTasks, roles: ["admin", "project_manager", "employee"] },
+  { to: "/portal/domains", label: "Domains", icon: IconDomains, roles: ["admin", "sales", "project_manager"] },
+  { to: "/portal/progress", label: "Work progress", short: "Progress", icon: IconProgress, roles: ["admin", "sales", "project_manager"] },
+  { to: "/portal/tickets", label: "Tickets", icon: IconTickets },
+  { to: "/portal/reports", label: "Reports", icon: IconReports, roles: ["admin", "sales", "project_manager"] },
+  { to: "/portal/budget", label: "Budget", icon: IconBudget, roles: ["admin", "project_manager"] },
+  { to: "/portal/billing", label: "Billing", icon: IconBilling, roles: ["admin"] },
+  { to: "/portal/clickup", label: "ClickUp", icon: IconClickUp, roles: ["admin"] },
+  { to: "/portal/slack", label: "Slack", icon: IconSlack, roles: ["admin"] },
+  { to: "/portal/team", label: "Team", icon: IconTeam, roles: ["admin"] },
+  { to: "/portal/client-access", label: "Client Access", icon: IconClientAccess, roles: ["admin"] },
+  { to: "/portal/otp-monitor", label: "Login Codes", icon: IconLoginCodes, roles: ["admin"] },
+  { to: "/portal/mail", label: "Mail", icon: IconMail, roles: ["admin"] },
+  { to: "/portal/notifications", label: "Notifications", icon: IconNotifications },
 ];
 
 const STAFF_GROUPS: { heading: string; labels: string[] }[] = [
@@ -62,19 +62,19 @@ const STAFF_GROUPS: { heading: string; labels: string[] }[] = [
  * nobody outside this office calls an invoice a billing record.
  */
 const CLIENT_PRIMARY: NavItem[] = [
-  { to: "/portal", label: "Home", icon: Home },
-  { to: "/portal/progress", label: "Work", icon: Activity },
-  { to: "/portal/tickets", label: "Requests", icon: LifeBuoy },
-  { to: "/portal/billing", label: "Money", icon: CreditCard },
+  { to: "/portal", label: "Home", icon: IconHome },
+  { to: "/portal/progress", label: "Work", icon: IconProgress },
+  { to: "/portal/tickets", label: "Requests", icon: IconTickets },
+  { to: "/portal/billing", label: "Money", icon: IconBilling },
 ];
 
 /** Everything else a client owns, one tap away behind More. */
 const CLIENT_SECONDARY: NavItem[] = [
-  { to: "/portal/projects", label: "Projects", icon: FolderKanban },
-  { to: "/portal/domains", label: "Websites", icon: Globe },
-  { to: "/portal/reports", label: "Documents", icon: FileText },
-  { to: "/portal/budget", label: "Spending", icon: PieChart },
-  { to: "/portal/notifications", label: "Alerts", icon: Bell },
+  { to: "/portal/projects", label: "Projects", icon: IconProjects },
+  { to: "/portal/domains", label: "Websites", icon: IconDomains },
+  { to: "/portal/reports", label: "Documents", icon: IconReports },
+  { to: "/portal/budget", label: "Spending", icon: IconBudget },
+  { to: "/portal/notifications", label: "Alerts", icon: IconNotifications },
 ];
 
 type Viewer = Pick<User, "role"> & { allowedPages?: User["allowedPages"] };

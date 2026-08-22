@@ -113,9 +113,23 @@ function Brand() {
   return (
     <div className="flex min-w-0 items-center gap-2.5">
       <div
-        className="flex size-8 shrink-0 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 p-1 shadow-sm ring-1 ring-primary/20"
+        className="group flex size-[2.1rem] shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950/40 p-1 shadow-sm ring-1 ring-primary/20 transition-colors duration-200 hover:border-primary/40 hover:ring-primary/40"
       >
-        <img src="/emblem-mark.png" alt="EthixWeb Emblem" className="size-full object-contain" />
+        {/* Both marks share one box, so the greyscale and red versions render
+            at exactly the same size; hovering cross-fades between them. */}
+        <div className="relative size-full">
+          <img
+            src="/emblem-mark.png"
+            alt="EthixWeb Emblem"
+            className="absolute inset-0 size-full object-contain transition-opacity duration-200 group-hover:opacity-0"
+          />
+          <img
+            src="/emblem-mark-red.png"
+            alt=""
+            aria-hidden="true"
+            className="absolute inset-0 size-full object-contain opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+          />
+        </div>
       </div>
       <div className="min-w-0">
         <div className="truncate text-sm leading-tight font-semibold tracking-tight text-sidebar-foreground">
@@ -127,42 +141,86 @@ function Brand() {
   );
 }
 
+/**
+ * The icon language is lifted from ethixweb.com, which builds every icon
+ * affordance the same way: a lucide glyph at stroke-width 2 inside a fully
+ * rounded chip with a hairline white border and a blurred, saturated
+ * backdrop -- never a solid fill. The active row here IS that chip, so the
+ * sidebar and the marketing site read as one product.
+ *
+ * The glyph still sits in a fixed 28px cell so a wide icon and a narrow one
+ * occupy identical space and the labels stay on one optical line.
+ */
+const NAV_ICON_CELL = "relative grid size-7 shrink-0 place-items-center";
+
+function NavIcon({ icon: Icon, active }: { icon: NavItem["icon"]; active: boolean }) {
+  const reduceMotion = useReducedMotion();
+
+  return (
+    <motion.span
+      aria-hidden
+      className={NAV_ICON_CELL}
+      variants={reduceMotion ? undefined : { tap: { scale: 0.82 } }}
+      transition={{ type: "spring", stiffness: 520, damping: 20 }}
+    >
+      <motion.span
+        className="relative"
+        animate={reduceMotion || !active ? { scale: 1 } : { scale: [1, 1.18, 1] }}
+        transition={{ duration: 0.32, ease: "easeOut" }}
+      >
+        {/* Stroke 2 on every glyph, active or not -- the site never varies it;
+            selection is carried by the chip and the colour instead. */}
+        <Icon className="size-[1.05rem]" strokeWidth={2} />
+      </motion.span>
+    </motion.span>
+  );
+}
+
 function NavRow({ item }: { item: NavItem }) {
+  const reduceMotion = useReducedMotion();
+
   return (
     <NavLink
       to={item.to}
       end={item.to === "/portal"}
       className={({ isActive }) =>
         cn(
-          "focus-clear relative flex h-10 items-center gap-2.5 rounded-lg px-3 text-sm transition-colors",
+          "focus-clear relative flex h-10 items-center rounded-full px-3 text-sm transition-colors",
           isActive
-            ? "bg-primary/10 font-medium text-primary shadow-xs"
-            : "font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+            ? "font-medium text-primary"
+            : "font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
         )
       }
     >
       {({ isActive }) => (
-        <>
-          {isActive && <span aria-hidden className="absolute left-0 h-5 w-0.5 rounded-r-full bg-primary" />}
-          <item.icon aria-hidden className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{item.label}</span>
+        <motion.span
+          className="flex w-full items-center gap-2.5"
+          whileTap={reduceMotion ? undefined : "tap"}
+        >
+          {isActive && (
+            <motion.span
+              aria-hidden
+              layoutId="nav-active-chip"
+              // Tinted from --primary rather than --accent: in the light theme
+              // --accent is near-white, so the chip vanished against the
+              // sidebar. A wash of the brand red reads on both grounds.
+              className="absolute inset-0 rounded-full border border-primary/25 bg-primary/12 backdrop-blur-md backdrop-saturate-150"
+              transition={{ type: "spring", stiffness: 420, damping: 34 }}
+            />
+          )}
+          <NavIcon icon={item.icon} active={isActive} />
+          <span className="relative min-w-0 flex-1 truncate">{item.label}</span>
           {item.badge != null && item.badge > 0 && (
-            <span className="shrink-0 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
+            <span className="relative shrink-0 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
               {item.badge > 9 ? "9+" : item.badge}
             </span>
           )}
-        </>
+        </motion.span>
       )}
     </NavLink>
   );
 }
 
-/**
- * Two sidebars in one component, because they differ only in how much index
- * they need. Staff get headed groups over the whole workspace; a client gets a
- * flat, unlabelled list -- four places they go, then everything else, with no
- * section headings to read past.
- */
 function SidebarContent({
   primary,
   secondary,

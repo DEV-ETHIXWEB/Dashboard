@@ -25,7 +25,7 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
-const { LOGO_CID, LOGO_SRC } = require('./emailTemplates');
+const { LOGO_CID, LOGO_SRC, ICON_CID_PREFIX, ICONS } = require('./emailTemplates');
 
 const MAX_LOG_HTML = 400_000; // a rendered email is ~20KB; this is a sanity cap
 
@@ -64,9 +64,20 @@ function logoAttachment() {
  * wash behind it, and the footer sign-off, so there is only ever one of these.
  */
 function inlineImagesFor(html) {
-  if (!html || !html.includes(LOGO_SRC)) return [];
-  const logo = logoAttachment();
-  return logo ? [logo] : [];
+  if (!html) return [];
+  const out = [];
+  if (html.includes(LOGO_SRC)) {
+    const logo = logoAttachment();
+    if (logo) out.push(logo);
+  }
+  // Only the glyphs this message actually names: a short email stays short.
+  for (const name of ICONS) {
+    const cid = ICON_CID_PREFIX + name;
+    if (!html.includes('cid:' + cid)) continue;
+    const img = readImage(path.join(__dirname, '..', 'public', 'mail-icons', name + '.png'), name + '.png', cid);
+    if (img) out.push(img);
+  }
+  return out;
 }
 
 function smtpConfigured() {
