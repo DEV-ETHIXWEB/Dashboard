@@ -7,3 +7,17 @@ db/data
 
 .vercel
 .env*
+
+# Secrets: also catch a bare "env" (no dot) and common key files
+env
+*.env
+*service-account*.json
+*.pem
+*.key
+
+# Not part of this project: a stale clone of this same repo (it has its own
+# .git, so it stages as a broken pointer) and an unwired monorepo experiment.
+Dashboard/
+apps/
+packages/
+public/admin/

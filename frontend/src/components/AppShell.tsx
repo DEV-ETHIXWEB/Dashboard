@@ -137,64 +137,125 @@ function titleFor(pathname: string, items: NavItem[]): string {
 }
 
 /**
- * The wordmark, not the name set in a typeface that happens to be nearby.
+ * The emblem on its plate, with the product name set beside it.
  *
- * `ethixweb.png` is a white wordmark on transparency, which is invisible on the
- * light sidebar -- that is the blank strip. Rather than sit it on a dark plate
- * and lose the clean edge, it is inverted in light mode: pure white becomes
- * pure black, which is exactly the mark again. Dark mode uses the file as it
- * ships. The alt text carries the name for anyone whose images do not load.
+ * The mark ships in two files -- greyscale and brand red -- and the plate holds
+ * both so hovering cross-fades between them at identical size. `ethixweb.png`,
+ * the flat wordmark, is deliberately not used here: it is a white mark on
+ * transparency and disappears against the light sidebar.
  */
 function Brand() {
   return (
-    <img
-      src="/ethixweb.png"
-      alt="EthixWeb"
-      width={422}
-      height={63}
-      // `block` kills the inline baseline gap, so the wordmark sits on the
-      // header's own centre line rather than a few pixels below it.
-      className="block h-6 w-auto max-w-full shrink-0 object-contain object-left invert dark:invert-0"
-    />
+    <div className="flex min-w-0 items-center gap-2.5">
+      <div
+        className="group flex size-[2.1rem] shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950/40 p-1 shadow-sm ring-1 ring-primary/20 transition-colors duration-200 hover:border-primary/40 hover:ring-primary/40"
+      >
+        {/* Both marks share one box, so the greyscale and red versions render
+            at exactly the same size; hovering cross-fades between them. */}
+        <div className="relative size-full">
+          <img
+            src="/emblem-mark.png"
+            alt="EthixWeb Emblem"
+            className="absolute inset-0 size-full object-contain transition-opacity duration-200 group-hover:opacity-0"
+          />
+          <img
+            src="/emblem-mark-red.png"
+            alt=""
+            aria-hidden="true"
+            className="absolute inset-0 size-full object-contain opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+          />
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-sm leading-tight font-semibold tracking-tight text-sidebar-foreground">
+          EthixWeb
+        </div>
+        <div className="truncate text-xs text-muted-foreground">Client portal</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The icon language is lifted from ethixweb.com, which builds every icon
+ * affordance the same way: a lucide glyph at stroke-width 2 inside a fully
+ * rounded chip with a hairline white border and a blurred, saturated
+ * backdrop -- never a solid fill. The active row here IS that chip, so the
+ * sidebar and the marketing site read as one product.
+ *
+ * The glyph still sits in a fixed 28px cell so a wide icon and a narrow one
+ * occupy identical space and the labels stay on one optical line.
+ */
+const NAV_ICON_CELL = "relative grid size-7 shrink-0 place-items-center";
+
+function NavIcon({ icon: Icon, active }: { icon: NavItem["icon"]; active: boolean }) {
+  const reduceMotion = useReducedMotion();
+
+  return (
+    <motion.span
+      aria-hidden
+      className={NAV_ICON_CELL}
+      variants={reduceMotion ? undefined : { tap: { scale: 0.82 } }}
+      transition={{ type: "spring", stiffness: 520, damping: 20 }}
+    >
+      <motion.span
+        className="relative"
+        animate={reduceMotion || !active ? { scale: 1 } : { scale: [1, 1.18, 1] }}
+        transition={{ duration: 0.32, ease: "easeOut" }}
+      >
+        {/* Stroke 2 on every glyph, active or not -- the site never varies it;
+            selection is carried by the chip and the colour instead. */}
+        <Icon className="size-[1.05rem]" strokeWidth={2} />
+      </motion.span>
+    </motion.span>
   );
 }
 
 function NavRow({ item }: { item: NavItem }) {
+  const reduceMotion = useReducedMotion();
+
   return (
     <NavLink
       to={item.to}
       end={item.to === "/portal"}
       className={({ isActive }) =>
         cn(
-          "focus-clear relative flex h-10 items-center gap-2.5 rounded-lg px-3 text-sm transition-colors",
+          "focus-clear relative flex h-10 items-center rounded-full px-3 text-sm transition-colors",
           isActive
-            ? "bg-primary/10 font-medium text-primary shadow-xs"
-            : "font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+            ? "font-medium text-primary"
+            : "font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
         )
       }
     >
       {({ isActive }) => (
-        <>
-          {isActive && <span aria-hidden className="absolute left-0 h-5 w-0.5 rounded-r-full bg-primary" />}
-          <item.icon aria-hidden className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{item.label}</span>
+        <motion.span
+          className="flex w-full items-center gap-2.5"
+          whileTap={reduceMotion ? undefined : "tap"}
+        >
+          {isActive && (
+            <motion.span
+              aria-hidden
+              layoutId="nav-active-chip"
+              // Tinted from --primary rather than --accent: in the light theme
+              // --accent is near-white, so the chip vanished against the
+              // sidebar. A wash of the brand red reads on both grounds.
+              className="absolute inset-0 rounded-full border border-primary/25 bg-primary/12 backdrop-blur-md backdrop-saturate-150"
+              transition={{ type: "spring", stiffness: 420, damping: 34 }}
+            />
+          )}
+          <NavIcon icon={item.icon} active={isActive} />
+          <span className="relative min-w-0 flex-1 truncate">{item.label}</span>
           {item.badge != null && item.badge > 0 && (
-            <span className="shrink-0 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
+            <span className="relative shrink-0 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
               {item.badge > 9 ? "9+" : item.badge}
             </span>
           )}
-        </>
+        </motion.span>
       )}
     </NavLink>
   );
 }
 
-/**
- * Two sidebars in one component, because they differ only in how much index
- * they need. Staff get headed groups over the whole workspace; a client gets a
- * flat, unlabelled list -- four places they go, then everything else, with no
- * section headings to read past.
- */
 function SidebarContent({
   primary,
   secondary,
@@ -219,9 +280,9 @@ function SidebarContent({
         />
       </div>
 
-              {/* 22px, not 16: the nav rows below inset by px-2.5 + px-3 and the
-            account block by p-3 + px-2.5, both landing on 22. The wordmark
-            shares that line rather than starting six pixels to its left. */}
+      {/* 22px, not 16: the nav rows below inset by px-2.5 + px-3 and the
+          account block by p-3 + px-2.5, both landing on 22. The emblem starts
+          on that same line rather than six pixels to its left. */}
       <div className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border/60 px-[22px]">
         <Brand />
       </div>
