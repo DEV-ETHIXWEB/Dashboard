@@ -6,6 +6,7 @@ const router = express.Router();
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
 const { requirePage } = require('../utils/clientPages');
+const approvals = require('../utils/approvals');
 
 const STATUS_PCT = { 'To Do': 0, 'In Progress': 50, 'In Review': 90, Complete: 100 };
 
@@ -100,6 +101,13 @@ router.delete('/:id', requireCSRF, requireRole('admin'), async (req, res, next) 
   try {
     const project = await db.find('projects', req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const gate = await approvals.gate(req, res, {
+      action: 'project.delete',
+      summary: `Delete the project "${project.name}" and every task on it`,
+      payload: { projectId: req.params.id },
+    });
+    if (gate.held) return;
 
     // Tell this client's open tabs, not everyone's.
     res.locals.liveAudience = [project.clientId];

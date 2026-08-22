@@ -106,7 +106,7 @@ export function BigMoney({
       <p className="text-sm font-medium text-muted-foreground">{label}</p>
       <p
         className={cn(
-          "mt-1 text-4xl leading-none font-semibold tracking-tight tabular-nums",
+          "mt-1 numeric-display text-4xl leading-none font-semibold",
           direction === "in" ? "text-money-in" : "text-money-out",
         )}
       >
@@ -145,7 +145,7 @@ export function StatTile({
         <Icon aria-hidden className="size-4 shrink-0 text-primary" />
         <span className="text-sm font-medium text-muted-foreground">{label}</span>
       </span>
-      <span className="text-2xl leading-none font-semibold tracking-tight tabular-nums">{value}</span>
+      <span className="numeric-display text-2xl leading-none font-semibold">{value}</span>
       <span className="text-sm leading-snug text-muted-foreground">{hint}</span>
     </Link>
   );

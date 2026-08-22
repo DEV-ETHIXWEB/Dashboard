@@ -98,11 +98,25 @@ export default function WorkProgress() {
                 disabled={digest.isPending}
                 onClick={() =>
                   digest.mutate(board.data!.client!.id, {
-                    onSuccess: (r) =>
-                      toast.success(
-                        r.ok ? `Summary emailed to ${r.to}` : "Summary rendered, but no mail transport is configured",
-                      ),
-                    onError: (err) => toast.error(err instanceof Error ? err.message : "Could not send the summary"),
+                    onSuccess: (r) => {
+                      if (!r.ok) {
+                        toast.success("Summary rendered, but no mail transport is configured");
+                      } else if (r.redirectedTo) {
+                        // A test inbox is intercepting. Say so plainly rather
+                        // than letting an admin believe the client got it.
+                        toast.success(`Summary for ${r.to} went to the test inbox (${r.redirectedTo})`, {
+                          duration: 7000,
+                        });
+                      } else {
+                        toast.success(`Summary emailed to ${r.to}`);
+                      }
+                    },
+                    // The server already turns provider errors into a sentence
+                    // an admin can act on; a raw JSON blob helps nobody.
+                    onError: (err) =>
+                      toast.error(err instanceof Error ? err.message : "Could not send the summary", {
+                        duration: 9000,
+                      }),
                   })
                 }
               >
@@ -345,7 +359,7 @@ function TicketCard({ ticket, onOpen }: { ticket: ProgressTicket; onOpen: () => 
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-foreground/10">
           <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
         </div>
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+        <span className="shrink-0 numeric text-xs text-muted-foreground">
           {ticket.stageLabel ?? "Not started"} · {pct}%
         </span>
       </div>

@@ -197,6 +197,42 @@ async function main() {
   // --- one-tap sign-in link (admin-issued) ----------------------------------
   r = await admin.req('POST', `/api/auth/login-link/${clientId}`);
   check('an admin can mint a client sign-in link', r.status === 200 && Boolean(r.data.path), `${r.status} ${r.text.slice(0, 160)}`);
+  // --- a link's lifetime is chosen, and bounded -----------------------------
+  // A sign-in link is a bearer credential, so "however long you like" is not
+  // an option however it is asked for.
+  {
+    const loginLinks = require('../utils/loginLinks');
+
+    r = await admin.req('POST', `/api/auth/login-link/${clientId}`, { expiresInMinutes: 60 });
+    check('an admin can choose how long a link lives', r.status === 200 && r.data.expiresInMinutes === 60,
+      `${r.status} ${r.data.expiresInMinutes}`);
+    const anHour = r.data.expiresAt - Date.now();
+    check('and the expiry matches the choice', anHour > 55 * 60000 && anHour <= 61 * 60000, `${Math.round(anHour / 60000)} min`);
+
+    r = await admin.req('POST', `/api/auth/login-link/${clientId}`, { expiresInMinutes: 60 * 24 * 365 });
+    check('a year is clamped to the seven-day ceiling', r.data.expiresInMinutes === 60 * 24 * 7, `${r.data.expiresInMinutes}`);
+
+    r = await admin.req('POST', `/api/auth/login-link/${clientId}`, { expiresInMinutes: 1 });
+    check('a minute is raised to the five-minute floor', r.data.expiresInMinutes === 5, `${r.data.expiresInMinutes}`);
+
+    r = await admin.req('POST', `/api/auth/login-link/${clientId}`, { expiresInMinutes: 'not a number' });
+    check('nonsense falls back to the default rather than erroring',
+      r.status === 200 && r.data.expiresInMinutes === Math.round(loginLinks.TOKEN_TTL_MS / 60000),
+      `${r.status} ${r.data.expiresInMinutes}`);
+
+    r = await admin.req('POST', `/api/auth/login-link/${clientId}`, { expiresInMinutes: -5 });
+    check('a negative lifetime cannot mint an already-dead link',
+      r.data.expiresAt > Date.now(), `${r.data.expiresAt - Date.now()}ms`);
+
+    r = await admin.req('POST', `/api/auth/login-link/${clientId}`);
+    check('omitting it keeps the old default', r.data.expiresInMinutes === 15, `${r.data.expiresInMinutes}`);
+
+    // The choice is on the record: who issued what, and for how long.
+    const logged = (await admin.req('GET', '/api/approvals/audit-log')).data.entries
+      .find((e) => e.action === 'issue_login_link');
+    check('the chosen lifetime is audited', Boolean(logged?.meta?.ttlMs), JSON.stringify(logged?.meta));
+  }
+
   const linkPath = r.data.path;
   check('the link is returned as a path the portal can host', String(linkPath).startsWith('/api/auth/magic-link/verify?token='), linkPath);
 
@@ -259,6 +295,201 @@ async function main() {
   hit = await openLink(first);
   check('issuing a new link kills the previous one',
     hit.status === 302 && hit.headers.get('location') === '/login?linkError=invalid', `${hit.headers.get('location')}`);
+
+  // --- super admin, and the second signature -------------------------------
+  {
+    const roles = require('../utils/roles');
+    const { db } = require('../db/setup');
+
+    // The seed elects one super admin and leaves the second admin untrusted.
+    let me2 = (await admin.req('GET', '/api/auth/me')).data;
+    check('the signed-in admin is the super admin', me2.user?.isSuperAdmin === true, JSON.stringify(me2.user?.isSuperAdmin));
+    check('capabilities travel with the session', me2.capabilities?.canManageAdmins === true, JSON.stringify(me2.capabilities));
+    check('a super admin never needs approval', me2.capabilities?.needsApproval === false);
+
+    // A second admin who has not been vouched for.
+    const fresh = makeClient(base);
+    r = await admin.req('POST', '/api/users', {
+      name: 'Fresh Admin', email: 'fresh.admin@ethixweb.local', role: 'admin', password: 'FreshAdmin#1',
+    });
+    check('a super admin can appoint an administrator', r.status === 201, `${r.status} ${r.text.slice(0, 200)}`);
+    const freshId = r.data.user?.id;
+    check('a new admin starts untrusted', r.data.user?.adminTrusted === false, JSON.stringify(r.data.user?.adminTrusted));
+
+    r = await fresh.req('POST', '/api/auth/login', { email: 'fresh.admin@ethixweb.local', password: 'FreshAdmin#1' });
+    fresh.setCsrf(r.data.csrfToken);
+    check('an admin signs in without a code step', r.status === 200 && !r.data.requiresOtp, `${r.status}`);
+
+    const freshMe = (await fresh.req('GET', '/api/auth/me')).data;
+    check('a new admin is told they need approval', freshMe.capabilities?.needsApproval === true, JSON.stringify(freshMe.capabilities));
+    check('a new admin cannot manage admins', freshMe.capabilities?.canManageAdmins === false);
+    check('a new admin cannot read the audit log', freshMe.capabilities?.canReadAuditLog === false);
+
+    // --- the hard limits, which no approval can unlock ---------------------
+    r = await fresh.req('POST', '/api/users', { name: 'Sneaky', email: 'sneaky@ethixweb.local', role: 'admin' });
+    check('an ordinary admin cannot appoint an admin at all', r.status === 403, `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await fresh.req('POST', `/api/users/${freshId}/standing`, { superAdmin: true });
+    check('an admin cannot promote themselves to super admin', r.status === 403, `${r.status}`);
+
+    r = await fresh.req('GET', '/api/approvals/audit-log');
+    check('the audit log is closed to an ordinary admin', r.status === 403, `${r.status}`);
+
+    // --- a sensitive change is held, not applied ---------------------------
+    const victim = (await admin.req('GET', '/api/users')).data.users.find((u) => u.email === 'jordan.brooks@ethixweb.local');
+    r = await fresh.req('DELETE', `/api/users/${victim.id}`);
+    check('a sensitive change is held for approval', r.status === 202, `${r.status} ${r.text.slice(0, 200)}`);
+    check('the response says nothing has changed yet', r.data.pendingApproval === true);
+    const requestId = r.data.request?.id;
+    check('the request explains itself in plain words',
+      /Delete the employee account for Jordan Brooks/.test(r.data.request?.summary || ''), r.data.request?.summary);
+
+    const stillThere = await db.find('users', victim.id);
+    check('the account was NOT deleted while pending', Boolean(stillThere));
+
+    // --- everyone who can decide was told ----------------------------------
+    r = await admin.req('GET', '/api/notifications');
+    check('the approver got a bell',
+      (r.data.notifications || []).some((n) => n.type === 'approval' && /Fresh Admin needs approval/.test(n.message)));
+    r = await admin.req('GET', '/api/mail/log');
+    check('the approver got an email',
+      (r.data.entries || []).some((e) => e.template === 'approval_requested'));
+
+    // --- nobody signs their own --------------------------------------------
+    r = await fresh.req('POST', `/api/approvals/${requestId}/approve`);
+    check('you cannot approve your own request', r.status === 403, `${r.status} ${r.text.slice(0, 160)}`);
+    check('a self-approval leaves the account alone', Boolean(await db.find('users', victim.id)));
+
+    // --- and the queue is visible to both sides ----------------------------
+    r = await fresh.req('GET', '/api/approvals');
+    check('the requester can watch their own queue', r.status === 200 && r.data.requests.length >= 1, `${r.status}`);
+    r = await admin.req('GET', '/api/approvals?status=pending');
+    check('the approver sees it pending', (r.data.requests || []).some((x) => x.id === requestId));
+    check('the queue never leaks a password',
+      !JSON.stringify(r.data).includes('FreshAdmin#1') && !/"password"/.test(JSON.stringify(r.data)));
+
+    // --- approval executes it, exactly once --------------------------------
+    r = await admin.req('POST', `/api/approvals/${requestId}/approve`, { note: 'Checked with the team.' });
+    check('a super admin can approve', r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+    check('the approved request is stamped executed', Boolean(r.data.request?.executedAt));
+    check('the change actually landed', !(await db.find('users', victim.id)));
+
+    r = await admin.req('POST', `/api/approvals/${requestId}/approve`);
+    check('a decided request cannot be approved twice', r.status === 409, `${r.status}`);
+
+    r = await fresh.req('GET', '/api/notifications');
+    check('the requester was told the answer',
+      (r.data.notifications || []).some((n) => /approved your request/.test(n.message)));
+
+    // --- rejection changes nothing -----------------------------------------
+    const victim2 = (await admin.req('GET', '/api/users')).data.users.find((u) => u.email === 'emily.turner@ethixweb.local');
+    r = await fresh.req('DELETE', `/api/users/${victim2.id}`);
+    const rejectId = r.data.request?.id;
+    r = await admin.req('POST', `/api/approvals/${rejectId}/reject`, { note: 'We still need Emily.' });
+    check('a request can be turned down', r.status === 200 && r.data.request?.status === 'rejected', `${r.status}`);
+    check('a rejected change never happened', Boolean(await db.find('users', victim2.id)));
+
+    // --- vouching removes the gate -----------------------------------------
+    r = await admin.req('POST', `/api/users/${freshId}/standing`, { trusted: true });
+    check('a super admin can vouch for an admin', r.status === 200 && r.data.user?.adminTrusted === true, `${r.status} ${r.text.slice(0, 160)}`);
+
+    const victim3 = (await admin.req('GET', '/api/users')).data.users.find((u) => u.email === 'emily.turner@ethixweb.local');
+    r = await fresh.req('DELETE', `/api/users/${victim3.id}`);
+    check('a trusted admin acts without approval', r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+    check('and the change landed immediately', !(await db.find('users', victim3.id)));
+
+    // --- a trusted admin can now decide, but still not for themselves ------
+    r = await admin.req('POST', `/api/users/${freshId}/standing`, { trusted: false });
+    check('trust can be withdrawn', r.status === 200 && r.data.user?.adminTrusted === false, `${r.status}`);
+
+    // --- the last super admin cannot step down ------------------------------
+    const meId = (await admin.req('GET', '/api/auth/me')).data.user.id;
+    r = await admin.req('POST', `/api/users/${meId}/standing`, { superAdmin: false });
+    check('the only super admin cannot step down', r.status === 409, `${r.status} ${r.text.slice(0, 160)}`);
+
+    // --- a super admin cannot be deleted by anyone else ---------------------
+    r = await admin.req('POST', `/api/users/${freshId}/standing`, { superAdmin: true });
+    check('a super admin can appoint another', r.status === 200 && r.data.user?.isSuperAdmin === true, `${r.status}`);
+    check('appointing a super admin trusts them too', r.data.user?.adminTrusted === true);
+    r = await admin.req('DELETE', `/api/users/${freshId}`);
+    check('a super admin cannot be deleted', r.status === 403, `${r.status} ${r.text.slice(0, 160)}`);
+
+    // --- the log ------------------------------------------------------------
+    r = await admin.req('GET', '/api/approvals/audit-log');
+    check('a super admin can read the audit log', r.status === 200, `${r.status}`);
+    const entries = r.data.entries || [];
+    check('the log records the approval', entries.some((e) => e.entity === 'approval_request' && e.action === 'approve'));
+    check('the log records standing changes', entries.some((e) => e.action === 'standing'));
+    // The decision and the change it released are two separate facts; a log
+    // that only holds the first cannot answer "what actually happened".
+    const executed = entries.find((e) => e.entity === 'user' && e.action === 'delete' && e.meta?.viaApproval);
+    check('the log records the change the approval released', Boolean(executed), JSON.stringify(entries.slice(0, 3)));
+    check('the released change is attributed to whoever proposed it',
+      executed?.actorName === 'Fresh Admin', executed?.actorName);
+    check('and names who let it through', Boolean(executed?.meta?.approvedBy));
+    check('the log names the actor', entries.every((e) => Boolean(e.actorName)));
+
+    // --- closing a ticket needs a second signature -------------------------
+    // The client is told their request is finished. That is not a message you
+    // un-send, so it goes through the queue like any other hard-to-undo change.
+    {
+      r = await admin.req('POST', `/api/users/${freshId}/standing`, { superAdmin: false, trusted: false });
+      check('the proposer is untrusted again for this part', r.status === 200, `${r.status}`);
+
+      const open = (await admin.req('GET', '/api/tickets')).data.tickets
+        .find((t) => !['Resolved', 'Closed'].includes(t.status));
+      check('there is an open ticket to close', Boolean(open));
+
+      const mailBefore = (await admin.req('GET', '/api/mail/log')).data.entries || [];
+      const statusMailsBefore = mailBefore.filter((e) => e.template === 'ticket_status').length;
+
+      r = await fresh.req('PUT', `/api/tickets/${open.id}`, { status: 'Resolved' });
+      check('closing a ticket is held for approval', r.status === 202, `${r.status} ${r.text.slice(0, 200)}`);
+      check('the request says what it will tell the client',
+        /tell the client/.test(r.data.request?.summary || ''), r.data.request?.summary);
+      const closeId = r.data.request?.id;
+
+      const stillOpen = await db.find('tickets', open.id);
+      check('the ticket is NOT closed while pending', stillOpen.status === open.status, stillOpen.status);
+
+      const mailMid = (await admin.req('GET', '/api/mail/log')).data.entries || [];
+      check('the client is NOT emailed while pending',
+        mailMid.filter((e) => e.template === 'ticket_status').length === statusMailsBefore);
+
+      // A change that is not a closure still saves straight away.
+      r = await fresh.req('PUT', `/api/tickets/${open.id}`, { priority: 'Low' });
+      check('an ordinary ticket edit is not held', r.status === 200, `${r.status} ${r.text.slice(0, 160)}`);
+
+      // --- and the signature releases the whole thing, email included ------
+      r = await admin.req('POST', `/api/approvals/${closeId}/approve`);
+      check('a trusted admin can confirm the closure', r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+
+      const closed = await db.find('tickets', open.id);
+      check('the ticket is closed once confirmed', closed.status === 'Resolved', closed.status);
+
+      const mailAfter = (await admin.req('GET', '/api/mail/log')).data.entries || [];
+      const sent = mailAfter.filter((e) => e.template === 'ticket_status');
+      check('the client IS emailed once it is confirmed', sent.length === statusMailsBefore + 1,
+        `${sent.length} vs ${statusMailsBefore}`);
+
+      // The whole point of the dedicated address: it goes to the client who
+      // owns this ticket, not to an admin and not to a shared inbox.
+      const owner = await db.find('users', open.clientId);
+      const theirs = sent.find((e) => String(e.toEmails).includes(owner.email));
+      check('the email went to the ticket\'s own client', Boolean(theirs),
+        `${owner.email} not in ${sent.map((e) => e.toEmails).join(' | ')}`);
+      check('and to nobody else', theirs && String(theirs.toEmails).split(',').length === 1, theirs?.toEmails);
+
+      check('the client was told in the app too',
+        (await db.filter('notifications', (n) => n.userId === open.clientId && /is now Resolved/.test(n.message))).length >= 1);
+      check('the closure is stamped as notified', Boolean((await db.find('tickets', open.id)).resolvedNotifiedAt));
+    }
+
+    // Put the workspace back the way the later tests expect it.
+    await admin.req('POST', `/api/users/${freshId}/standing`, { superAdmin: false });
+    await admin.req('DELETE', `/api/users/${freshId}`);
+    void roles;
+  }
 
   // --- Stripe mirror -------------------------------------------------------
   // No Stripe keys in a test run, so the webhook handler is driven directly.
@@ -361,6 +592,202 @@ async function main() {
     await admin.req('PUT', `/api/users/${clientId}`, {
       allowedPages: ['tickets', 'progress', 'projects', 'billing'],
     });
+  }
+
+  // --- the client's own Slack channel --------------------------------------
+  // Slack is not configured in a test run, so this covers the part that has to
+  // be right regardless: which channel a client is bound to, and that they
+  // cannot reach any other one.
+  {
+    const { db } = require('../db/setup');
+
+    r = await admin.req('POST', '/api/users', {
+      name: 'Channel Client', email: 'channel.client@example.com', role: 'client',
+      password: 'ChannelPass#1', company: 'Channel Co',
+      allowedPages: ['tickets', 'messages'],
+      slackChannelId: 'C0CHANNEL1', slackChannelName: 'brightpath-team',
+    });
+    check('a client can be issued with a Slack channel', r.status === 201, `${r.status} ${r.text.slice(0, 200)}`);
+    const chanClientId = r.data.user?.id;
+    check('the channel is stored on their record', r.data.user?.slackChannelId === 'C0CHANNEL1', r.data.user?.slackChannelId);
+    check('and the readable name with it', r.data.user?.slackChannelName === 'brightpath-team');
+
+    // A Slack id has a shape; a URL or a channel name is a mistake worth catching.
+    r = await admin.req('POST', '/api/users', {
+      name: 'Bad Channel', email: 'bad.channel@example.com', role: 'client',
+      password: 'BadPass#1', slackChannelId: 'https://slack.com/app_redirect?channel=general',
+    });
+    check('a channel id that is not one is refused', r.status === 400, `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await admin.req('POST', '/api/users', {
+      name: 'DM Channel', email: 'dm.channel@example.com', role: 'client',
+      password: 'DmPass#1', slackChannelId: 'D01PRIVATE',
+    });
+    check('a direct-message id is refused, it is not a shared room', r.status === 400, `${r.status}`);
+
+    // --- the client sees theirs, and only theirs -------------------------
+    const chanClient = makeClient(base);
+    r = await chanClient.req('POST', '/api/auth/login', { email: 'channel.client@example.com', password: 'ChannelPass#1' });
+    chanClient.setCsrf(r.data.csrfToken);
+    const codeRows = (await admin.req('GET', '/api/auth/otp-logs')).data.logs || [];
+    const mineCode = codeRows.filter((l) => l.email === 'channel.client@example.com')[0];
+    const code2 = (await admin.req('POST', `/api/auth/otp-logs/${mineCode.id}/reveal`)).data.code;
+    r = await chanClient.req('POST', '/api/auth/verify-otp', { code: code2 });
+    chanClient.setCsrf(r.data.csrfToken);
+    check('the channel client can sign in', r.status === 200, `${r.status}`);
+
+    r = await chanClient.req('GET', '/api/client/channel');
+    check('they can read their channel endpoint', r.status === 200, `${r.status} ${r.text.slice(0, 160)}`);
+    check('it reports Slack as unconfigured here', r.data.enabled === false, JSON.stringify(r.data.enabled));
+
+    // The decisive one: a client naming somebody else's channel gets their own
+    // scope regardless, because the id is read from their account.
+    const other = (await admin.req('GET', '/api/users')).data.users
+      .find((u) => u.role === 'client' && u.id !== chanClientId);
+    r = await chanClient.req('GET', `/api/client/channel?clientId=${other.id}`);
+    check('a client cannot ask for another client\'s channel',
+      r.status === 200 && (!r.data.client || r.data.client.id === chanClientId),
+      JSON.stringify(r.data.client));
+
+    // --- the page toggle gates it ----------------------------------------
+    await admin.req('PUT', `/api/users/${chanClientId}`, { allowedPages: ['tickets'] });
+    r = await chanClient.req('GET', '/api/client/channel');
+    check('turning Messages off closes the channel', r.status === 403, `${r.status}`);
+    r = await chanClient.req('POST', '/api/client/channel/messages', { body: 'hello' });
+    check('and closes writing to it too', r.status === 403, `${r.status}`);
+    await admin.req('PUT', `/api/users/${chanClientId}`, { allowedPages: ['tickets', 'messages'] });
+
+    // --- writing needs something to write --------------------------------
+    r = await chanClient.req('POST', '/api/client/channel/messages', { body: '   ' });
+    check('an empty message is refused', r.status === 400, `${r.status}`);
+    r = await chanClient.req('POST', '/api/client/channel/messages', { body: 'x'.repeat(4001) });
+    check('an enormous message is refused', r.status === 400, `${r.status}`);
+    r = await chanClient.req('POST', '/api/client/channel/messages', { body: 'Any update on the homepage?' });
+    check('without Slack connected, sending says so plainly', r.status === 503, `${r.status} ${r.text.slice(0, 160)}`);
+
+    // --- the channel can be changed and cleared ---------------------------
+    r = await admin.req('PUT', `/api/users/${chanClientId}`, { slackChannelId: 'C0CHANNEL2', slackChannelName: 'moved' });
+    check('an admin can move a client to another channel',
+      r.status === 200 && r.data.user?.slackChannelId === 'C0CHANNEL2', `${r.status} ${r.data.user?.slackChannelId}`);
+    r = await admin.req('PUT', `/api/users/${chanClientId}`, { slackChannelId: '' });
+    check('and can take the channel away', r.status === 200 && !r.data.user?.slackChannelId, JSON.stringify(r.data.user?.slackChannelId));
+
+    const cleared = await db.find('users', chanClientId);
+    check('clearing it wipes the name too', !cleared.slackChannelName, cleared.slackChannelName);
+
+    r = await chanClient.req('GET', '/api/client/channel');
+    check('with no channel the page has nothing to show', r.status === 200 && r.data.channel === null, JSON.stringify(r.data.channel));
+
+    // Staff are not restricted the way a client is.
+    r = await admin.req('GET', `/api/client/channel?clientId=${chanClientId}`);
+    check('staff can look at a named client\'s channel', r.status === 200, `${r.status}`);
+
+    await admin.req('DELETE', `/api/users/${chanClientId}`);
+  }
+
+  // --- domain expiry reminders ---------------------------------------------
+  // A domain lapsing quietly is one of the few failures a client cannot undo
+  // afterwards, so the reminders have to be both reliable and not spam.
+  {
+    const domainWatch = require('../utils/domainWatch');
+    const { db } = require('../db/setup');
+
+    // --- the milestone maths, without touching the database ----------------
+    const at = (days) => {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      return d.toDateString();
+    };
+    check('a date a month out lands on the 30-day milestone',
+      domainWatch.milestoneFor(domainWatch.daysUntil({ expiresAt: at(30) })) === 30);
+    check('the day before lands on the 1-day milestone',
+      domainWatch.milestoneFor(domainWatch.daysUntil({ expiresAt: at(1) })) === 1);
+    check('the day itself lands on 0',
+      domainWatch.milestoneFor(domainWatch.daysUntil({ expiresAt: at(0) })) === 0);
+    check('yesterday lands on -1',
+      domainWatch.milestoneFor(domainWatch.daysUntil({ expiresAt: at(-1) })) === -1);
+    check('far in the future is not due yet',
+      domainWatch.milestoneFor(domainWatch.daysUntil({ expiresAt: at(120) })) === null);
+    check('long expired is left alone',
+      domainWatch.milestoneFor(domainWatch.daysUntil({ expiresAt: at(-90) })) === null);
+    check('a missing date is skipped rather than crashing',
+      domainWatch.daysUntil({ expiresAt: '' }) === null && domainWatch.daysUntil({ expiresAt: 'not a date' }) === null);
+    check('a human date parses the same as an ISO one',
+      domainWatch.expiryDay('Sep 14, 2026') === domainWatch.expiryDay('2026-09-14T11:30:00Z'));
+    // A sweep that missed a few days must still speak, not skip the milestone.
+    check('a missed sweep catches up to the nearest milestone below',
+      domainWatch.milestoneFor(9) === 7 && domainWatch.milestoneFor(20) === 14);
+
+    // --- the real thing ----------------------------------------------------
+    const theClient = (await admin.req('GET', '/api/users')).data.users.find((u) => u.role === 'client');
+    r = await admin.req('POST', '/api/domains', {
+      clientId: theClient.id,
+      domainName: 'expiring-soon.example',
+      registrar: 'Registered with EthixWeb',
+      expiresAt: at(7),
+    });
+    check('a domain can be recorded with an expiry', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+    const domainId = r.data.domain?.id;
+
+    // Scoped to this domain: the seeded workspace has its own addresses, and
+    // some of them are legitimately due today too.
+    const mineOnly = (entries) =>
+      entries.filter((e) => e.template === 'domain_expiring' && /expiring-soon\.example/.test(e.subject));
+    const before = mineOnly((await admin.req('GET', '/api/mail/log')).data.entries || []).length;
+
+    let sweep = await domainWatch.runSweep();
+    check('the sweep finds the domain that is due', sweep.due >= 1, JSON.stringify(sweep));
+    check('and sends a reminder for it', sweep.sent >= 1, JSON.stringify(sweep));
+
+    const reminders = mineOnly((await admin.req('GET', '/api/mail/log')).data.entries || []);
+    check('a reminder email was logged', reminders.length === before + 1, `${reminders.length} vs ${before}`);
+
+    const mine = reminders[0];
+    check('the reminder went to the client who owns the domain',
+      String(mine.toEmails).includes(theClient.email), mine.toEmails);
+    check('and to nobody else', String(mine.toEmails).split(',').length === 1, mine.toEmails);
+    check('the subject says when it expires', /expires in 7 days/.test(mine.subject), mine.subject);
+
+    check('the client was told in the app too',
+      (await db.filter('notifications', (n) => n.userId === theClient.id && /expiring-soon\.example/.test(n.message))).length === 1);
+
+    // --- and never twice ---------------------------------------------------
+    sweep = await domainWatch.runSweep();
+    check('a second sweep sends nothing new', sweep.sent === 0, JSON.stringify(sweep));
+    check('it recognises the reminder as already sent', sweep.skipped >= 1, JSON.stringify(sweep));
+    const afterSecond = mineOnly((await admin.req('GET', '/api/mail/log')).data.entries).length;
+    check('so the client is not written to twice', afterSecond === before + 1, `${afterSecond}`);
+
+    // --- a renewal starts a fresh series -----------------------------------
+    r = await admin.req('POST', `/api/domains/${domainId}/renew`);
+    check('a domain can be renewed', r.status === 200, `${r.status}`);
+    sweep = await domainWatch.runSweep();
+    check('a renewed domain is no longer due',
+      mineOnly((await admin.req('GET', '/api/mail/log')).data.entries).length === before + 1, JSON.stringify(sweep));
+
+    // Move it back to a different milestone: the key changes with the date, so
+    // the new cycle can speak again rather than being silenced forever.
+    await db.update('domains', domainId, { expiresAt: at(1) });
+    sweep = await domainWatch.runSweep();
+    check('a new expiry date starts the reminders again', sweep.sent >= 1, JSON.stringify(sweep));
+    const tomorrow = (await admin.req('GET', '/api/mail/log')).data.entries
+      .find((e) => e.template === 'domain_expiring' && /expires tomorrow/.test(e.subject));
+    check('and the wording follows the new date', Boolean(tomorrow), tomorrow?.subject);
+
+    // --- once it has lapsed ------------------------------------------------
+    await db.update('domains', domainId, { expiresAt: at(-1) });
+    sweep = await domainWatch.runSweep();
+    check('an expired domain is chased too', sweep.sent >= 1, JSON.stringify(sweep));
+    const lapsed = (await admin.req('GET', '/api/mail/log')).data.entries
+      .find((e) => e.template === 'domain_expiring' && /expired yesterday/.test(e.subject));
+    check('and it says it has already lapsed', Boolean(lapsed), lapsed?.subject);
+
+    // --- an admin can run it on demand -------------------------------------
+    r = await admin.req('POST', '/api/mail/domain-sweep');
+    check('an admin can run the sweep from the Mail page', r.status === 200, `${r.status} ${r.text.slice(0, 160)}`);
+    check('the run reports what it did', typeof r.data.sent === 'number', JSON.stringify(r.data));
+
+    await admin.req('DELETE', `/api/domains/${domainId}`);
   }
 
   // --- access control ------------------------------------------------------

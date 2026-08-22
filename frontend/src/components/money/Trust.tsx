@@ -21,7 +21,7 @@ export function AttentionNotice({
       <div className="flex items-start gap-2.5">
         <TriangleAlert aria-hidden className="mt-0.5 size-5 shrink-0 text-attention" />
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold tracking-wide text-attention uppercase">{label}</p>
+          <p className="t-label text-attention">{label}</p>
           <p className="mt-1 text-base leading-snug font-semibold text-foreground">{title}</p>
           {children && <div className="mt-1 text-sm leading-relaxed text-foreground/90">{children}</div>}
           {action && <div className="mt-3">{action}</div>}

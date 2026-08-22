@@ -14,6 +14,12 @@ export const CLIENT_PAGES: { key: ClientPageKey; label: string; description: str
     path: "/portal/progress",
   },
   { key: "tickets", label: "Tickets", description: "Raise and follow support requests", path: "/portal/tickets" },
+  {
+    key: "messages",
+    label: "Messages",
+    description: "A direct line to the team, in their own Slack channel",
+    path: "/portal/messages",
+  },
   { key: "domains", label: "Domains", description: "Domains, hosting, and SSL status", path: "/portal/domains" },
   { key: "reports", label: "Reports", description: "Uploaded reports and documents", path: "/portal/reports" },
   { key: "budget", label: "Budget", description: "Monthly ad and project spend", path: "/portal/budget" },

@@ -18,6 +18,12 @@ const CLIENT_PAGES = [
     apiPrefix: '/api/client',
   },
   { key: 'tickets', label: 'Tickets', description: 'Raise and follow support requests', apiPrefix: '/api/tickets' },
+  {
+    key: 'messages',
+    label: 'Messages',
+    description: 'A direct line to the team, in their own Slack channel',
+    apiPrefix: '/api/client/channel',
+  },
   { key: 'domains', label: 'Domains', description: 'Domains, hosting, and SSL status', apiPrefix: '/api/domains' },
   { key: 'reports', label: 'Reports', description: 'Uploaded reports and documents', apiPrefix: '/api/reports' },
   { key: 'budget', label: 'Budget', description: 'Monthly ad and project spend', apiPrefix: '/api/budget' },

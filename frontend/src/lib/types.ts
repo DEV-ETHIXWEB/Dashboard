@@ -5,6 +5,7 @@ export type ClientPageKey =
   | "projects"
   | "progress"
   | "tickets"
+  | "messages"
   | "domains"
   | "reports"
   | "budget"
@@ -21,6 +22,73 @@ export interface User {
   twoFactorContact?: string | null;
   /** null means no restriction; an array lists exactly what this client may open. */
   allowedPages?: ClientPageKey[] | null;
+  /**
+   * A super admin is an admin carrying a flag, not a sixth role -- see
+   * utils/roles.js. Every existing admin check therefore already covers them.
+   */
+  isSuperAdmin?: boolean;
+  /** An admin who has been vouched for and can act without a second signature. */
+  adminTrusted?: boolean;
+}
+
+/**
+ * What this account may do, decided by the server and sent with the session.
+ *
+ * The UI renders from this; the server checks the same rules again on every
+ * route, so a stale or tampered copy buys nothing.
+ */
+export interface Capabilities {
+  isSuperAdmin: boolean;
+  isTrustedAdmin: boolean;
+  needsApproval: boolean;
+  canManageAdmins: boolean;
+  canReadAuditLog: boolean;
+  canDecideApprovals: boolean;
+}
+
+export const NO_CAPABILITIES: Capabilities = {
+  isSuperAdmin: false,
+  isTrustedAdmin: false,
+  needsApproval: false,
+  canManageAdmins: false,
+  canReadAuditLog: false,
+  canDecideApprovals: false,
+};
+
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "cancelled" | "expired" | "failed";
+
+/** One proposal waiting on a second signature. */
+export interface ApprovalRequest {
+  id: string;
+  action: string;
+  actionLabel: string;
+  summary: string;
+  status: ApprovalStatus;
+  payload: Record<string, unknown>;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  expiresAt: number | null;
+  decidedBy: string | null;
+  decidedByName: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  executedAt: string | null;
+  executionError: string | null;
+}
+
+/** One line of the super admin's log. */
+export interface AuditEntry {
+  id: string;
+  action: string;
+  entity: string;
+  entityId: string | null;
+  meta: unknown;
+  createdAt: string;
+  actorId: string | null;
+  actorName: string;
+  actorRole: Role | null;
+  actorIsSuperAdmin: boolean;
 }
 
 export interface PublicConfig {
@@ -61,7 +129,20 @@ export interface LoginLinkResponse {
   /** Absolute URL built from APP_BASE_URL, or null when the server has none. */
   url: string | null;
   expiresAt: number;
+  /** What the server actually used, after clamping whatever was asked for. */
+  expiresInMinutes: number;
 }
+
+/** The lifetimes an admin can pick when handing over a sign-in link. */
+export const LINK_LIFETIMES: { minutes: number; label: string }[] = [
+  { minutes: 5, label: "5 minutes" },
+  { minutes: 15, label: "15 minutes" },
+  { minutes: 60, label: "1 hour" },
+  { minutes: 60 * 8, label: "8 hours" },
+  { minutes: 60 * 24, label: "24 hours" },
+  { minutes: 60 * 24 * 3, label: "3 days" },
+  { minutes: 60 * 24 * 7, label: "7 days" },
+];
 
 export interface OtpLogEntry {
   id: string;

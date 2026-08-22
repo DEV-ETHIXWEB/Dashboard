@@ -206,7 +206,7 @@ export default function Login() {
       <div ref={themeMenuRef} className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50">
         {themeMenuOpen && (
           <div className="absolute bottom-12 right-0 w-44 rounded-xl border border-border/80 bg-card/95 p-2 shadow-2xl backdrop-blur-md animate-in fade-in-0 zoom-in-95 duration-150 z-50">
-            <div className="px-2 py-1 text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+            <div className="px-2 py-1 t-label text-muted-foreground tracking-wider flex items-center gap-1.5">
               <Accessibility className="size-3.5 text-primary shrink-0" />
               <span>Theme options</span>
             </div>
@@ -315,7 +315,7 @@ export default function Login() {
           phone, where every pixel is competing with the form. */}
       <div className="pointer-events-none absolute inset-0 -z-20 hidden select-none overflow-hidden sm:block">
         <div
-          className="absolute top-2 left-3 sm:top-4 sm:left-6 text-[12vw] sm:text-[9.5vw] lg:text-[8vw] font-black uppercase tracking-tighter leading-none"
+          className="absolute top-2 left-3 sm:top-4 sm:left-6 text-[12vw] sm:text-[9.5vw] lg:text-[8vw] font-semibold uppercase tracking-tighter leading-none"
           style={{
             WebkitTextFillColor: "transparent",
             WebkitTextStroke: "2.5px hsl(var(--primary) / 0.45)",
@@ -325,7 +325,7 @@ export default function Login() {
           POWERING CLIENT
         </div>
         <div
-          className="absolute bottom-2 right-3 sm:bottom-4 sm:right-6 text-[12vw] sm:text-[9.5vw] lg:text-[8vw] font-black uppercase tracking-tighter leading-none text-right"
+          className="absolute bottom-2 right-3 sm:bottom-4 sm:right-6 text-[12vw] sm:text-[9.5vw] lg:text-[8vw] font-semibold uppercase tracking-tighter leading-none text-right"
           style={{
             WebkitTextFillColor: "transparent",
             WebkitTextStroke: "2.5px hsl(var(--foreground) / 0.25)",
@@ -359,13 +359,13 @@ export default function Login() {
                 <div className="relative z-10 flex items-center gap-3">
                   <img src="/emblem-mark.png" alt="EthixWeb Emblem" className="h-9 w-auto object-contain -ml-1" />
                   <div>
-                    <div className="text-base font-extrabold leading-tight tracking-wide uppercase">EthixWeb</div>
-                    <div className="text-[10px] text-zinc-400 tracking-wider uppercase font-semibold">CRM &amp; Operations</div>
+                    <div className="t-label text-sm">EthixWeb</div>
+                    <div className="t-label text-zinc-400">CRM &amp; Operations</div>
                   </div>
                 </div>
 
                 <div className="relative z-10 my-auto py-6">
-                  <h2 className="text-2xl font-extrabold tracking-tight text-white sm:text-3xl lg:text-4xl leading-[1.15]">
+                  <h2 className="text-2xl leading-[1.15] font-semibold tracking-[-0.025em] text-white sm:text-3xl lg:text-4xl">
                     Powering client collaboration.
                   </h2>
                   <p className="mt-3 text-xs sm:text-sm text-zinc-400 leading-relaxed max-w-xs">
@@ -402,17 +402,17 @@ export default function Login() {
                         <img src="/emblem-mark.png" alt="" className="size-full object-contain" />
                       </span>
                       <span className="min-w-0">
-                        <span className="block text-sm leading-tight font-extrabold tracking-wide uppercase">
+                        <span className="block t-label text-sm">
                           EthixWeb
                         </span>
-                        <span className="block text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+                        <span className="block t-label text-muted-foreground">
                           Client portal
                         </span>
                       </span>
                     </div>
 
                     <div>
-                      <h1 className="text-2xl font-extrabold tracking-tight text-foreground">Welcome back</h1>
+                      <h1 className="t-title text-foreground">Welcome back</h1>
                       <p className="mt-1 max-w-[290px] text-sm leading-relaxed text-muted-foreground sm:text-xs">
                         Sign in to manage projects, tasks, and client tickets.
                       </p>
@@ -462,7 +462,7 @@ export default function Login() {
 
                     <form onSubmit={doLogin} className="flex flex-col gap-3.5">
                       <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="email" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Email</Label>
+                        <Label htmlFor="email" className="t-label tracking-wider text-muted-foreground">Email</Label>
                         <div className="relative">
                           <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground/70 pointer-events-none" />
                           <Input
@@ -477,7 +477,7 @@ export default function Login() {
                         </div>
                       </div>
                       <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="password" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Password</Label>
+                        <Label htmlFor="password" className="t-label tracking-wider text-muted-foreground">Password</Label>
                         <div className="relative">
                           <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground/70 pointer-events-none" />
                           <Input
@@ -536,7 +536,7 @@ export default function Login() {
 
                     {import.meta.env.DEV && (
                       <div className="mt-3 border-t border-border/60 pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                        <span className="t-label text-muted-foreground tracking-wider">
                           Autofill Demo (dev only)
                         </span>
                         <div className="flex flex-wrap items-center gap-1.5">
@@ -566,7 +566,7 @@ export default function Login() {
                   <div className="mx-auto w-full max-w-[390px] flex flex-col gap-5 z-10">
                     <div className="flex items-center gap-2.5 text-primary">
                       <ShieldCheck className="size-6" />
-                      <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">Verify it's you</h1>
+                      <h1 className="text-xl sm:t-title text-foreground">Verify it's you</h1>
                     </div>
                     <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
                       {codeDestination

@@ -8,6 +8,10 @@ This repo also contains the frontend (`frontend/`, a React + Vite project)
 and serves its build output as static files, so the whole application
 deploys as a single service.
 
+> **Recent work:** [CHANGES.md](CHANGES.md) records everything added on this
+> branch — the live wire, Stripe mirroring, super admin and approvals, domain
+> reminders, client Slack channels — with what is still outstanding.
+
 ## Requirements
 
 - Node.js 18+
@@ -58,6 +62,8 @@ see "Local development" below.
 - **Projects, Tasks, Tickets, Team** - core CRM entities, scoped per role.
 - **Domains** - one record per client website: platform, hosting provider
   and region, registrar, SSL status, expiry, DNS status, and a renew action.
+  Clients are reminded by email as the expiry approaches, automatically. See
+  [Domain expiry reminders](#domain-expiry-reminders).
 - **Reports** - file upload and download, stored in Google Drive when
   configured, otherwise in the database (4MB limit in that mode).
 - **Budget** - per-client spend tracking by category, with totals and a
@@ -71,6 +77,14 @@ see "Local development" below.
   this server. See [Money and Stripe](#money-and-stripe).
 - **Notifications** - per-user, with an unread count and a mark-all-read
   action.
+- **Super admin, and a second signature** - one account can appoint
+  administrators and read the log. An admin nobody has vouched for yet can
+  *propose* a sensitive change but not make it: every approver is alerted, and
+  nothing touches the data until one of them signs it off. Nobody signs their
+  own. See [Super admin and approvals](#super-admin-and-approvals).
+- **Audit log** - `/portal/audit`, super admin only. Every write in the app
+  already called `audit()`; this is the screen that reads it, with the person
+  named rather than an id.
 - **Client Access** - the admin-only console (`/portal/client-access`) that
   issues client logins. The admin never types a client's password: the
   server generates it, shows it back exactly once, and stores only a bcrypt
@@ -395,6 +409,12 @@ when you're on Postgres: every other feature keeps working.
 | Card data | Never touches this server. Checkout and card changes happen on Stripe-hosted pages; the app stores only the brand and last four Stripe reports back. |
 | Webhook trust | `stripe.webhooks.constructEvent` verifies the signature before a single field of the body is read. An unsigned or mis-signed request is refused with a 400 and nothing is written. |
 | Payment replay | Every mirrored payment is keyed by its Stripe object id, so a replayed webhook updates one row instead of creating a second — and receipt emails only go out on first insert. |
+| Admin roster | Only a super admin can create, promote, demote, or delete an administrator. The last super admin cannot step down, and a super admin cannot be deleted by anyone else. |
+| Second signature | A sensitive change by an admin who has not been vouched for is written to `approval_requests` and executed only when someone else signs it off. Nobody approves their own; an untrusted admin cannot approve at all. Checked in the route, before the write — the UI hiding a button is a courtesy, not the control. |
+| Client channel | The Slack channel a client can read and write is taken from their own user record, never from the request, so there is no id to tamper with. Guarded by the `messages` page toggle, and a `D…` direct-message id is refused outright. |
+| Client notification | A closure only emails the client once it is confirmed, and only ever to the address on that ticket. Held closures send nothing. |
+| Approval integrity | The stored payload is the only input the executor gets, so what was approved is exactly what runs. The row is claimed before execution, making a double-approval a 409 rather than a second write. |
+| Audit reach | The log is readable by a super admin only, and records the released change as well as the decision. |
 
 ## Login codes (OTP) flow
 
@@ -426,6 +446,29 @@ warns at boot when no mail transport is configured, because that is the one
 state where a client cannot sign in without an admin on the phone.
 
 ## One-tap sign-in links
+
+### Choosing how long a link lives
+
+An admin picks the lifetime when they mint one — 5 minutes to 7 days — because
+handing a link over on a call and emailing it to another timezone are different
+problems. The choice is remembered between links so somebody issuing several
+does not re-pick each time.
+
+`POST /api/auth/login-link/:userId` takes `expiresInMinutes`. The value is
+**clamped, not trusted**: this is a bearer credential, and "expires in a year"
+is not a choice worth offering however it arrives. `resolveTtl()` in
+`utils/loginLinks.js` holds the bounds:
+
+| Asked for | Used |
+|---|---|
+| 60 | 60 minutes |
+| 1 | 5 minutes (floor) |
+| a year | 7 days (ceiling) |
+| nonsense, or negative | 15 minutes (the default) |
+| omitted | 15 minutes |
+
+The lifetime that was actually used is written to the audit log alongside who
+issued it, so a long-lived link is a question somebody can answer later.
 
 For clients, a 14-character password plus a 6-digit code is two secrets to
 type on a phone keyboard. A sign-in link is neither.
@@ -559,6 +602,268 @@ Settings (see Known limitations).
 3. Create a Drive folder for reports, share it with the service account's email (found in the JSON) as Editor.
 4. Copy the folder ID from its URL → `GOOGLE_DRIVE_FOLDER_ID`.
 
+## A client's own Slack channel
+
+A client has no Slack account and never needs one. When their login is issued,
+an admin names **one** channel; the server reads and writes it on their behalf,
+and that channel becomes a two-way chat on their **Messages** page.
+
+### The scoping rule
+
+The channel id is read from the signed-in user's own record, **never from the
+request**. There is no parameter for a client to tamper with, because they never
+name a channel — they ask for "my channel" and the server knows which that is.
+Staff may pass `?clientId=` and get exactly what that client sees.
+
+`GET /api/client/channel` and `POST /api/client/channel/messages` are both
+behind the `messages` page toggle, so switching the section off closes reading
+*and* writing in one move.
+
+A channel id must look like one (`C…` or `G…`). A direct-message id (`D…`) is
+refused: that is one person's inbox, not a room a team shares.
+
+### Everything in the channel is visible
+
+That is the point of designating one — it is the shared room, the way a Slack
+Connect channel is. The admin screen says so beside the picker rather than
+burying it:
+
+> They can read **everything** in this channel and write into it. Pick one
+> shared with them, not an internal room.
+
+Internal chatter belongs in a different channel. This is deliberately not the
+per-ticket thread behaviour (`CLIENT_SLACK_THREAD`), which defaults to showing
+only what the bot posted.
+
+### Attribution
+
+The client posts through the app's bot, because they have no Slack identity of
+their own, so every portal message carries the sender's name explicitly:
+`*David Shaw (BrightPath Retail Co.)*`. Without that the team would see an
+unattributed line from a bot and have to guess. A zero-width marker on those
+messages is what lets the portal tell the client's own words from the team's
+and put them on the right side of the conversation.
+
+### The bot joins by itself
+
+`conversations.history` fails with `not_in_channel` until the bot is a member,
+which used to mean somebody had to remember `/invite` for every client channel.
+Now:
+
+- **When the channel is assigned**, the server calls `conversations.join` right
+  away and reports the outcome to the admin who chose it — while they are still
+  looking at the screen, rather than as an empty page the client discovers later.
+- **On any later `not_in_channel`**, `withChannelAccess()` joins and retries the
+  call once, so a channel that was recreated or a bot that was removed heals
+  itself on the next read.
+
+This needs the **`channels:join`** scope on the Slack app. Without it the app
+says exactly that instead of failing vaguely.
+
+Private channels cannot be self-joined — that is Slack's design, not a
+limitation here — so those return an instruction: *"That is a private channel.
+Invite the bot to it with /invite."*
+
+### Freshness
+
+Slack has no webhook pointed at this app, so the page polls every 15 seconds
+and on window focus — fast enough to read as a conversation, slow enough to sit
+well inside Slack's rate limits with a workspace full of clients.
+
+## Domain expiry reminders
+
+A domain lapsing quietly is one of the few failures in this app a client cannot
+undo afterwards: the address goes back on the market and somebody else can take
+it. So the reminders are automatic.
+
+### The schedule
+
+| Days from expiry | 30 | 14 | 7 | 3 | 1 | 0 | -1 | -7 |
+|---|---|---|---|---|---|---|---|---|
+| Email the client | yes | yes | yes | yes | yes | yes | yes | yes |
+| Also alert admins | | | yes | yes | yes | yes | yes | yes |
+
+One early warning while renewing is still routine, a few in the week it
+matters, then the day itself -- and two afterwards, because most registrars
+hold a lapsed name for a grace period and it can usually still be recovered.
+Admins are only copied once it is genuinely urgent; a monthly heads-up that
+pages the whole team teaches everyone to ignore the alerts that matter.
+
+### Each reminder is sent exactly once
+
+The email log is the record, keyed as `domainId#expiryDay#milestone`. Because
+the key carries the **expiry date**, renewing the domain changes the key and
+starts a fresh series — a renewal resets the reminders rather than silencing
+them forever. Re-running the sweep sends nothing new.
+
+A sweep that has not run for a few days would otherwise skip straight past a
+milestone and never mention it, so the first milestone *at or below* the days
+remaining is used. The once-only key stops that catch-up from firing the whole
+series at once.
+
+### What the client reads
+
+The email leads with the date and says plainly what happens if nothing is done.
+The fact that decides whether it works is **whether the domain renews itself** —
+that is the difference between "act today" and "no action needed", so it is a
+field in the panel rather than a line of small print. Once the date has passed
+the tone changes rather than escalating: "this can still be saved", not "too
+late". Preview it on the Mail page under *Domain expiring*.
+
+It goes to the client on `domains.client_id` and to nobody else. A domain with
+no client email falls back to alerting the admins, so it is never silently
+dropped.
+
+### When it runs
+
+No scheduler — this app runs on serverless, where background timers do not
+survive a cold start. The sweep piggybacks on traffic: a staff request to
+`GET /api/domains` may trigger it, at most once an hour, and never blocks the
+response. **Check domains** on the Mail page runs it on demand, which is what
+you want after correcting an expiry date or when nobody has opened the Domains
+page in a while.
+
+Dates parse from both the human form the renew action writes (`Sep 14, 2026`)
+and ISO strings. A record with no usable date is skipped rather than crashing
+the sweep.
+
+## Testing email before a domain is verified
+
+Most providers refuse to deliver anywhere except the account owner's inbox
+until you verify a sending domain. Resend answers with a 403:
+
+> You can only send testing emails to your own email address (...). To send
+> emails to other recipients, please verify a domain.
+
+Two things handle this.
+
+**`MAIL_REDIRECT_TO`.** Set it to the address the provider *will* accept, and
+every outbound message goes there instead, with the intended recipient in the
+subject: `[to: client@example.com] Your weekly summary`. The mail log still
+records who the message was for, so the record is never a fiction. Unset it and
+delivery behaves exactly as before. This is the way to walk a client-facing
+flow end to end before DNS is sorted.
+
+**Readable failures.** `explainSendError()` turns a provider's JSON into one
+sentence an admin can act on, and the raw text still goes to the mail log for
+whoever debugs it. A 403 about domain verification becomes:
+
+> Your email provider is still in test mode: it will only deliver to
+> you@example.com. Verify a sending domain, or set MAIL_REDIRECT_TO to that
+> address to keep testing.
+
+The real fix is still to verify a domain with your provider and point
+`MAIL_FROM` at an address on it.
+
+## Super admin and approvals
+
+A workspace has one thing it cannot do without: somebody who can appoint
+administrators. That is the super admin.
+
+### A super admin is a flagged admin, not a sixth role
+
+`users.is_super_admin` sits on top of `role = 'admin'`. This is the decision the
+whole design rests on: every `requireRole('admin')` and every
+`role === 'admin'` already written in this app grants a super admin access
+without being touched, so a permission cannot be lost by somebody forgetting to
+add a role to a list. Only the two genuinely exclusive powers read the flag --
+appointing admins, and reading the log. See `utils/roles.js`.
+
+The three states an administrator can be in:
+
+| State | Appoints admins | Reads the log | Acts alone | Can sign off others |
+|---|---|---|---|---|
+| Super admin | yes | yes | yes | yes |
+| Trusted admin | no | no | yes | yes |
+| New admin | no | no | **no** | no |
+
+A newly appointed admin starts **untrusted**. That is the point: the account
+created five minutes ago is the one worth a second pair of eyes. A super admin
+lifts it from **Team** once they know the person.
+
+### What happens when a new admin changes something important
+
+```
+new admin proposes  ->  202, nothing written  ->  every approver alerted (bell + email)
+                                              ->  approver signs off  ->  the change runs, once
+```
+
+The route calls one line before it writes:
+
+```js
+const gate = await approvals.gate(req, res, {
+  action: 'user.delete',
+  summary: `Delete the account for ${target.name}`,
+  payload: { userId: target.id },
+});
+if (gate.held) return;   // 202 already sent; nothing has changed
+```
+
+Anyone entitled to act alone falls straight through and the route behaves
+exactly as it did before. Guarded today: creating, changing, and deleting
+accounts; deleting a project, domain, document, or ticket; and **closing a
+ticket**.
+
+### Closing a ticket is guarded, because it emails the client
+
+Marking a ticket `Resolved` or `Closed` tells the client their request is
+finished — by email, in their bell, and in the Slack thread. That is not a
+message you un-send, so an admin who has not been vouched for proposes it and a
+trusted admin confirms. Everything else about the ticket (priority, assignee,
+description) still saves immediately; only the closure waits.
+
+The subtle part is *where* the client email lives. It used to sit in the route,
+which the approval path skips — a ticket could have been closed through the
+queue while the client was never told. `utils/ticketStatus.js` now owns the
+whole status change (update, bell, client email, Slack echo, ClickUp sync,
+`resolved_notified_at`) and **both** paths call it, so the two cannot drift. The
+route's own copy was deleted rather than left alongside it.
+
+The client email always goes to the account on `ticket.client_id` and to nobody
+else — the dedicated client for that ticket, never an admin and never a shared
+inbox. The announcement is made in the name of whoever *proposed* the closure,
+not whoever countersigned it: the client should read "Ryan closed your ticket",
+which is true, rather than the name of an approver they have never dealt with.
+
+**The response is a 202, not a 200.** `fetch` treats both as success, so every
+gated mutation in the UI runs its result through `wasHeld()` -- otherwise the
+person is told "done" about a change that has not happened, and does it twice.
+
+### The rules that no approval can unlock
+
+Some things are not gated, they are refused outright:
+
+- Only a super admin may create, promote, demote, or delete an **administrator**.
+- Nobody approves their own request, however senior.
+- A super admin cannot be deleted; they are stepped down first.
+- The last super admin cannot step down -- appoint another one first.
+- An untrusted admin cannot approve, or two fresh accounts could wave each
+  other through.
+- Admin standing changes through its own endpoint (`POST /api/users/:id/standing`),
+  never as a field on an ordinary profile update.
+
+### Execution happens exactly once
+
+Approving claims the row (`pending -> approved`) *before* running anything, so
+two approvers racing cannot both execute it, and a second approval of a decided
+row is a 409. If the change fails after the signature, the row is marked
+`failed` with the error -- both facts stay on the record rather than one being
+quietly dropped. A proposal nobody answers expires by itself after 48 hours.
+
+### The log
+
+`GET /api/approvals/audit-log`, super admin only, backed by `activity_log`.
+Approving writes **two** rows: the decision, and the change it released --
+attributed to whoever proposed it, with `meta.approvedBy` naming who let it
+through. A log that only recorded decisions could not answer what actually
+happened.
+
+### Getting a super admin
+
+Set `SUPER_ADMIN_EMAIL` to name the account. Otherwise the first boot after
+this feature shipped promotes the longest-standing admin, so an existing
+deployment gains one without anyone running a script (`ensureSuperAdmin()`).
+
 ## The live wire (admin to client updates)
 
 A client watching their dashboard should not have to refresh to find out that
@@ -595,6 +900,28 @@ existing -- it only makes updates fast.
 `PATH_TOPICS` (`middleware/live.js`). Every successful non-GET response
 publishes the topic for its prefix. Set `res.locals.liveAudience` when the
 handler knows whose data it just touched.
+
+**Sources outside this app.** A write here can announce itself; a change in
+Slack or ClickUp cannot. Those need something to ask:
+
+| Source | How it becomes live |
+|---|---|
+| This app's own writes | `middleware/live.js`, on every successful response |
+| Notifications, approvals, sessions | published at the point of the change |
+| Emails (`mail`), login codes (`otp`) | published when the row is written |
+| **Slack client channels** | `utils/slackWatch.js` polls **server-side** and publishes `messages` |
+| ClickUp task state | still a 60s refetch on the progress board — nothing tells us |
+
+`slackWatch` is the pattern worth copying. Ten tabs watching one channel used
+to mean ten polls every fifteen seconds and a fifteen-second wait each; now one
+watcher asks once per channel every eight seconds and pushes the answer, so the
+cost stops growing with the audience and everybody sees a reply together. It
+does nothing at all when `liveBus.stats().streams` is zero — a workspace nobody
+has open makes no Slack calls.
+
+Client-side `refetchInterval`s that remain are **safety nets for a dead
+stream**, not the mechanism: 120s where a topic covers the data, 60s only on
+the progress board, which mirrors ClickUp.
 
 ## Money and Stripe
 
@@ -659,7 +986,7 @@ listed here.
 
 | Table | Columns | Notes |
 |---|---|---|
-| `users` | `id, name, email, role, company, password, google_id, two_factor_enabled, two_factor_contact, password_expires_at` | `role` is one of `admin, sales, project_manager, employee, client`. `password` is a bcrypt hash. `password_expires_at` is a millisecond timestamp (or `NULL` for no expiry) set from the Client Access console - see [Expiry enforcement](#expiry-enforcement). `two_factor_enabled`/`two_factor_contact` back the self-service toggle in Settings only - unrelated to the login OTP step below. |
+| `users` | `id, name, email, role, company, password, google_id, two_factor_enabled, two_factor_contact, password_expires_at, allowed_pages, is_super_admin, admin_trusted, admin_trusted_at, admin_trusted_by` | `role` is one of `admin, sales, project_manager, employee, client`. `password` is a bcrypt hash. `password_expires_at` is a millisecond timestamp (or `NULL` for no expiry) set from the Client Access console - see [Expiry enforcement](#expiry-enforcement). `two_factor_enabled`/`two_factor_contact` back the self-service toggle in Settings only - unrelated to the login OTP step below. |
 | `projects` | `id, name, type, client_id, assigned_pm_id, status, description, created_at` | |
 | `tasks` | `id, project_id, name, assignee_id, status, priority, due` | |
 | `tickets` | `id, subject, category, client_id, assignee_id, status, description, created_at` | |
@@ -671,6 +998,7 @@ listed here.
 | `reports` | `id, client_id, name, category, storage_type, drive_file_id, drive_link, content_base64, mime_type, size_bytes, uploaded_by, created_at` | `storage_type` is `drive` or `database`; only one of `drive_file_id`/`content_base64` is populated depending on which. |
 | `budget_items` | `id, client_id, label, amount, color, month` | |
 | `billing` | `id, client_id, stripe_customer_id, stripe_subscription_id, plan, status, updated_at, currency, amount, interval, current_period_end, cancel_at_period_end, card_brand, card_last4, latest_invoice_url, synced_at` | One row per client (`client_id` is `UNIQUE`). Everything after `updated_at` is cached from Stripe so the plan card renders without a round trip. |
+| `approval_requests` | `id, action, summary, payload, status, requested_by, requested_at, expires_at, decided_by, decided_at, decision_note, executed_at, execution_error` | One proposal awaiting a second signature. `action` names an entry in `utils/approvals.js` ACTIONS; `payload` is the only input its executor gets. `status` is `pending`, `approved`, `rejected`, `cancelled`, `expired`, or `failed`. See [Super admin and approvals](#super-admin-and-approvals). |
 | `payments` | `id, client_id, stripe_customer_id, stripe_object_id, kind, description, amount, currency, status, paid_at, period_start, period_end, invoice_url, receipt_url, invoice_number, card_brand, card_last4, failure_message, created_at` | One row per Stripe invoice or standalone charge, never written by hand. `stripe_object_id` is `UNIQUE`, which is what makes a replayed webhook idempotent. `amount` is in major units. See [Money and Stripe](#money-and-stripe). |
 
 ### The `db` data-access layer

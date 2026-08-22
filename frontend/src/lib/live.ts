@@ -9,6 +9,7 @@
 export const LIVE_TOPICS = [
   "tickets",
   "progress",
+  "messages",
   "projects",
   "tasks",
   "reports",
@@ -17,6 +18,9 @@ export const LIVE_TOPICS = [
   "domains",
   "notifications",
   "users",
+  "mail",
+  "otp",
+  "approvals",
   "session",
 ] as const;
 
@@ -31,6 +35,7 @@ export interface LiveEvent {
 const TOPIC_KEYS: Record<LiveTopic, string[][]> = {
   tickets: [["tickets"], ["ticket-timeline"], ["ticket-requests"], ["client-progress"]],
   progress: [["client-progress"]],
+  messages: [["client-channel"]],
   projects: [["projects"], ["client-progress"]],
   tasks: [["tasks"], ["client-progress"]],
   reports: [["reports"]],
@@ -39,6 +44,9 @@ const TOPIC_KEYS: Record<LiveTopic, string[][]> = {
   domains: [["domains"]],
   notifications: [["notifications"]],
   users: [["users"]],
+  mail: [["mail"]],
+  otp: [["otp-logs"]],
+  approvals: [["approvals"], ["audit-log"]],
   session: [], // handled separately: the account itself changed
 };
 

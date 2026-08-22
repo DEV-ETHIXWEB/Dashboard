@@ -349,6 +349,60 @@ function normaliseMessage(message, channel, userMap, channelMap) {
 
 // --- public queries --------------------------------------------------------
 
+/**
+ * Put the bot in a channel so it can read and write there.
+ *
+ * `conversations.join` works for **public** channels only, and needs the
+ * `channels:join` scope. A private channel cannot be self-joined by design --
+ * somebody already inside has to invite the bot -- so that case returns a
+ * clear false rather than pretending.
+ *
+ * Already being a member is a success, not an error: Slack answers `ok` for a
+ * repeat join, which makes this safe to call on every miss.
+ */
+async function joinChannel(channelId) {
+  if (!channelId) return { joined: false, reason: 'no channel' };
+  try {
+    await request('conversations.join', null, { channel: channelId });
+    return { joined: true };
+  } catch (err) {
+    // The two that mean "a human has to do this", kept apart from a real fault.
+    if (err.code === 'method_not_supported_for_channel_type' || err.code === 'channel_not_found') {
+      return { joined: false, reason: 'private', message: 'That is a private channel. Invite the bot to it with /invite.' };
+    }
+    if (err.code === 'missing_scope') {
+      return { joined: false, reason: 'scope', message: 'The Slack app needs the channels:join scope to add itself to channels.' };
+    }
+    return { joined: false, reason: err.code || 'error', message: err.message };
+  }
+}
+
+/**
+ * Run a channel call, and if the only thing wrong is that the bot is not in the
+ * room, join and try once more.
+ *
+ * Without this, designating a channel for a client fails until somebody
+ * remembers to type `/invite`. With it, a public channel just works and a
+ * private one gives an instruction instead of a stack trace.
+ */
+async function withChannelAccess(channelId, run) {
+  try {
+    return await run();
+  } catch (err) {
+    if (err.code !== 'not_in_channel' && err.code !== 'channel_not_found') throw err;
+
+    const result = await joinChannel(channelId);
+    if (!result.joined) {
+      throw new SlackError(
+        result.message || 'The bot is not in that channel, and could not add itself.',
+        502,
+        err.code,
+      );
+    }
+    return run();
+  }
+}
+
 async function fetchChannelMessages(channelId, { limit = 50 } = {}) {
   return cached(`slack:history:${channelId}:${limit}`, async () => {
     const [channels, userMap] = await Promise.all([fetchChannels(), fetchUserMap()]);
@@ -536,6 +590,8 @@ async function sendSlackDigest({ channelId, tasks = [], projects = [] }) {
 }
 
 module.exports = {
+  joinChannel,
+  withChannelAccess,
   isEnabled,
   SlackError,
   CATEGORIES,

@@ -13,10 +13,13 @@ import {
   X,
   Loader2,
   LayoutGrid,
+  Crown,
+  ShieldQuestion,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useUsers, useCreateUser, useUpdateUser, useDeleteUser } from "@/hooks/useData";
+import { heldMessage, useSetStanding, wasHeld } from "@/hooks/useApprovals";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
@@ -61,6 +64,8 @@ export default function Team() {
   const createUser = useCreateUser();
   const updateUser = useUpdateUser();
   const deleteUser = useDeleteUser();
+  const setStanding = useSetStanding();
+  const { can } = useAuth();
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<UserRecord | null>(null);
@@ -104,8 +109,10 @@ export default function Team() {
       updateUser.mutate(
         { id: editing.id, patch },
         {
-          onSuccess: () => {
-            toast.success("Team member updated");
+          onSuccess: (result) => {
+            // A 202 means the change is parked for a second signature. Saying
+            // "updated" here would send them away believing it landed.
+            toast.success(heldMessage(result, "Team member updated"));
             setOpen(false);
           },
           onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to update"),
@@ -119,8 +126,8 @@ export default function Team() {
       createUser.mutate(
         { name, email, role, company: company || null, password },
         {
-          onSuccess: () => {
-            toast.success("Team member added");
+          onSuccess: (result) => {
+            toast.success(heldMessage(result, "Team member added"));
             setOpen(false);
           },
           onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to add member"),
@@ -129,10 +136,32 @@ export default function Team() {
     }
   }
 
+  function changeStanding(u: UserRecord, patch: { superAdmin?: boolean; trusted?: boolean }) {
+    const what = patch.superAdmin === true
+      ? `Make ${u.name} a super admin? They will be able to appoint other admins and act without approval.`
+      : patch.superAdmin === false
+        ? `Step ${u.name} down to an ordinary admin?`
+        : patch.trusted
+          ? `Let ${u.name} make sensitive changes without a second signature?`
+          : `Send ${u.name}'s sensitive changes for approval again?`;
+    if (!window.confirm(what)) return;
+
+    setStanding.mutate(
+      { id: u.id, ...patch },
+      {
+        onSuccess: () => toast.success("Standing updated"),
+        onError: (err) => toast.error(err instanceof Error ? err.message : "Could not change that"),
+      },
+    );
+  }
+
   function remove(u: UserRecord) {
     if (!window.confirm(`Remove ${u.name}? Their assigned tasks/tickets will show as unassigned.`)) return;
     deleteUser.mutate(u.id, {
-      onSuccess: () => toast.success("User removed"),
+      onSuccess: (result) => {
+        if (wasHeld(result)) toast.success(result.message);
+        else toast.success("User removed");
+      },
       onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to remove user"),
     });
   }
@@ -410,6 +439,24 @@ export default function Team() {
                     >
                       {ROLE_LABEL[u.role] ?? u.role}
                     </span>
+
+                    {/* Standing, at a glance. An admin whose changes are held is
+                        the thing another admin most needs to know about them. */}
+                    {u.isSuperAdmin && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                        <Crown aria-hidden className="size-3" />
+                        Super admin
+                      </span>
+                    )}
+                    {u.role === "admin" && !u.isSuperAdmin && !u.adminTrusted && (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning"
+                        title="Their sensitive changes wait for a second signature"
+                      >
+                        <ShieldQuestion aria-hidden className="size-3" />
+                        Needs approval
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
@@ -437,7 +484,34 @@ export default function Team() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-1 shrink-0">
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                {/* Only a super admin can change standing, and only for another
+                    admin. The server refuses everyone else regardless. */}
+                {can.canManageAdmins && u.role === "admin" && u.id !== currentUser?.id && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                      disabled={setStanding.isPending}
+                      title={u.adminTrusted ? "Send their changes for approval again" : "Let them act without approval"}
+                      onClick={() => changeStanding(u, { trusted: !u.adminTrusted })}
+                    >
+                      {u.adminTrusted ? "Untrust" : "Trust"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 gap-1 px-2 text-[11px] text-muted-foreground hover:text-primary"
+                      disabled={setStanding.isPending}
+                      title={u.isSuperAdmin ? "Step them down to an ordinary admin" : "Give them full control"}
+                      onClick={() => changeStanding(u, { superAdmin: !u.isSuperAdmin })}
+                    >
+                      <Crown aria-hidden className="size-3" />
+                      {u.isSuperAdmin ? "Step down" : "Make super"}
+                    </Button>
+                  </>
+                )}
                 <Button
                   variant="ghost"
                   size="icon-xs"

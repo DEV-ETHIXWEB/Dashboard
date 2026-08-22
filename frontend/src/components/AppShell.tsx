@@ -5,6 +5,7 @@ import { LogOut } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useLive } from "@/context/LiveContext";
 import { useNotifications } from "@/hooks/useData";
+import { usePendingApprovalCount } from "@/hooks/useApprovals";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { LiveIndicator } from "@/components/LiveIndicator";
 import { BottomTabs } from "@/components/mobile/BottomTabs";
@@ -30,13 +31,39 @@ export function AppShell({ children }: { children: ReactNode }) {
   const mainRef = useRef<HTMLElement>(null);
 
   const unread = notifications?.filter((n) => !n.read).length ?? 0;
+  const pendingApprovals = usePendingApprovalCount();
   const nav = useMemo(() => navFor(user), [user]);
   const client = isClientNav(user);
 
   const secondary = useMemo(
     () =>
-      nav.secondary.map((i) => (i.to === "/portal/notifications" ? { ...i, badge: unread } : i)),
-    [nav.secondary, unread],
+      nav.secondary.map((i) => {
+        if (i.to === "/portal/notifications") return { ...i, badge: unread };
+        // A proposal nobody looks at is the failure mode this whole feature has,
+        // so the count sits in the navigation rather than only on the page.
+        if (i.to === "/portal/approvals") return { ...i, badge: pendingApprovals };
+        return i;
+      }),
+    [nav.secondary, unread, pendingApprovals],
+  );
+
+  // Staff read the grouped sidebar rather than `secondary`, so the counts have
+  // to be threaded through the groups too or the badge is invisible to exactly
+  // the people who need it.
+  const badgeFor = (to: string) =>
+    to === "/portal/notifications" ? unread : to === "/portal/approvals" ? pendingApprovals : undefined;
+
+  const groups = useMemo(
+    () =>
+      nav.groups.map((g) => ({
+        ...g,
+        items: g.items.map((i) => {
+          const badge = badgeFor(i.to);
+          return badge == null ? i : { ...i, badge };
+        }),
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nav.groups, unread, pendingApprovals],
   );
 
   const title = useMemo(
@@ -60,7 +87,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </a>
 
       <aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
-        <SidebarContent primary={nav.primary} secondary={secondary} groups={nav.groups} flat={client} />
+        <SidebarContent primary={nav.primary} secondary={secondary} groups={groups} flat={client} />
       </aside>
 
       <div className="relative flex min-w-0 flex-1 flex-col">
@@ -109,21 +136,26 @@ function titleFor(pathname: string, items: NavItem[]): string {
   return nested?.label ?? "EthixWeb";
 }
 
+/**
+ * The wordmark, not the name set in a typeface that happens to be nearby.
+ *
+ * `ethixweb.png` is a white wordmark on transparency, which is invisible on the
+ * light sidebar -- that is the blank strip. Rather than sit it on a dark plate
+ * and lose the clean edge, it is inverted in light mode: pure white becomes
+ * pure black, which is exactly the mark again. Dark mode uses the file as it
+ * ships. The alt text carries the name for anyone whose images do not load.
+ */
 function Brand() {
   return (
-    <div className="flex min-w-0 items-center gap-2.5">
-      <div
-        className="flex size-8 shrink-0 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 p-1 shadow-sm ring-1 ring-primary/20"
-      >
-        <img src="/emblem-mark.png" alt="EthixWeb Emblem" className="size-full object-contain" />
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-sm leading-tight font-semibold tracking-tight text-sidebar-foreground">
-          EthixWeb
-        </div>
-        <div className="truncate text-xs text-muted-foreground">Client portal</div>
-      </div>
-    </div>
+    <img
+      src="/ethixweb.png"
+      alt="EthixWeb"
+      width={422}
+      height={63}
+      // `block` kills the inline baseline gap, so the wordmark sits on the
+      // header's own centre line rather than a few pixels below it.
+      className="block h-6 w-auto max-w-full shrink-0 object-contain object-left invert dark:invert-0"
+    />
   );
 }
 
@@ -187,7 +219,10 @@ function SidebarContent({
         />
       </div>
 
-      <div className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border/60 px-4">
+              {/* 22px, not 16: the nav rows below inset by px-2.5 + px-3 and the
+            account block by p-3 + px-2.5, both landing on 22. The wordmark
+            shares that line rather than starting six pixels to its left. */}
+      <div className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border/60 px-[22px]">
         <Brand />
       </div>
 
@@ -213,7 +248,7 @@ function SidebarContent({
         ) : (
           groups.map((group) => (
             <div key={group.heading} className="mb-4 last:mb-0">
-              <div className="px-3 pb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              <div className="px-3 pb-1.5 t-label text-muted-foreground">
                 {group.heading}
               </div>
               <div className="space-y-0.5">
@@ -228,7 +263,7 @@ function SidebarContent({
 
       <div className="relative z-10 shrink-0 border-t border-sidebar-border/60 px-4 py-3">
         <div className="flex items-center justify-between pb-1.5">
-          <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Appearance</span>
+          <span className="t-label text-muted-foreground">Appearance</span>
           <LiveIndicator />
         </div>
         <ThemeSwitch />

@@ -240,6 +240,15 @@
     /* A phone rotated or zoomed should not resize the type under the reader. */
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
+
+    /* Inter is a variable font with an optical size axis; letting the browser
+       drive it means small text gets slightly more open shapes and large text
+       gets tighter ones, which is the whole reason to ship a variable font. */
+    font-optical-sizing: auto;
+    /* cv05 gives lowercase l a tail. In a dashboard full of IDs, codes, and
+       ticket numbers, telling l from 1 from I is not a stylistic nicety. */
+    font-feature-settings: "cv05" 1;
+    font-variant-ligatures: contextual;
   }
   body {
     margin: 0;
@@ -260,6 +269,22 @@
   textarea,
   label {
     -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Headings set their own line breaks better than the browser's greedy
+     algorithm does: `balance` stops a two-line title leaving one orphan word,
+     and `pretty` keeps a paragraph from ending on a single word. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap: balance;
+  }
+  p,
+  li,
+  dd,
+  figcaption {
+    text-wrap: pretty;
   }
 
   /* Chrome does not respect the reduced-motion setting for spring physics on
@@ -399,5 +424,97 @@
   }
   .safe-top {
     padding-top: env(safe-area-inset-top);
+  }
+}
+
+@layer utilities {
+  /* One type scale, seven roles.
+     Each utility carries size, line height, tracking, and weight together,
+     because they are one decision -- 24px at the wrong tracking is not "nearly
+     right", it is a different typeface. Before this the app had ten different
+     recipes for the same uppercase label and four weights for the same rank of
+     heading; these exist so there is one of each.
+
+     Tracking follows the usual rule: the larger the type, the tighter it
+     wants to be, and small caps want air. */
+
+  /* A number or a name that is the whole point of the screen. */
+  .t-display {
+    font-size: 1.875rem; /* 30px */
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    font-weight: 600;
+  }
+
+  /* The page's own name. One per screen. */
+  .t-title {
+    font-size: 1.5rem; /* 24px */
+    line-height: 1.2;
+    letter-spacing: -0.021em;
+    font-weight: 600;
+  }
+
+  /* A panel or section heading. */
+  .t-heading {
+    font-size: 0.9375rem; /* 15px */
+    line-height: 1.35;
+    letter-spacing: -0.011em;
+    font-weight: 600;
+  }
+
+  /* Interface text: rows, fields, buttons. Tight enough to stay dense. */
+  .t-body {
+    font-size: 0.875rem; /* 14px */
+    line-height: 1.5;
+    letter-spacing: -0.006em;
+  }
+
+  /* Sentences meant to be read rather than scanned. Wider line height, and a
+     measure that stops a description running the full width of a desktop --
+     past about 70 characters the eye loses the start of the next line. */
+  .t-prose {
+    font-size: 0.9375rem; /* 15px */
+    line-height: 1.65;
+    letter-spacing: -0.003em;
+    max-width: 68ch;
+  }
+
+  /* THE uppercase label. Replaces ten near-identical variants. */
+  .t-label {
+    font-size: 0.6875rem; /* 11px */
+    line-height: 1.45;
+    letter-spacing: 0.075em;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  /* Secondary line under something else: meta, timestamps, hints. */
+  .t-caption {
+    font-size: 0.75rem; /* 12px */
+    line-height: 1.45;
+    letter-spacing: 0;
+  }
+
+  /* Badges and pills, where the box is the emphasis and the text is small. */
+  .t-micro {
+    font-size: 0.6875rem; /* 11px */
+    line-height: 1.35;
+    letter-spacing: 0.005em;
+    font-weight: 500;
+  }
+
+  /* Any number that sits in a column, changes in place, or is compared to
+     another number. Proportional digits make a total appear to jitter as it
+     updates; lining tabular figures hold their position. */
+  .numeric {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "cv05" 1, "tnum" 1;
+  }
+
+  /* A figure large enough that its default spacing looks loose. */
+  .numeric-display {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "cv05" 1, "tnum" 1;
+    letter-spacing: -0.02em;
   }
 }

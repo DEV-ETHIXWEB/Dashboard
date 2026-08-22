@@ -747,6 +747,184 @@ function paymentSummary({ clientName, payments = [], total, currency = 'usd', pe
   };
 }
 
+function approvalsLink() {
+  const base = baseUrl();
+  return base ? `${base}/portal/approvals` : null;
+}
+
+/**
+ * "Somebody wants to do something you should look at."
+ *
+ * Sent to every approver the moment an untrusted admin proposes a sensitive
+ * change. It says who, what, and nothing else -- the decision belongs on the
+ * page, where the full payload and the audit trail are, not in an inbox.
+ */
+function approvalRequested({ requesterName, summary, actionLabel, requestedAt }) {
+  const link = approvalsLink();
+  return {
+    subject: `Approval needed: ${summary}`,
+    html: t.renderEmail({
+      preheader: `${requesterName} is waiting on a second signature.`,
+      eyebrow: 'Approval needed',
+      title: `${requesterName} needs a second signature`,
+      blocks: [
+        t.paragraph('An administrator has proposed a change that does not take effect until someone else signs it off. Nothing has happened yet.'),
+        t.detailPanel({
+          tone: 'warn',
+          title: 'The proposal',
+          fields: [
+            { label: 'Requested by', value: requesterName },
+            { label: 'Kind', value: actionLabel },
+            { label: 'Raised', value: t.formatWhen(requestedAt) || 'Just now' },
+          ],
+          note: summary,
+        }),
+        t.paragraph('If this was not expected, turn it down and ask them about it. A request nobody answers expires by itself after 48 hours.', { muted: true, size: 13 }),
+      ],
+      cta: link ? { label: 'Review this request', url: link } : null,
+      reason: 'Sent because you can approve changes in this workspace.',
+    }),
+    text: t.renderText([
+      `Approval needed: ${summary}`,
+      '',
+      `Requested by: ${requesterName}`,
+      `Kind: ${actionLabel}`,
+      '',
+      'Nothing has changed yet. It expires by itself after 48 hours.',
+      link ? `Review it: ${link}` : null,
+    ]),
+  };
+}
+
+/** The answer, to whoever asked. */
+function approvalDecided({ approverName, summary, decision, note }) {
+  const approved = decision === 'approved';
+  const link = approvalsLink();
+
+  return {
+    subject: approved ? `Approved: ${summary}` : `Turned down: ${summary}`,
+    html: t.renderEmail({
+      preheader: `${approverName} ${approved ? 'approved' : 'turned down'} your request.`,
+      eyebrow: approved ? 'Approved' : 'Turned down',
+      title: approved ? 'Your change went through' : 'Your change was turned down',
+      blocks: [
+        t.paragraph(
+          approved
+            ? `${approverName} signed this off, and the change has been applied.`
+            : `${approverName} turned this down, so nothing was changed.`,
+        ),
+        t.detailPanel({
+          tone: approved ? 'success' : 'danger',
+          title: 'What you asked for',
+          fields: [{ label: 'Decided by', value: approverName }],
+          note: summary,
+        }),
+        note ? t.callout({ tone: 'info', title: 'They added', body: note }) : '',
+      ].filter(Boolean),
+      cta: link ? { label: 'Open approvals', url: link } : null,
+      reason: 'Sent because you raised this request.',
+    }),
+    text: t.renderText([
+      approved ? `Approved: ${summary}` : `Turned down: ${summary}`,
+      '',
+      `Decided by: ${approverName}`,
+      note ? `Note: ${note}` : null,
+      '',
+      link ? `Open approvals: ${link}` : null,
+    ]),
+  };
+}
+
+function domainsLink() {
+  const base = baseUrl();
+  return base ? `${base}/portal/domains` : null;
+}
+
+/**
+ * "Your website address is about to lapse."
+ *
+ * The one email in this app with a deadline the client cannot renegotiate. It
+ * leads with the date, says plainly what happens if nothing is done, and -- the
+ * part that decides whether it works -- tells them whether it will renew by
+ * itself, because that single fact is the difference between "act today" and
+ * "no action needed".
+ *
+ * Once the date has passed the tone changes rather than escalating: most
+ * registrars hold a lapsed name for a grace period, so the message is "this can
+ * still be saved", not "too late".
+ */
+function domainExpiring({ domain, clientName, daysLeft, window }) {
+  const link = domainsLink();
+  const expired = daysLeft < 0;
+  const urgent = daysLeft <= 3;
+  const autoRenew = domain.autoRenew === true || domain.autoRenew === 'true';
+
+  const subject = expired
+    ? `${domain.domainName} expired ${window}`
+    : daysLeft === 0
+      ? `${domain.domainName} expires today`
+      : `${domain.domainName} expires ${window}`;
+
+  const opening = expired
+    ? `Hi ${clientName || 'there'}. ${domain.domainName} passed its renewal date ${window}. Most registrars hold a name for a short grace period, so this can usually still be put right -- but not indefinitely.`
+    : autoRenew
+      ? `Hi ${clientName || 'there'}. ${domain.domainName} is due for renewal ${window}. It is set to renew automatically, so this is a heads-up rather than something to action.`
+      : `Hi ${clientName || 'there'}. ${domain.domainName} is due for renewal ${window}, and it is not set to renew automatically.`;
+
+  const consequence = expired
+    ? 'While it is lapsed, anything on that address -- your website, and email sent to it -- will not work.'
+    : 'If it lapses, your website and any email on that address stop working, and the name can be registered by somebody else.';
+
+  return {
+    subject,
+    html: t.renderEmail({
+      preheader: expired
+        ? `${domain.domainName} has lapsed. It can usually still be recovered.`
+        : `${domain.domainName} needs renewing ${window}.`,
+      eyebrow: expired ? 'Needs attention' : urgent ? 'Renewal due' : 'Coming up',
+      title: subject,
+      blocks: [
+        t.paragraph(opening),
+        t.detailPanel({
+          tone: expired ? 'danger' : urgent ? 'warn' : 'info',
+          title: 'The address',
+          fields: [
+            { label: 'Domain', value: domain.domainName },
+            { label: expired ? 'Expired' : 'Renews', value: domain.expiresAt || 'Not recorded' },
+            { label: 'Renews itself', value: autoRenew ? 'Yes' : 'No' },
+            domain.registrar ? { label: 'Registered with', value: domain.registrar } : null,
+          ].filter(Boolean),
+          note: consequence,
+        }),
+        autoRenew && !expired
+          ? t.paragraph('Nothing is needed from you. We will confirm once it has renewed.', { muted: true, size: 13 })
+          : t.bulletList([
+            'Reply to this email and we will renew it for you.',
+            'Already renewed it yourself? Tell us and we will update our records.',
+            'Not using this address any more? Say so and we will stop reminding you.',
+          ]),
+      ],
+      cta: link ? { label: 'See your website addresses', url: link } : null,
+      reason: 'Sent because we look after this address for you.',
+    }),
+    text: t.renderText([
+      subject,
+      '',
+      opening,
+      '',
+      `Domain: ${domain.domainName}`,
+      `${expired ? 'Expired' : 'Renews'}: ${domain.expiresAt || 'not recorded'}`,
+      `Renews itself: ${autoRenew ? 'yes' : 'no'}`,
+      domain.registrar ? `Registered with: ${domain.registrar}` : null,
+      '',
+      consequence,
+      '',
+      autoRenew && !expired ? 'Nothing is needed from you.' : 'Reply to this email and we will renew it for you.',
+      link ? `Your website addresses: ${link}` : null,
+    ]),
+  };
+}
+
 /** Deliverability check an admin can fire at their own inbox. */
 function testEmail({ requestedBy }) {
   const base = baseUrl();
@@ -949,6 +1127,42 @@ const TEMPLATES = {
       ],
     }),
   },
+  approval_requested: {
+    label: 'Approval needed',
+    description: 'Sent to every approver when an untrusted admin proposes a sensitive change.',
+    render: () => approvalRequested({
+      requesterName: 'Priya Nair',
+      summary: 'Delete the account for Jordan Brooks',
+      actionLabel: 'Delete an account',
+      requestedAt: new Date().toISOString(),
+    }),
+  },
+  approval_decided: {
+    label: 'Approval decided',
+    description: 'The answer, sent to whoever raised the request.',
+    render: () => approvalDecided({
+      approverName: 'Admin User',
+      summary: 'Delete the account for Jordan Brooks',
+      decision: 'approved',
+      note: 'Confirmed with the team first.',
+    }),
+  },
+  domain_expiring: {
+    label: 'Domain expiring',
+    description: 'Automatic renewal reminders, from a month out to a week after the date.',
+    render: () => domainExpiring({
+      domain: {
+        domainName: 'brightpath-retail.com',
+        expiresAt: 'Sep 14, 2026',
+        registrar: 'Registered with EthixWeb',
+        autoRenew: false,
+        sslStatus: 'Valid',
+      },
+      clientName: 'David Shaw',
+      daysLeft: 7,
+      window: 'in 7 days',
+    }),
+  },
   test: {
     label: 'Test message',
     description: 'Deliverability check sent from the Mail page.',
@@ -1000,6 +1214,9 @@ module.exports = {
   paymentReceived,
   paymentFailed,
   paymentSummary,
+  approvalRequested,
+  approvalDecided,
+  domainExpiring,
   testEmail,
   listTemplates,
   renderMessage,

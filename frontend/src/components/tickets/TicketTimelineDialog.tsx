@@ -376,7 +376,7 @@ function WorkingOn({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Working on it</span>
+      <span className="t-label text-muted-foreground">Working on it</span>
 
       {assigneeName ? (
         <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 py-1 pr-3 pl-1.5 text-sm font-medium text-primary">
@@ -386,7 +386,7 @@ function WorkingOn({
             </AvatarFallback>
           </Avatar>
           {assigneeName}
-          <span className="text-[10px] tracking-wide uppercase opacity-70">owner</span>
+          <span className="t-label opacity-70">owner</span>
         </span>
       ) : (
         <span className="rounded-full bg-warning/10 px-3 py-1 text-sm font-medium text-warning">Unassigned</span>
@@ -464,7 +464,7 @@ function Timeline({
                 {update.status && (
                   <span
                     className={cn(
-                      "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase",
+                      "rounded-full px-2 py-0.5 t-label",
                       update.status === "pending" && "bg-warning/10 text-warning",
                       update.status === "accepted" && "bg-success/10 text-success",
                       update.status === "declined" && "bg-destructive/10 text-destructive",

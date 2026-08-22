@@ -163,7 +163,7 @@ export default function Notifications() {
             <div className="mt-4 flex flex-col gap-5">
               {groups.map((group) => (
                 <section key={group.heading}>
-                  <h2 className="px-1 pb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                  <h2 className="px-1 pb-2 t-label text-muted-foreground">
                     {group.heading}
                   </h2>
                   <ul className="overflow-hidden rounded-2xl bg-card ring-1 ring-foreground/10">

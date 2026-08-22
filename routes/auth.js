@@ -4,6 +4,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
+const live = require('../utils/liveBus');
 const router = express.Router();
 
 const { db } = require('../db/setup');
@@ -79,6 +80,11 @@ async function finishLogin(req, res, user) {
     consumed: false,
     attempts: 0,
   });
+
+  // After the insert, never before: an admin's tab refetches the moment this
+  // fires, and a code announced before it exists is a refetch that finds
+  // nothing and then sits there looking broken.
+  live.publish('otp');
 
   // Email the code so signing in does not depend on an admin reading it out of
   // the Login Codes page. That page stays as the fallback for a workspace with
@@ -177,9 +183,22 @@ router.post('/login-link/:userId', requireAuth, requireRole('admin'), requireCSR
       return res.status(409).json({ error: `${user.name}'s access has expired. Set a new expiry date first.` });
     }
 
-    const { path, expiresAt } = await loginLinks.issueFor(user, { ipAddress: normalizeIp(req.ip) });
-    await audit(req.user.id, 'issue_login_link', 'user', user.id, { expiresAt });
-    res.json({ path, url: baseUrl() ? `${baseUrl()}${path}` : null, expiresAt });
+    // An admin can say how long the link should live. The value is clamped
+    // rather than trusted: this is a bearer credential, and "expires in a year"
+    // is not a choice worth offering however it is asked for.
+    const ttlMs = loginLinks.resolveTtl(req.body?.expiresInMinutes);
+
+    const { path, expiresAt } = await loginLinks.issueFor(user, {
+      ipAddress: normalizeIp(req.ip),
+      ttlMs,
+    });
+    await audit(req.user.id, 'issue_login_link', 'user', user.id, { expiresAt, ttlMs });
+    res.json({
+      path,
+      url: baseUrl() ? `${baseUrl()}${path}` : null,
+      expiresAt,
+      expiresInMinutes: Math.round(ttlMs / 60000),
+    });
   } catch (err) {
     next(err);
   }
@@ -317,7 +336,13 @@ router.post('/logout', requireAuth, async (req, res, next) => {
 });
 
 router.get('/me', requireAuth, (req, res) => {
-  res.json({ user: safeUser(req.user), csrfToken: req.session.csrfToken });
+  // Capabilities travel with the session so the UI never has to re-derive the
+  // rules. The server checks them again on every route regardless.
+  res.json({
+    user: safeUser(req.user),
+    capabilities: require('../utils/roles').capabilitiesFor(req.user),
+    csrfToken: req.session.csrfToken,
+  });
 });
 
 module.exports = router;

@@ -58,7 +58,7 @@ export function TaskRow({
           {task.priorityLabel && (
             <span
               className={cn(
-                "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase",
+                "rounded-full px-2 py-0.5 t-label",
                 PRIORITY_TONE[task.priorityLabel.toLowerCase()],
               )}
             >

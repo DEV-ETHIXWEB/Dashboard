@@ -4,6 +4,8 @@ const express = require('express');
 const router = express.Router();
 
 const { db } = require('../db/setup');
+const approvals = require('../utils/approvals');
+const domainWatch = require('../utils/domainWatch');
 const { requireAuth, requireRole, requireCSRF, audit } = require('../middleware/auth');
 const { requirePage } = require('../utils/clientPages');
 
@@ -19,6 +21,9 @@ function visibleTo(user, domain) {
 router.get('/', async (req, res, next) => {
   try {
     const all = await db.all('domains');
+    // Piggyback the expiry sweep on traffic; it rate-limits itself to once an
+    // hour and must never delay the response.
+    if (['admin', 'sales', 'project_manager'].includes(req.user.role)) void domainWatch.maybeSweep();
     res.json({ domains: all.filter((d) => visibleTo(req.user, d)) });
   } catch (err) {
     next(err);
@@ -83,6 +88,16 @@ router.post('/:id/renew', requireCSRF, requireRole('admin', 'sales', 'project_ma
 
 router.delete('/:id', requireCSRF, requireRole('admin'), async (req, res, next) => {
   try {
+    const domain = await db.find('domains', req.params.id);
+    if (!domain) return res.status(404).json({ error: 'Domain not found' });
+
+    const gate = await approvals.gate(req, res, {
+      action: 'domain.delete',
+      summary: `Delete the website address ${domain.domainName}`,
+      payload: { domainId: req.params.id },
+    });
+    if (gate.held) return;
+
     const ok = await db.remove('domains', req.params.id);
     if (!ok) return res.status(404).json({ error: 'Domain not found' });
     await audit(req.user.id, 'delete', 'domain', req.params.id);

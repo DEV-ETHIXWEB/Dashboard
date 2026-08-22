@@ -38,11 +38,15 @@ import {
   DialogFooter,
   DialogTrigger,
   DialogClose,
+  DialogHeader,
 } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SummaryCard } from "@/components/SummaryCard";
 import { initials, toLocalISO, parseLocalISO } from "@/lib/format";
 import { CLIENT_PAGES, CLIENT_PAGE_KEYS, describeAccess } from "@/lib/permissions";
+import { LINK_LIFETIMES } from "@/lib/types";
+import { useSlackChannels } from "@/hooks/useIntegrations";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { UserRecord } from "@/lib/entities";
 import type { ClientPageKey, LoginLinkResponse } from "@/lib/types";
@@ -178,6 +182,12 @@ export default function ClientAccess() {
   const [noExpiry, setNoExpiry] = useState(false);
   const [expiresAt, setExpiresAt] = useState("");
   const [pages, setPages] = useState<ClientPageKey[]>([...CLIENT_PAGE_KEYS]);
+  const [slackChannelId, setSlackChannelId] = useState("");
+  // How long the next sign-in link should live. Remembered between links so
+  // an admin handing out several does not re-pick every time.
+  const [linkMinutes, setLinkMinutes] = useState(15);
+  const [linkTarget, setLinkTarget] = useState<UserRecord | null>(null);
+  const { data: slackChannels } = useSlackChannels();
 
   const [expiryTarget, setExpiryTarget] = useState<UserRecord | null>(null);
   const [expiryDraft, setExpiryDraft] = useState("");
@@ -245,11 +255,19 @@ export default function ClientAccess() {
         passwordExpiresAt: noExpiry ? null : endOfDay(expiresAt),
         // Everything ticked means "no restriction", so future sections stay visible.
         allowedPages: pages.length === CLIENT_PAGE_KEYS.length ? null : pages,
+        slackChannelId: slackChannelId || null,
+        slackChannelName: slackChannelId
+          ? (slackChannels ?? []).find((c) => c.id === slackChannelId)?.name ?? null
+          : null,
       },
       {
         onSuccess: (data) => {
           setIssueOpen(false);
           setCredential({ name, email, password: data.temporaryPassword, emailed: Boolean(data.emailed) });
+          // The bot adds itself to public channels; a private one needs a human.
+          if (data.slackChannel && !data.slackChannel.joined) {
+            toast.warning(data.slackChannel.message ?? "The bot could not join that channel.", { duration: 9000 });
+          }
         },
         onError: (err) => toast.error(err instanceof Error ? err.message : "Could not create the client"),
       },
@@ -291,10 +309,16 @@ export default function ClientAccess() {
    * server on :5173, which proxies /api to the backend, so the link a client
    * receives points at the same address the admin is looking at.
    */
-  async function issueSignInLink(u: UserRecord) {
+  async function issueSignInLink(u: UserRecord, minutes = linkMinutes) {
     setBusyId(u.id);
+    // Close the chooser before the round trip, not after it succeeds: leaving
+    // it up means two dialogs stacked on screen for as long as Slack, the
+    // database, and the network take between them.
+    setLinkTarget(null);
     try {
-      const d = await api<LoginLinkResponse>("POST", `/auth/login-link/${u.id}`);
+      const d = await api<LoginLinkResponse>("POST", `/auth/login-link/${u.id}`, {
+        expiresInMinutes: minutes,
+      });
       const url = `${window.location.origin}${d.path}`;
       setSignInLink({ name: u.name, email: u.email, url, expiresAt: d.expiresAt });
       try {
@@ -434,6 +458,45 @@ export default function ClientAccess() {
                     placeholder="e.g. Acme Corp"
                     className="bg-background/50 border-border/60"
                   />
+                </div>
+
+                {/* One channel, chosen here, is the only Slack this client can
+                    ever reach. The warning is not decoration: designating a
+                    channel makes everything already in it visible to them. */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">Their Slack channel</Label>
+                  {slackChannels && slackChannels.length > 0 ? (
+                    <>
+                      <Select
+                        items={{
+                          "": "No channel — no Messages page",
+                          ...Object.fromEntries(slackChannels.map((c) => [c.id, `#${c.name}`])),
+                        }}
+                        value={slackChannelId}
+                        onValueChange={(v: string | null) => setSlackChannelId(v ?? "")}
+                      >
+                        <SelectTrigger className="w-full border-border/60 bg-background/50">
+                          <SelectValue placeholder="No channel — no Messages page" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">No channel — no Messages page</SelectItem>
+                          {slackChannels.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              #{c.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] leading-relaxed text-muted-foreground">
+                        They can read <span className="font-medium text-foreground">everything</span> in
+                        this channel and write into it. Pick one shared with them, not an internal room.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="rounded-lg bg-secondary px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                      Connect Slack on the Integrations page to give this client a direct line to the team.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2 rounded-xl border border-border/60 bg-muted/20 p-3">
@@ -627,7 +690,7 @@ export default function ClientAccess() {
                     variant="outline"
                     size="sm"
                     disabled={busy}
-                    onClick={() => issueSignInLink(u)}
+                    onClick={() => setLinkTarget(u)}
                     title="Create a one-tap sign-in link to send this client"
                     className="h-8 text-xs gap-1.5"
                   >
@@ -778,6 +841,75 @@ export default function ClientAccess() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* How long should this link live?
+          A sign-in link is a bearer credential -- whoever opens it is the
+          client -- so the answer is a deliberate choice rather than one fixed
+          number. Handing it over on a call wants five minutes; emailing it to
+          somebody in another timezone wants a day. The server clamps whatever
+          arrives to between 5 minutes and 7 days regardless. */}
+      {/* Rendered only while there is a target, rather than mounted with
+          `open={false}`. One modal closing as another opens in the same commit
+          left this one mounted and fully visible -- two dialogs stacked, the
+          dead one still taking clicks. Unmounting with the state cannot do
+          that. */}
+      {linkTarget && (
+      <Dialog open onOpenChange={(v) => !v && setLinkTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Sign-in link for {linkTarget?.name}</DialogTitle>
+            <DialogDescription>
+              They are signed straight in when they open it. It works once.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 px-1">
+            <Label className="text-xs font-medium">Stops working after</Label>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {LINK_LIFETIMES.map((option) => {
+                const on = linkMinutes === option.minutes;
+                return (
+                  <button
+                    key={option.minutes}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setLinkMinutes(option.minutes)}
+                    className={`focus-clear touch-control h-10 rounded-lg border text-sm transition-colors coarse:h-11 ${
+                      on
+                        ? "border-primary/40 bg-primary/10 font-medium text-primary"
+                        : "border-border bg-background text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="t-caption text-muted-foreground">
+              Shorter is safer. Anyone holding the link can sign in as{" "}
+              {linkTarget?.name ?? "them"} until it expires or is used.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setLinkTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={busyId === linkTarget?.id}
+              onClick={() => linkTarget && issueSignInLink(linkTarget, linkMinutes)}
+            >
+              {busyId === linkTarget?.id ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Link2 className="size-4" />
+              )}
+              Create the link
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      )}
 
       <Dialog open={Boolean(signInLink)} onOpenChange={(v) => !v && setSignInLink(null)}>
         <DialogContent
