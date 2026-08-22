@@ -20,4 +20,11 @@ env
 Dashboard/
 apps/
 packages/
-public/admin/
+# Build output. `npm run build` wipes public/ and re-emits it from frontend/,
+# with fresh content hashes every time. Committing it meant Vercel checked out
+# one set of hashed chunks, globbed them for the function bundle, then had the
+# build delete them out from under it -- ENOENT on a file that existed at
+# checkout. The static assets that are NOT generated live in frontend/public/,
+# which Vite copies into dist/, so nothing is lost by ignoring this.
+# Anchored with a leading slash so frontend/public/ stays tracked.
+/public/
