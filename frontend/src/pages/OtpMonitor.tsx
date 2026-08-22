@@ -1,11 +1,15 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { KeyRound, Eye, EyeOff, Mail, Globe, Clock, Loader2 } from "lucide-react";
+import {
+  KeyRound, Eye, EyeOff, Mail, Globe, Clock, Loader2, Search, X, Copy, CheckCircle2, TriangleAlert,
+} from "lucide-react";
 import { useOtpLogs, useRevealOtpCode } from "@/hooks/useData";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { SummaryCard } from "@/components/SummaryCard";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function statusBadge(expiresAt: number, consumed: boolean) {
@@ -19,6 +23,37 @@ export default function OtpMonitor() {
   const revealCode = useRevealOtpCode();
   const [revealed, setRevealed] = useState<Map<string, string>>(new Map());
   const [revealingId, setRevealingId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return logs ?? [];
+    return (logs ?? []).filter(
+      (l) =>
+        l.name.toLowerCase().includes(q) ||
+        l.email.toLowerCase().includes(q) ||
+        (l.ipAddress ?? "").toLowerCase().includes(q),
+    );
+  }, [logs, search]);
+
+  const stats = useMemo(() => {
+    const list = logs ?? [];
+    const now = Date.now();
+    return {
+      active: list.filter((l) => !l.consumed && l.expiresAt > now).length,
+      used: list.filter((l) => l.consumed).length,
+      expired: list.filter((l) => !l.consumed && l.expiresAt <= now).length,
+    };
+  }, [logs]);
+
+  async function copyCode(code: string) {
+    try {
+      await navigator.clipboard.writeText(code);
+      toast.success("Code copied");
+    } catch {
+      toast.error("Couldn't copy - read it out instead");
+    }
+  }
 
   function toggleReveal(id: string) {
     if (revealed.has(id)) {
@@ -46,6 +81,38 @@ export default function OtpMonitor() {
         description="One-time codes generated when a client passes the password step. Reveal a code and read it out to confirm their identity."
       />
 
+      <div className="grid grid-cols-3 gap-3">
+        <SummaryCard icon={KeyRound} value={stats.active} label="Active now" tone="primary" />
+        <SummaryCard icon={CheckCircle2} value={stats.used} label="Used" />
+        <SummaryCard
+          icon={TriangleAlert}
+          value={stats.expired}
+          label="Expired unused"
+          tone={stats.expired > 0 ? "warning" : "muted"}
+        />
+      </div>
+
+      <div className="flex items-center gap-3 rounded-xl border border-border/60 bg-card/60 p-1.5 backdrop-blur-xs">
+        <div className="relative w-full sm:w-72">
+          <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name, email, or IP..."
+            className="h-9 border-none bg-transparent pl-9 text-xs focus-visible:ring-0"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch("")}
+              aria-label="Clear search"
+              className="absolute top-1/2 right-2.5 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
       {isLoading ? (
         <div className="space-y-3">
           {[...Array(4)].map((_, i) => (
@@ -54,15 +121,19 @@ export default function OtpMonitor() {
         </div>
       ) : isError ? (
         <ErrorState error={error} onRetry={() => refetch()} />
-      ) : !logs || logs.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <EmptyState
           icon={KeyRound}
-          title="No login codes yet"
-          description="Codes appear here the moment a client's email and password are accepted."
+          title={search ? "No matching codes" : "No login codes yet"}
+          description={
+            search
+              ? "Try a different name, email, or IP."
+              : "Codes appear here the moment a client's email and password are accepted."
+          }
         />
       ) : (
         <div className="flex flex-col gap-2">
-          {logs.map((log) => {
+          {filtered.map((log) => {
             const badge = statusBadge(log.expiresAt, log.consumed);
             const revealedCode = revealed.get(log.id);
             const isRevealing = revealingId === log.id;
@@ -119,6 +190,17 @@ export default function OtpMonitor() {
                       <Eye className="size-3.5" />
                     )}
                   </Button>
+                  {revealedCode && (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Copy code"
+                      onClick={() => copyCode(revealedCode)}
+                      className="hover:bg-primary/10 hover:text-primary transition-colors"
+                    >
+                      <Copy className="size-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
             );

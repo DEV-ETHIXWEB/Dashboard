@@ -143,6 +143,33 @@ const firestoreDb = {
     const ids = snap.docs.filter((d) => d.data().consumed !== true).map((d) => d.id);
     await deleteAll('otp_codes', ids);
   },
+
+  async pruneExpiredLoginLinks() {
+    const snap = await getDb().collection('login_links').where('expiresAt', '<', Date.now()).get();
+    await deleteAll('login_links', snap.docs.map((d) => d.id));
+  },
+
+  async invalidateUserLoginLinks(userId) {
+    const snap = await getDb().collection('login_links').where('userId', '==', userId).get();
+    const ids = snap.docs.filter((d) => d.data().consumed !== true).map((d) => d.id);
+    await deleteAll('login_links', ids);
+  },
+
+  /**
+   * Mark a link used, but only if it was not already. Runs in a transaction so
+   * two clicks arriving together cannot both succeed -- the second one reads
+   * consumed = true and gets null.
+   */
+  async consumeLoginLink(id) {
+    const ref = getDb().collection('login_links').doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      if (doc.data().consumed === true) return null;
+      tx.update(ref, { consumed: true });
+      return { id: doc.id, ...doc.data(), consumed: true };
+    });
+  },
 };
 
 async function deleteAll(collection, ids) {

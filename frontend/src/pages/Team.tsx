@@ -12,7 +12,9 @@ import {
   Mail,
   X,
   Loader2,
+  LayoutGrid,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useUsers, useCreateUser, useUpdateUser, useDeleteUser } from "@/hooks/useData";
 import { PageHeader } from "@/components/PageHeader";
@@ -33,7 +35,9 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { SummaryCard } from "@/components/SummaryCard";
 import { initials } from "@/lib/format";
+import { describeAccess } from "@/lib/permissions";
 import type { UserRecord } from "@/lib/entities";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -165,8 +169,11 @@ export default function Team() {
     const list = users ?? [];
     return {
       total: list.length,
-      admins: list.filter((u) => u.role === "admin" || u.role === "project_manager").length,
-      staff: list.filter((u) => u.role === "employee" || u.role === "sales").length,
+      // Administrators are counted on their own: this workspace supports any
+      // number of them, and the last one cannot be removed, so the number is
+      // something an admin needs to see rather than infer.
+      admins: list.filter((u) => u.role === "admin").length,
+      staff: list.filter((u) => ["project_manager", "employee", "sales"].includes(u.role)).length,
       clients: list.filter((u) => u.role === "client").length,
     };
   }, [users]);
@@ -183,7 +190,7 @@ export default function Team() {
             </DialogTrigger>
             <DialogContent
               showCloseButton={false}
-              className="sm:max-w-md p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
+              className="sm:max-w-2xl p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
             >
               <div className="relative p-6 pb-4 border-b border-border/40 bg-gradient-to-br from-primary/10 via-background to-background">
                 <div className="flex items-start justify-between gap-4">
@@ -206,7 +213,8 @@ export default function Team() {
                 </div>
               </div>
 
-              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* Side by side: identity on the left, access on the right. */}
+              <div className="no-scrollbar grid max-h-[72svh] gap-x-5 gap-y-4 overflow-y-auto overscroll-contain p-6 md:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-medium">Full Name *</Label>
                   <Input
@@ -229,8 +237,7 @@ export default function Team() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
+                <div className="space-y-1.5">
                     <Label className="text-xs font-medium">Role</Label>
                     <Select
                       items={STAFF_ROLES}
@@ -249,20 +256,19 @@ export default function Team() {
                         ))}
                       </SelectContent>
                     </Select>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-medium">Company (Client)</Label>
-                    <Input
-                      value={company}
-                      onChange={(e) => setCompany(e.target.value)}
-                      placeholder="e.g. Acme Corp"
-                      className="bg-background/50 border-border/60"
-                    />
-                  </div>
                 </div>
 
                 <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">Company (Client)</Label>
+                  <Input
+                    value={company}
+                    onChange={(e) => setCompany(e.target.value)}
+                    placeholder="e.g. Acme Corp"
+                    className="bg-background/50 border-border/60"
+                  />
+                </div>
+
+                <div className="space-y-1.5 md:col-span-2">
                   <Label className="text-xs font-medium">
                     {editing ? "New Password (leave blank to keep current)" : "Password *"}
                   </Label>
@@ -303,45 +309,15 @@ export default function Team() {
       />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="p-4 rounded-2xl border border-border/60 bg-card/80 shadow-xs backdrop-blur-xs flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary border border-primary/20">
-            <Users className="size-5" />
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-foreground tracking-tight">{stats.total}</div>
-            <div className="text-xs text-muted-foreground font-medium">Total Members</div>
-          </div>
-        </div>
-
-        <div className="p-4 rounded-2xl border border-border/60 bg-card/80 shadow-xs backdrop-blur-xs flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-xl bg-muted/80 text-foreground border border-border/50">
-            <Shield className="size-5" />
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-foreground tracking-tight">{stats.admins}</div>
-            <div className="text-xs text-muted-foreground font-medium">Admins & PMs</div>
-          </div>
-        </div>
-
-        <div className="p-4 rounded-2xl border border-border/60 bg-card/80 shadow-xs backdrop-blur-xs flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-xl bg-muted/80 text-foreground border border-border/50">
-            <Briefcase className="size-5" />
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-foreground tracking-tight">{stats.staff}</div>
-            <div className="text-xs text-muted-foreground font-medium">Staff & Sales</div>
-          </div>
-        </div>
-
-        <div className="p-4 rounded-2xl border border-border/60 bg-card/80 shadow-xs backdrop-blur-xs flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-xl bg-muted/80 text-foreground border border-border/50">
-            <Building2 className="size-5" />
-          </div>
-          <div>
-            <div className="text-2xl font-bold text-foreground tracking-tight">{stats.clients}</div>
-            <div className="text-xs text-muted-foreground font-medium">Clients</div>
-          </div>
-        </div>
+        <SummaryCard icon={Users} value={stats.total} label="Total Members" tone="primary" />
+        <SummaryCard
+          icon={Shield}
+          value={stats.admins}
+          label={stats.admins === 1 ? "Administrator (only one)" : "Administrators"}
+          tone={stats.admins === 1 ? "warning" : "muted"}
+        />
+        <SummaryCard icon={Briefcase} value={stats.staff} label="Staff & Managers" />
+        <SummaryCard icon={Building2} value={stats.clients} label="Clients" />
       </div>
 
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-1.5 bg-card/60 border border-border/60 rounded-xl backdrop-blur-xs">
@@ -372,7 +348,7 @@ export default function Team() {
               <button
                 key={r}
                 onClick={() => setRoleFilter(r)}
-                className={`text-xs px-3 py-1 rounded-lg transition-all whitespace-nowrap flex items-center gap-1.5 font-medium cursor-pointer ${
+                className={`flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-medium whitespace-nowrap transition-all coarse:min-h-9 coarse:px-3.5 ${
                   isSelected
                     ? "bg-primary text-primary-foreground shadow-xs"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
@@ -446,6 +422,16 @@ export default function Team() {
                         <Building2 className="size-3 shrink-0 text-primary" />
                         {u.company}
                       </span>
+                    )}
+                    {u.role === "client" && (
+                      <Link
+                        to="/portal/client-access"
+                        className="focus-clear -mx-2 flex items-center gap-1 truncate rounded-lg px-2 hover:text-foreground coarse:min-h-11"
+                        title="Change what this client can see"
+                      >
+                        <LayoutGrid className="size-3 shrink-0 text-muted-foreground/70" />
+                        {describeAccess(u.allowedPages)}
+                      </Link>
                     )}
                   </div>
                 </div>

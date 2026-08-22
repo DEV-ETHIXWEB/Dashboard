@@ -5,10 +5,12 @@ const router = express.Router();
 
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
+const { requirePage } = require('../utils/clientPages');
 
 const STATUS_PCT = { 'To Do': 0, 'In Progress': 50, 'In Review': 90, Complete: 100 };
 
 router.use(requireAuth);
+router.use(requirePage('projects'));
 
 async function withProgress(project) {
   const tasks = await db.filter('tasks', (t) => t.projectId === project.id);
@@ -62,6 +64,8 @@ router.post('/', requireCSRF, requireRole('admin', 'sales', 'project_manager'), 
       name, type: type || 'General', clientId, assignedPmId: assignedPmId || null,
       status: status || 'On Track', description: description || '', createdAt: new Date().toISOString(),
     });
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [clientId];
     await audit(req.user.id, 'create', 'project', project.id);
     await notify(clientId, `A new project was created for you: "${name}"`, 'project');
     if (assignedPmId) await notify(assignedPmId, `You were assigned as PM on "${name}"`, 'project');
@@ -79,6 +83,8 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
     const patch = { ...req.body };
     delete patch.id;
     const updated = await db.update('projects', req.params.id, patch);
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [project.clientId];
     await audit(req.user.id, 'update', 'project', req.params.id);
 
     if (patch.status && patch.status !== project.status) {
@@ -95,6 +101,8 @@ router.delete('/:id', requireCSRF, requireRole('admin'), async (req, res, next) 
     const project = await db.find('projects', req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [project.clientId];
     const removedTasks = await db.removeWhere('tasks', (t) => t.projectId === req.params.id);
     await db.remove('projects', req.params.id);
     await audit(req.user.id, 'delete', 'project', req.params.id, { removedTasks });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ShieldCheck, Loader2, Lock, Activity, Mail, Accessibility, Sun, Moon, Monitor, Check, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,18 @@ const DEMO_ACCOUNTS = [
 
 type Step = "credentials" | "otp";
 
+/**
+ * Why a sign-in link bounced, in words a client can act on. Links are issued by
+ * an admin from the portal, so every message points back at them rather than
+ * offering a self-service retry.
+ */
+const LINK_ERRORS: Record<string, string> = {
+  used: "That sign-in link was already used. Ask us for a new one, or sign in with your password below.",
+  expired: "That sign-in link expired. Ask us for a new one, or sign in with your password below.",
+  invalid: "That sign-in link is not valid. Ask us for a new one, or sign in with your password below.",
+  access_expired: "This access has expired. Ask your admin to issue you new credentials.",
+};
+
 export default function Login() {
   const navigate = useNavigate();
   const { config, setSession } = useAuth();
@@ -41,6 +53,7 @@ export default function Login() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [themeMenuOpen]);
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const [step, setStep] = useState<Step>("credentials");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -49,11 +62,20 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
 
   const [otpError, setOtpError] = useState<string | null>(null);
+  const [codeDestination, setCodeDestination] = useState<string | null>(null);
   const [otpBusy, setOtpBusy] = useState(false);
   const [code, setCode] = useState(["", "", "", "", "", ""]);
   const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const codeRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    const reason = searchParams.get("linkError");
+    if (!reason) return;
+    setError(LINK_ERRORS[reason] ?? LINK_ERRORS.invalid);
+    searchParams.delete("linkError");
+    setSearchParams(searchParams, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (step !== "otp" || !otpExpiresAt) return;
@@ -111,6 +133,7 @@ export default function Login() {
     if (d.requiresOtp) {
       setCode(["", "", "", "", "", ""]);
       setOtpError(null);
+      setCodeDestination(d.codeEmailed ? d.codeDestination ?? null : null);
       setOtpExpiresAt(d.otpExpiresAt ?? null);
       setNow(Date.now());
       setStep("otp");
@@ -179,7 +202,7 @@ export default function Login() {
   }
 
   return (
-    <div className="relative flex min-h-svh items-center justify-center overflow-hidden bg-gradient-to-b from-secondary/50 via-background to-background text-foreground px-3 sm:px-6 lg:px-10 py-6 sm:py-10">
+    <div className="relative flex min-h-svh items-center justify-center overflow-hidden bg-gradient-to-b from-secondary/50 via-background to-background px-0 py-0 text-foreground sm:px-6 sm:py-10 lg:px-10">
       <div ref={themeMenuRef} className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50">
         {themeMenuOpen && (
           <div className="absolute bottom-12 right-0 w-44 rounded-xl border border-border/80 bg-card/95 p-2 shadow-2xl backdrop-blur-md animate-in fade-in-0 zoom-in-95 duration-150 z-50">
@@ -288,7 +311,9 @@ export default function Login() {
         style={{ backgroundImage: "url('/spiderweb.svg')" }}
       />
 
-      <div className="pointer-events-none absolute inset-0 -z-20 select-none overflow-hidden">
+      {/* Outlined wordmarks at 12vw are wallpaper on a desktop and clutter on a
+          phone, where every pixel is competing with the form. */}
+      <div className="pointer-events-none absolute inset-0 -z-20 hidden select-none overflow-hidden sm:block">
         <div
           className="absolute top-2 left-3 sm:top-4 sm:left-6 text-[12vw] sm:text-[9.5vw] lg:text-[8vw] font-black uppercase tracking-tighter leading-none"
           style={{
@@ -312,10 +337,16 @@ export default function Login() {
       </div>
 
       <div className="w-full max-w-4xl lg:max-w-[980px]">
-        <Card className="overflow-hidden border-border/70 shadow-2xl shadow-primary/10 p-0 py-0 backdrop-blur-md bg-card text-card-foreground">
+        <Card className="overflow-hidden rounded-none border-0 bg-card p-0 py-0 text-card-foreground backdrop-blur-md sm:rounded-xl sm:border sm:border-border/70 sm:shadow-2xl sm:shadow-primary/10">
           <CardContent className="p-0">
-            <div className="grid md:grid-cols-12 min-h-[500px] md:min-h-[560px]">
-              <div className="relative md:col-span-5 flex flex-col justify-between bg-zinc-950 p-6 sm:p-8 lg:p-10 text-white overflow-hidden border-r border-white/10">
+            {/* No fixed minimum on a phone: the panel beside it is hidden
+                there, so the card should be exactly as tall as the form. */}
+            <div className="grid md:min-h-[560px] md:grid-cols-12">
+              {/* A phone lands on the form, not on the pitch. This panel is the
+                  half of the split that has to go: 500px of marketing pushed
+                  the email field below the fold on every handset. Its brand and
+                  its two trust lines reappear around the form below. */}
+              <div className="relative hidden overflow-hidden border-r border-white/10 bg-zinc-950 p-6 text-white md:col-span-5 md:flex md:flex-col md:justify-between lg:p-10">
                 <div
                   className="absolute inset-0 bg-cover bg-center opacity-[0.22] pointer-events-none"
                   style={{ backgroundImage: "url('/spiderweb.svg')" }}
@@ -358,16 +389,31 @@ export default function Login() {
                 </div>
               </div>
 
-              <div className="relative md:col-span-7 flex flex-col justify-center p-6 sm:p-8 lg:p-12 bg-card overflow-hidden">
+              <div className="relative flex flex-col justify-center overflow-hidden bg-card px-5 py-8 sm:p-8 md:col-span-7 lg:p-12">
                 <div
                   className="absolute inset-0 bg-cover bg-center opacity-[0.03] pointer-events-none"
                   style={{ backgroundImage: "url('/spiderweb.svg')" }}
                 />
                 {step === "credentials" ? (
-                  <div className="mx-auto w-full max-w-[390px] flex flex-col gap-5 z-10">
+                  <div className="z-10 mx-auto flex w-full max-w-[390px] flex-col gap-5">
+                    {/* The brand, at the size a phone can spare for it. */}
+                    <div className="flex items-center gap-2.5 md:hidden">
+                      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 p-1.5 ring-1 ring-primary/20">
+                        <img src="/emblem-mark.png" alt="" className="size-full object-contain" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm leading-tight font-extrabold tracking-wide uppercase">
+                          EthixWeb
+                        </span>
+                        <span className="block text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+                          Client portal
+                        </span>
+                      </span>
+                    </div>
+
                     <div>
-                      <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">Welcome back</h1>
-                      <p className="mt-1 text-xs text-muted-foreground leading-relaxed max-w-[290px]">
+                      <h1 className="text-2xl font-extrabold tracking-tight text-foreground">Welcome back</h1>
+                      <p className="mt-1 max-w-[290px] text-sm leading-relaxed text-muted-foreground sm:text-xs">
                         Sign in to manage projects, tasks, and client tickets.
                       </p>
                     </div>
@@ -465,11 +511,28 @@ export default function Login() {
                         </div>
                       )}
 
-                      <Button type="submit" disabled={busy} className="mt-1 h-10 py-2 shadow-md shadow-primary/20  transition-all text-sm font-semibold cursor-pointer">
+                      <Button
+                        type="submit"
+                        disabled={busy}
+                        className="mt-1 h-12 cursor-pointer py-2 text-sm font-semibold shadow-md shadow-primary/20 transition-all sm:h-10"
+                      >
                         {busy && <Loader2 className="size-4 animate-spin" />}
                         Sign in
                       </Button>
                     </form>
+
+                    {/* The reassurance the side panel used to carry, kept where
+                        a phone can still see it without scrolling past a pitch. */}
+                    <div className="flex flex-col gap-2 border-t border-border/60 pt-4 md:hidden">
+                      <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <Lock aria-hidden className="size-3.5 shrink-0 text-primary" />
+                        Every login is verified with a second step
+                      </span>
+                      <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <Activity aria-hidden className="size-3.5 shrink-0 text-primary" />
+                        Real-time project &amp; ticket visibility
+                      </span>
+                    </div>
 
                     {import.meta.env.DEV && (
                       <div className="mt-3 border-t border-border/60 pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -482,7 +545,7 @@ export default function Login() {
                               key={acct.email}
                               type="button"
                               onClick={() => fillDemo(acct)}
-                              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground transition-all duration-150 hover:bg-secondary hover:text-foreground hover:border-primary/50 shadow-sm cursor-pointer"
+                              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground shadow-sm transition-all duration-150 hover:border-primary/50 hover:bg-secondary hover:text-foreground coarse:min-h-9 coarse:px-3.5 coarse:text-[11px]"
                             >
                               <span className={`h-1.5 w-1.5 rounded-full ${
                                 acct.role === "Admin" ? "bg-red-500" :
@@ -506,7 +569,9 @@ export default function Login() {
                       <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">Verify it's you</h1>
                     </div>
                     <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-                      Ask your admin for the 6-digit login code generated for this sign-in, then enter it below.
+                      {codeDestination
+                        ? `We sent a 6-digit code to ${codeDestination}. Enter it below.`
+                        : "We could not email your code. Ask your admin for the 6-digit code generated for this sign-in, then enter it below."}
                     </p>
 
                     <div className="flex justify-between gap-2 my-1">

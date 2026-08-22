@@ -20,8 +20,9 @@ const ClientAccess = lazy(() => import("@/pages/ClientAccess"));
 const OtpMonitor = lazy(() => import("@/pages/OtpMonitor"));
 const AdminHome = lazy(() => import("@/pages/AdminHome"));
 const ClickUpTasks = lazy(() => import("@/pages/ClickUpTasks"));
+const WorkProgress = lazy(() => import("@/pages/WorkProgress"));
+const MailCenter = lazy(() => import("@/pages/MailCenter"));
 const SlackMessages = lazy(() => import("@/pages/SlackMessages"));
-const Settings = lazy(() => import("@/pages/Settings"));
 const Notifications = lazy(() => import("@/pages/Notifications"));
 
 function RouteFallback() {
@@ -68,6 +69,14 @@ function App() {
             element={
               <RoleRoute roles={["admin", "project_manager", "employee"]}>
                 <Tasks />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/portal/progress"
+            element={
+              <RoleRoute roles={["admin", "sales", "project_manager", "client"]}>
+                <WorkProgress />
               </RoleRoute>
             }
           />
@@ -137,6 +146,14 @@ function App() {
             }
           />
           <Route
+            path="/portal/mail"
+            element={
+              <RoleRoute roles={["admin"]}>
+                <MailCenter />
+              </RoleRoute>
+            }
+          />
+          <Route
             path="/portal/slack"
             element={
               <RoleRoute roles={["admin"]}>
@@ -144,7 +161,6 @@ function App() {
               </RoleRoute>
             }
           />
-          <Route path="/portal/settings" element={<RoleRoute><Settings /></RoleRoute>} />
           <Route path="/portal/notifications" element={<RoleRoute><Notifications /></RoleRoute>} />
 
           <Route path="/" element={<Navigate to="/login" replace />} />

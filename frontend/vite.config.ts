@@ -14,9 +14,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Dev-time proxy to the existing Express backend (run separately with `npm run dev` in the Dashboard folder).
+      // Dev-time proxy to the existing Express backend (run separately with
+      // `npm run dev` in the Dashboard folder). Point VITE_API_TARGET at a
+      // throwaway instance to try things out without touching real data.
       '/api': {
-        target: 'http://127.0.0.1:4000',
+        target: process.env.VITE_API_TARGET || 'http://127.0.0.1:4000',
         changeOrigin: true,
       },
     },

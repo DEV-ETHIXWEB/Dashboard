@@ -5,8 +5,10 @@ const router = express.Router();
 
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit } = require('../middleware/auth');
+const { requirePage } = require('../utils/clientPages');
 
 router.use(requireAuth);
+router.use(requirePage('domains'));
 
 function visibleTo(user, domain) {
   if (['admin', 'sales', 'project_manager'].includes(user.role)) return true;
@@ -36,6 +38,8 @@ router.post('/', requireCSRF, requireRole('admin', 'sales', 'project_manager'), 
       sslStatus: 'Valid', expiresAt: expiresAt || '', autoRenew: false, dnsStatus: 'Propagated',
       notes: notes || '',
     });
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [clientId];
     await audit(req.user.id, 'create', 'domain', domain.id);
     res.status(201).json({ domain });
   } catch (err) {
@@ -50,6 +54,8 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
     const patch = { ...req.body };
     delete patch.id;
     const updated = await db.update('domains', req.params.id, patch);
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [domain.clientId];
     await audit(req.user.id, 'update', 'domain', req.params.id);
     res.json({ domain: updated });
   } catch (err) {
@@ -66,6 +72,8 @@ router.post('/:id/renew', requireCSRF, requireRole('admin', 'sales', 'project_ma
     current.setFullYear(current.getFullYear() + 1);
     const expiresAt = current.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     const updated = await db.update('domains', req.params.id, { expiresAt, sslStatus: 'Valid' });
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [domain.clientId];
     await audit(req.user.id, 'renew', 'domain', req.params.id);
     res.json({ domain: updated });
   } catch (err) {

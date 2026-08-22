@@ -3,12 +3,13 @@ import { toast } from "sonner";
 import { Plus, Wallet } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { useBudget, useUsers } from "@/hooks/useData";
+import { useBudget, useUsers, usePayments } from "@/hooks/useData";
 import { api } from "@/lib/api";
 import {
   MoneyPanel, BigMoney, SpendBreakdown, DataList, DataRow, BentoGrid, BentoColumns, bento,
 } from "@/components/money/Money";
 import { TrustFooter } from "@/components/money/Trust";
+import { PaymentList, paymentMoney } from "@/components/money/Payments";
 import { ErrorState } from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,8 @@ export default function Budget() {
   const activeClientId = (isStaff ? selectedClient || clients[0]?.id : user?.id) ?? "";
 
   const { data: items, isLoading, isError, error, refetch } = useBudget(activeClientId);
+  const { data: payments } = usePayments(isStaff ? activeClientId || undefined : undefined);
+  const paid = payments && payments.count > 0 ? payments : null;
   const qc = useQueryClient();
 
   const [period, setPeriod] = useState<string>(ALL_PERIODS);
@@ -299,6 +302,19 @@ export default function Budget() {
               )}
           </MoneyPanel>
         </>
+      )}
+
+      {paid && (
+        <MoneyPanel
+          className={bento(4)}
+          title="Payments you made to us"
+          subtitle={`${paymentMoney(paid.total, paid.currency)} across ${paid.count} payment${paid.count === 1 ? "" : "s"}`}
+        >
+          {/* Spend above is what we tracked; this is what the payment provider
+              actually took. Both are shown rather than merged, because they
+              answer different questions. */}
+          <PaymentList payments={paid.payments.slice(0, 6)} />
+        </MoneyPanel>
       )}
 
       <TrustFooter className={bento(4)} />

@@ -43,6 +43,9 @@ function rowToCamel(row, collection) {
   if ('meta' in out && typeof out.meta === 'string') {
     try { out.meta = JSON.parse(out.meta); } catch { /* leave as-is */ }
   }
+  if ('allowedPages' in out && typeof out.allowedPages === 'string') {
+    try { out.allowedPages = JSON.parse(out.allowedPages); } catch { out.allowedPages = null; }
+  }
   if ('createdAt' in out && typeof out.createdAt === 'object' && out.createdAt instanceof Date) {
     out.createdAt = out.createdAt.toISOString();
   }
@@ -53,6 +56,9 @@ function rowToCamel(row, collection) {
   if ('amount' in out && out.amount !== null) out.amount = Number(out.amount);
   if ('sizeBytes' in out && out.sizeBytes !== null) out.sizeBytes = Number(out.sizeBytes);
   if ('passwordExpiresAt' in out && out.passwordExpiresAt !== null) out.passwordExpiresAt = Number(out.passwordExpiresAt);
+  if ('responseDueAt' in out && out.responseDueAt !== null) out.responseDueAt = Number(out.responseDueAt);
+  if ('firstResponseAt' in out && out.firstResponseAt !== null) out.firstResponseAt = Number(out.firstResponseAt);
+  if ('resolvedNotifiedAt' in out && out.resolvedNotifiedAt !== null) out.resolvedNotifiedAt = Number(out.resolvedNotifiedAt);
   return out;
 }
 
@@ -64,6 +70,7 @@ function objToSnakeEntries(collection, obj) {
     if (!cols.includes(snakeKey)) continue;
     let value = v;
     if (k === 'meta' && value !== null && typeof value === 'object') value = JSON.stringify(value);
+    if (k === 'allowedPages' && Array.isArray(value)) value = JSON.stringify(value);
     entries.push([snakeKey, value]);
   }
   return entries;
@@ -132,6 +139,24 @@ const pgDb = {
   async invalidateUserOtps(userId) {
     await getPool().query(`DELETE FROM otp_codes WHERE user_id = $1 AND consumed = FALSE`, [userId]);
   },
+  async pruneExpiredLoginLinks() {
+    await getPool().query(`DELETE FROM login_links WHERE expires_at < $1`, [Date.now()]);
+  },
+  async invalidateUserLoginLinks(userId) {
+    await getPool().query(`DELETE FROM login_links WHERE user_id = $1 AND consumed = FALSE`, [userId]);
+  },
+  /**
+   * Mark a link used, but only if it was not already. The UPDATE ... WHERE
+   * consumed = FALSE is the whole single-use guarantee: two clicks arriving at
+   * once means one of them gets no row back and is rejected.
+   */
+  async consumeLoginLink(id) {
+    const res = await getPool().query(
+      `UPDATE login_links SET consumed = TRUE WHERE id = $1 AND consumed = FALSE RETURNING *`,
+      [id]
+    );
+    return rowToCamel(res.rows[0], 'login_links') || null;
+  },
 };
 
 const firestore = DB_DRIVER === 'firestore' ? require('./firestore') : null;
@@ -149,7 +174,7 @@ async function initPostgresSchema() {
       id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
       role TEXT NOT NULL, company TEXT, password TEXT, google_id TEXT,
       two_factor_enabled BOOLEAN DEFAULT FALSE, two_factor_contact TEXT,
-      password_expires_at BIGINT
+      password_expires_at BIGINT, allowed_pages TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT, client_id TEXT,
@@ -163,7 +188,9 @@ async function initPostgresSchema() {
       id TEXT PRIMARY KEY, subject TEXT NOT NULL, category TEXT, client_id TEXT,
       assignee_id TEXT, status TEXT, description TEXT, created_at TEXT,
       clickup_task_id TEXT, clickup_task_url TEXT,
-      progress INTEGER DEFAULT 0, stage TEXT
+      progress INTEGER DEFAULT 0, stage TEXT,
+      priority TEXT, response_due_at BIGINT, first_response_at BIGINT,
+      slack_channel_id TEXT, slack_thread_ts TEXT, resolved_notified_at BIGINT
     )`,
     `CREATE TABLE IF NOT EXISTS ticket_updates (
       id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, author_id TEXT, kind TEXT NOT NULL,
@@ -206,12 +233,33 @@ async function initPostgresSchema() {
       id TEXT PRIMARY KEY, client_id TEXT UNIQUE, stripe_customer_id TEXT,
       stripe_subscription_id TEXT, plan TEXT, status TEXT, updated_at TEXT
     )`,
+    `CREATE TABLE IF NOT EXISTS payments (
+      id TEXT PRIMARY KEY, client_id TEXT, stripe_customer_id TEXT,
+      stripe_object_id TEXT UNIQUE, kind TEXT, description TEXT,
+      amount NUMERIC, currency TEXT, status TEXT, paid_at TEXT,
+      period_start TEXT, period_end TEXT, invoice_url TEXT, receipt_url TEXT,
+      invoice_number TEXT, card_brand TEXT, card_last4 TEXT,
+      failure_message TEXT, created_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_client ON payments(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON payments(paid_at DESC)`,
     `CREATE TABLE IF NOT EXISTS otp_codes (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, code TEXT NOT NULL, ip_address TEXT,
       created_at TEXT, expires_at BIGINT, consumed BOOLEAN DEFAULT FALSE, attempts INTEGER DEFAULT 0
     )`,
     `CREATE INDEX IF NOT EXISTS idx_otp_codes_user_id ON otp_codes(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_otp_codes_created_at ON otp_codes(created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS login_links (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL, ip_address TEXT,
+      created_at TEXT, expires_at BIGINT, consumed BOOLEAN DEFAULT FALSE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_login_links_user_id ON login_links(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_login_links_created_at ON login_links(created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS email_log (
+      id TEXT PRIMARY KEY, to_emails TEXT, subject TEXT, template TEXT, status TEXT,
+      transport TEXT, error TEXT, entity TEXT, entity_id TEXT, html TEXT, created_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_email_log_created_at ON email_log(created_at DESC)`,
   ];
   for (const sql of statements) await p.query(sql);
 
@@ -226,6 +274,22 @@ async function initPostgresSchema() {
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS clickup_task_url TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_pages TEXT`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS priority TEXT`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS response_due_at BIGINT`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS first_response_at BIGINT`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS slack_channel_id TEXT`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS slack_thread_ts TEXT`,
+    `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS resolved_notified_at BIGINT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS currency TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS amount NUMERIC`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS interval TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS current_period_end TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS cancel_at_period_end BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS card_brand TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS card_last4 TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS latest_invoice_url TEXT`,
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS synced_at TEXT`,
   ];
   for (const sql of alterations) {
     try {
@@ -250,7 +314,11 @@ async function seed() {
 
   if (usersEmpty) {
     await Promise.all([
+      // Two admins from the start: this workspace is multi-admin by design, and
+      // seeding a single one makes it look like an owner account that cannot
+      // be shared. Both have identical powers.
       db.insert('users', { id: 'u-admin', name: 'Admin User', email: 'admin@ethixweb.local', role: 'admin', password: hash('Admin#2026!') }),
+      db.insert('users', { id: 'u-admin-2', name: 'Priya Nair', email: 'priya.nair@ethixweb.local', role: 'admin', password: hash('Admin#2026!') }),
       db.insert('users', { id: 'u-sales', name: 'Emily Turner', email: 'emily.turner@ethixweb.local', role: 'sales', password: hash('Sales#2026!') }),
       db.insert('users', { id: 'u-pm', name: 'Ryan Coleman', email: 'ryan.coleman@ethixweb.local', role: 'project_manager', password: hash('Manager#2026!') }),
       db.insert('users', { id: 'u-employee', name: 'Jordan Brooks', email: 'jordan.brooks@ethixweb.local', role: 'employee', password: hash('Staff#2026!') }),

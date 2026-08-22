@@ -1,12 +1,25 @@
 'use strict';
 
 const SCHEMAS = {
-  users: ['id', 'name', 'email', 'role', 'company', 'password', 'google_id', 'two_factor_enabled', 'two_factor_contact', 'password_expires_at'],
+  users: [
+    'id', 'name', 'email', 'role', 'company', 'password', 'google_id',
+    'two_factor_enabled', 'two_factor_contact', 'password_expires_at',
+    // JSON array of client page keys (see utils/clientPages.js). NULL = no restriction.
+    'allowed_pages',
+  ],
   projects: ['id', 'name', 'type', 'client_id', 'assigned_pm_id', 'status', 'description', 'created_at'],
   tasks: ['id', 'project_id', 'name', 'assignee_id', 'status', 'priority', 'due'],
   tickets: [
     'id', 'subject', 'category', 'client_id', 'assignee_id', 'status', 'description', 'created_at',
     'clickup_task_id', 'clickup_task_url', 'progress', 'stage',
+    // Service level: when the first response is due, and when it actually came.
+    'priority', 'response_due_at', 'first_response_at',
+    // Where the team is talking about this ticket in Slack, so the client can
+    // follow that conversation from their portal without a Slack account.
+    'slack_channel_id', 'slack_thread_ts',
+    // Set once the client has been told the ticket was resolved, so a reopen
+    // and a second close send a second email rather than none.
+    'resolved_notified_at',
   ],
   // One row per note, handover request, or collaboration request on a ticket.
   // Requests are just updates with a kind + target + pending/accepted/declined
@@ -28,8 +41,34 @@ const SCHEMAS = {
     'content_base64', 'mime_type', 'size_bytes', 'uploaded_by', 'created_at',
   ],
   budget_items: ['id', 'client_id', 'label', 'amount', 'color', 'month'],
-  billing: ['id', 'client_id', 'stripe_customer_id', 'stripe_subscription_id', 'plan', 'status', 'updated_at'],
+  billing: [
+    'id', 'client_id', 'stripe_customer_id', 'stripe_subscription_id', 'plan', 'status', 'updated_at',
+    // Cached from Stripe so the portal can answer "what am I on and when does
+    // it renew?" without a round trip on every page load.
+    'currency', 'amount', 'interval', 'current_period_end', 'cancel_at_period_end',
+    'card_brand', 'card_last4', 'latest_invoice_url', 'synced_at',
+  ],
+  // One row per real money movement, mirrored from Stripe. Stripe stays the
+  // source of truth: nothing here is ever created by hand, and every row is
+  // keyed by its Stripe object id so a replayed webhook updates rather than
+  // duplicates.
+  payments: [
+    'id', 'client_id', 'stripe_customer_id', 'stripe_object_id', 'kind',
+    'description', 'amount', 'currency', 'status', 'paid_at', 'period_start', 'period_end',
+    'invoice_url', 'receipt_url', 'invoice_number', 'card_brand', 'card_last4',
+    'failure_message', 'created_at',
+  ],
   otp_codes: ['id', 'user_id', 'code', 'ip_address', 'created_at', 'expires_at', 'consumed', 'attempts'],
+  // One-tap sign-in links emailed to clients. Only the SHA-256 of the secret
+  // half of the link is stored, so a database leak cannot be replayed as a
+  // login. See utils/loginLinks.js for the token format.
+  login_links: ['id', 'user_id', 'token_hash', 'ip_address', 'created_at', 'expires_at', 'consumed'],
+  // Every outbound email the app attempted, including the ones skipped because
+  // no transport is configured. Drives the admin Mail page.
+  email_log: [
+    'id', 'to_emails', 'subject', 'template', 'status', 'transport', 'error',
+    'entity', 'entity_id', 'html', 'created_at',
+  ],
 };
 
 function toSnake(str) { return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`); }

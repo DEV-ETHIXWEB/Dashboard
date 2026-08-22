@@ -62,7 +62,13 @@ see "Local development" below.
   configured, otherwise in the database (4MB limit in that mode).
 - **Budget** - per-client spend tracking by category, with totals and a
   breakdown view.
-- **Billing** - client subscription management via Stripe Checkout.
+- **Billing & payments** - Stripe is the ledger. Invoices, charges, and
+  subscriptions are mirrored into the app's own `payments` and `billing`
+  tables, and every money figure the portal shows is rendered from that
+  mirror -- with a link to Stripe's own receipt beside it. Webhooks keep it
+  current; an admin's **Sync from Stripe** button repairs it if one goes
+  missing. Card details are entered on Stripe's hosted pages and never touch
+  this server. See [Money and Stripe](#money-and-stripe).
 - **Notifications** - per-user, with an unread count and a mark-all-read
   action.
 - **Client Access** - the admin-only console (`/portal/client-access`) that
@@ -72,16 +78,38 @@ see "Local development" below.
   locked out until an admin issues a new one. See
   [Client access & credential lifecycle](#client-access--credential-lifecycle).
 - **Login codes (OTP)** - every non-admin login requires a second step: a
-  6-digit code the client types in. The code isn't emailed or texted - it's
-  generated the instant the password check succeeds and shown, masked, in
-  the admin-only **Login Codes** page (`/portal/otp-monitor`), alongside the
-  requester's name, email, and IP address. An admin reveals it and reads it
-  out to the client over another channel (phone/chat). Admin accounts skip
-  this step entirely - they're the only ones who can see the panel, so
+  6-digit code the client types in. The code is emailed to the account
+  holder the instant the password check succeeds, so signing in needs
+  nobody's help. The admin-only **Login Codes** page
+  (`/portal/otp-monitor`) is the fallback for a workspace with no mail
+  transport configured: it lists the requester's name, email, and IP, and
+  an admin can reveal one code at a time and read it out. Admin accounts
+  skip the step entirely - they're the only ones who can see the panel, so
   gating their own login behind it would lock everyone out. See
   [Login codes (OTP) flow](#login-codes-otp-flow) below.
+- **One-tap sign-in links** - an admin can mint a single-use link for a
+  client from **Client access** and hand it over on WhatsApp, SMS, or
+  email. Opening it signs the client straight in: no password, no code.
+  Links last 15 minutes, work once, and are admin-issued only - there is no
+  self-service "email me a link" button, because a link is a bearer
+  credential. Client accounts only. See
+  [One-tap sign-in links](#one-tap-sign-in-links).
 - **Sign in with Google** - restricted to existing accounts; an admin must
   create the account first.
+- **Live updates** - one Server-Sent Events stream per signed-in tab
+  (`/api/events`). When staff move a ticket, upload a report, or change what
+  a client may open, that client's screen redraws within a second without a
+  refresh. The stream carries a topic and a timestamp and never a record, so
+  the browser always refetches through the same permission-checked endpoint
+  it would have used anyway. See
+  [The live wire](#the-live-wire-admin-to-client-updates).
+- **Client navigation** - clients get four destinations (Home, Work,
+  Requests, Money) plus a More sheet; staff keep the full grouped index.
+  Switching a section off for a client removes its tab and promotes the next
+  one, so the bar is never short and never has a dead tab in it.
+- **Installable on a phone** - a manifest, home-screen shortcuts, and a
+  service worker that caches the app shell but never a byte of `/api/`, so
+  a signed-out phone has nothing private left on disk.
 
 ## Environment variables
 
@@ -99,6 +127,89 @@ turns on automatically once you add the variable and redeploy.
 | `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID` | Report storage in Google Drive |
 
 See `.env.example` for the full list with descriptions.
+
+## Email, client progress, and multiple admins
+
+### Email
+
+Every notification is a real message, rendered by `utils/emailMessages.js` on
+top of the layout in `utils/emailTemplates.js`: EthixWeb red (`#c20000`, the
+same `--primary` the app uses), the emblem from `public/emblem-mark.png`, one
+task card, one call to action. The layout follows the shape of a ClickUp
+notification because that shape works; the palette and mark are EthixWeb's.
+
+Turn delivery on with any ONE of:
+
+| Transport | Set | Notes |
+| --- | --- | --- |
+| SMTP | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | Any mailbox you own -- Gmail/Workspace, Zoho, Outlook 365, SES, cPanel. Gmail and Outlook need an **app password**, not the account password. |
+| Resend | `RESEND_API_KEY` | HTTPS API, verify your domain first. |
+| Webhook | `MAIL_WEBHOOK_URL` | Receives `POST {from, to, subject, text, html}`. |
+
+Also set `MAIL_FROM` (an address the mailbox may send as) and `APP_BASE_URL`
+(the public URL of this dashboard -- the buttons and the emblem in every email
+point at it).
+
+With none of them set nothing is delivered, but every message is still rendered
+and recorded, so the templates can be reviewed before any credential exists.
+
+**Admin → Mail** (`/portal/mail`) is the control surface: which transport is
+live, **Verify connection** (opens a real SMTP session and authenticates),
+**Send test**, a preview of all twelve templates rendered by the production
+code, and a log of every message the app attempted with the exact HTML that
+went out.
+
+Messages sent, and what triggers each:
+
+| Template | Goes to | When |
+| --- | --- | --- |
+| New ticket | Every admin + the owner | A ticket is raised |
+| Ticket receipt | The client | A ticket is raised |
+| Ticket assigned | The new owner | Assignment changes |
+| Status changed | The client | Status moves |
+| New comment | The other side | A note is posted |
+| Handover request | The teammate asked | Handover or collaboration request |
+| Response due | Owner + admins | First-response deadline approaching or missed |
+| Sign-in code | The person signing in | Any non-admin login |
+| Login issued | The new user | An admin creates the account or resets the password |
+| Admin roster change | Every admin | Someone gains or loses admin |
+| Progress summary | The client | Sent on demand from the progress board |
+
+### Client progress (`/portal/progress`)
+
+Clients follow their work without a ClickUp seat or a Slack account. The server
+reads both on their behalf and returns only what belongs to them: their tickets
+with the live task-board status, the team's notes, the board comments, and the
+Slack thread the ticket opened. Replies from this page go back out to the
+ticket, the ClickUp task, and the Slack thread in one action.
+
+`CLIENT_SLACK_THREAD` controls how much of the thread a client sees:
+
+* `summary` (default) -- only the updates this dashboard posted.
+* `full` -- the whole thread, including the team's own replies.
+
+Admins switch the section on per client under **Client Access**, like any other
+client page.
+
+### Multiple administrators
+
+The workspace has a set of administrators, not an owner. Every admin has the
+same powers, alerts fan out to all of them, and a roster change emails everyone
+who holds the role. The one rule the server enforces is that the last
+administrator cannot be deleted or demoted -- that would lock the workspace out
+of user management permanently.
+
+### Tests
+
+```bash
+npm test
+```
+
+Runs both suites against an in-memory Postgres: `scripts/test-app.js` drives the
+real HTTP API (sign-in, ticket intake, client progress, page permissions, the
+last-admin guard), and `scripts/test-mail.js` stands up an actual SMTP server,
+sends through the normal application path, and asserts on the bytes that
+arrived.
 
 ## Client access & credential lifecycle
 
@@ -155,10 +266,8 @@ Client enters ID + password ──► POST /api/auth/login
         │                        ├─ wrong password ─────► 401
         │                        └─ expired ────────────► 403 "Access expired"
         ▼
-  6-digit OTP generated, tied to that user's id (never sent to them)
-        │
-        ▼
-Admin reads it from Login Codes ──► relays by phone/chat
+  6-digit OTP generated and emailed to the account holder
+        │            (no mail transport? an admin reads it out of Login Codes)
         │
         ▼
 Client enters code ──► POST /api/auth/verify-otp ──► session promoted, signed in
@@ -216,6 +325,7 @@ carry the same names and the same (camelCased) fields.
 | `users` | Accounts: name, email, role, company, password, `password_expires_at` | `password` is a **bcrypt hash**, never plaintext. Stripped from every API response by `safeUser()`. |
 | `sessions` | Session id, user id, CSRF token, expiry, `pending` flag | The session id is the only thing in the cookie. `pending` marks a login that passed the password step but not yet OTP. |
 | `otp_codes` | 6-digit login codes, user id, IP, expiry, attempt count | Codes are excluded from the list endpoint and fetched one at a time via an audited reveal call. Expired rows are pruned automatically. |
+| `login_links` | One-tap sign-in links: user id, SHA-256 of the link secret, IP, 15-minute expiry, single-use flag | Client accounts only. The secret itself is never stored, so a database leak cannot be replayed as a login. |
 | `activity_log` | Who did what, when | Every credential issue, password regeneration, and OTP reveal lands here. |
 | `projects`, `tasks`, `tickets`, `domains`, `reports`, `budget_items`, `billing`, `notifications` | Core CRM records | Scoped per role at the route layer. |
 
@@ -280,6 +390,11 @@ when you're on Postgres: every other feature keeps working.
 | CORS | Off by default. Both supported setups are same-origin (Express serves the SPA; Vite proxies `/api` server-side), so no cross-origin permission is granted at all. Opt in per-origin with `CORS_ORIGINS`. |
 | Transport | TLS enforced for any non-localhost database host; HSTS, `nosniff`, and `Referrer-Policy: no-referrer` via helmet. |
 | Availability | Pool capped per instance, 10s connection timeout, and an idle-client error handler — without which a routine dropped connection from a hosted provider crashes the Node process. |
+| Live stream | `/api/events` is behind `requireAuth`. Events carry a topic only; delivery is filtered per stream by role and by the client's `allowedPages`, and per-account topics (`notifications`, `session`) reach only the named account. Capped at 4 streams per user. |
+| Offline cache | The service worker refuses to cache any `/api/` response, and signing out wipes the caches it does hold. |
+| Card data | Never touches this server. Checkout and card changes happen on Stripe-hosted pages; the app stores only the brand and last four Stripe reports back. |
+| Webhook trust | `stripe.webhooks.constructEvent` verifies the signature before a single field of the body is read. An unsigned or mis-signed request is refused with a 400 and nothing is written. |
+| Payment replay | Every mirrored payment is keyed by its Stripe object id, so a replayed webhook updates one row instead of creating a second — and receipt emails only go out on first insert. |
 
 ## Login codes (OTP) flow
 
@@ -289,10 +404,14 @@ when you're on Postgres: every other feature keeps working.
    into `otp_codes`: a random 6-digit code, the user's id, `req.ip`, and a
    5-minute expiry. The response is `{ requiresOtp: true }` - the code
    itself is never sent to the client that's logging in.
-3. An admin opens **Login Codes** (`/portal/otp-monitor`,
-   `GET /api/auth/otp-logs`, admin-only) and finds the row by name/email/IP,
-   clicks the eye icon to reveal the code, and relays it to the client
-   through another channel (phone call, chat, in person).
+3. The code is emailed to the account holder straight away, and the
+   response carries `codeEmailed` plus a masked `codeDestination` so the
+   login screen can say which inbox to look in. If no mail transport is
+   configured the send is skipped, `codeEmailed` is false, and the login
+   screen falls back to telling the client to ask an admin. An admin then
+   opens **Login Codes** (`/portal/otp-monitor`, `GET /api/auth/otp-logs`,
+   admin-only), finds the row by name/email/IP, clicks the eye icon to
+   reveal the code, and relays it.
 4. The client types the code into the 6-box input and it's submitted to
    `POST /api/auth/verify-otp`. The server checks it against the newest
    non-consumed `otp_codes` row for that user, enforces a 5-attempt cap and
@@ -302,8 +421,44 @@ when you're on Postgres: every other feature keeps working.
    `routes/auth.js`) - otherwise no admin could ever reach the panel needed
    to unlock their own login.
 
-This intentionally has no automatic delivery channel (no SMS/email
-provider integrated) - the admin is the delivery mechanism, by design.
+Delivery is by email only; there is no SMS provider wired up. The server
+warns at boot when no mail transport is configured, because that is the one
+state where a client cannot sign in without an admin on the phone.
+
+## One-tap sign-in links
+
+For clients, a 14-character password plus a 6-digit code is two secrets to
+type on a phone keyboard. A sign-in link is neither.
+
+1. An admin opens **Client access** (`/portal/client-access`) and clicks
+   **Sign-in link** on a client's row → `POST /api/auth/login-link/:userId`
+   (admin-only, CSRF-checked). There is deliberately no public endpoint: a
+   link signs in whoever opens it, so an admin decides who gets one.
+2. Only **client** accounts are eligible. Staff and admin accounts can issue
+   credentials and change other people's access, which a pasteable URL is
+   not a strong enough gate for. An expired client is refused with a message
+   naming the fix.
+3. Any previous unused link for that client is deleted first, so a stale one
+   handed over earlier stops working. The new row goes into `login_links`;
+   the URL carries `<row id>.<32 random bytes>` and only the SHA-256 of the
+   secret half is stored, so the database holds nothing replayable.
+4. The response is a **path**, not an absolute URL, and the portal prefixes
+   it with `window.location.origin`. That is what makes the link work on
+   whatever address the portal is actually served from - in development the
+   Vite origin (`http://localhost:5173`), which proxies `/api` to the
+   backend. The backend only ever sees the proxy's own host
+   (`127.0.0.1:4000`), so a URL built server-side would point at the wrong
+   place. `url` in the response is the `APP_BASE_URL` version, for callers
+   that are not a browser.
+5. Opening the link hits `GET /api/auth/magic-link/verify`, which checks the
+   15-minute expiry, compares the secret in constant time, claims the row
+   with an `UPDATE ... WHERE consumed = FALSE` (so two clicks racing each
+   other cannot both win), mints a full session, and redirects to `/portal`.
+   Failures redirect to `/login?linkError=used|expired|invalid|access_expired`
+   and the login page explains each one.
+
+Client sessions last 30 days rather than the 7 days staff get, because for
+a client every expiry is a sign-in round trip they did not ask for.
 
 ### Connecting a real Postgres (Supabase)
 
@@ -404,6 +559,81 @@ Settings (see Known limitations).
 3. Create a Drive folder for reports, share it with the service account's email (found in the JSON) as Editor.
 4. Copy the folder ID from its URL → `GOOGLE_DRIVE_FOLDER_ID`.
 
+## The live wire (admin to client updates)
+
+A client watching their dashboard should not have to refresh to find out that
+their ticket moved. One stream per tab handles that.
+
+```
+admin writes  ->  middleware/live.js  ->  utils/liveBus.js  ->  /api/events  ->  browser refetches
+```
+
+**What travels.** A frame is `{"topic":"budget","at":1723...}` and nothing
+else. No amount, no name, no id. The browser reacts by invalidating the
+matching React Query keys, which refetch through the ordinary endpoints --
+`requireAuth`, `requireRole`, and `requirePage` all still apply. That is the
+whole security argument: the stream cannot leak what it never carries, and it
+cannot bypass a check it never performs.
+
+**Who hears it.** `utils/liveBus.js` filters every event per open stream:
+
+- Staff hear everything their role covers, because their screens are the
+  operations view of the whole workspace.
+- A client hears a section-wide topic only if the admin left that section
+  switched on for them (`allowedPages`), and only if the change is theirs --
+  routes set `res.locals.liveAudience = [clientId]` where they know it.
+- `notifications` and `session` are about one person and reach only the
+  account named in the event.
+
+**When it is not there.** Serverless hosts and buffering proxies cannot hold a
+stream open. The browser notices, gives up after four failed attempts, and
+falls back to polling every 30 seconds plus a refetch whenever the tab regains
+focus or the device comes back online. Nothing on screen depends on the stream
+existing -- it only makes updates fast.
+
+**Wiring a new route.** Nothing to do, as long as it lives under a prefix in
+`PATH_TOPICS` (`middleware/live.js`). Every successful non-GET response
+publishes the topic for its prefix. Set `res.locals.liveAudience` when the
+handler knows whose data it just touched.
+
+## Money and Stripe
+
+Every amount a client reads -- the dashboard headline, "Where your money went",
+the payment history, the plan card -- comes from a Stripe object. Nothing is
+typed in by hand, and nothing is reconciled by hand.
+
+```
+Stripe  ->  webhook / sync  ->  utils/stripeSync.js  ->  payments + billing  ->  the portal
+```
+
+**Two ways in, and they agree.** `POST /api/billing/webhook` handles the moment
+something happens; `POST /api/billing/sync` (admin only) pulls a client's whole
+history over the API. Both land in the same upsert, keyed by the Stripe object
+id, so a webhook replayed three times updates one row three times rather than
+billing anyone three times over. If webhooks are not set up at all, the sync
+button alone keeps the portal correct.
+
+**What is stored.** One `payments` row per invoice or standalone charge: amount
+in major units, currency, status, the period it covers, the Stripe receipt and
+invoice URLs, and the card brand and last four. The `billing` row caches the
+subscription's price, interval, renewal date, and default card so the plan card
+renders without a round trip.
+
+**What is never stored.** Card numbers, and anything else that would make this
+server part of the cardholder data environment. Checkout and the "Manage
+payment method" button both hand off to Stripe's hosted pages.
+
+**Emails.** A first-time `invoice.paid` sends the client a receipt; an
+`invoice.payment_failed` sends the one email in the system that asks for
+something. Both are idempotent on the mirror, so a retried webhook does not
+re-thank or re-nag anyone. Preview them on the admin **Mail** page under
+*Payment received* and *Payment failed*.
+
+**Two different questions.** `budget_items` is what the team tracked spending on
+a client's behalf -- ad spend, project costs. `payments` is what the payment
+processor actually took from them. The portal shows both, labelled, and never
+adds them together.
+
 ## Deploying to Vercel
 
 1. Create a Postgres database: Vercel dashboard → project → Storage → Create Database → Postgres. This sets `DATABASE_URL` automatically.
@@ -440,7 +670,8 @@ listed here.
 | `domains` | `id, client_id, domain_name, platform, hosting_provider, hosting_region, registrar, ssl_status, expires_at, auto_renew, dns_status, notes` | |
 | `reports` | `id, client_id, name, category, storage_type, drive_file_id, drive_link, content_base64, mime_type, size_bytes, uploaded_by, created_at` | `storage_type` is `drive` or `database`; only one of `drive_file_id`/`content_base64` is populated depending on which. |
 | `budget_items` | `id, client_id, label, amount, color, month` | |
-| `billing` | `id, client_id, stripe_customer_id, stripe_subscription_id, plan, status, updated_at` | One row per client (`client_id` is `UNIQUE`). |
+| `billing` | `id, client_id, stripe_customer_id, stripe_subscription_id, plan, status, updated_at, currency, amount, interval, current_period_end, cancel_at_period_end, card_brand, card_last4, latest_invoice_url, synced_at` | One row per client (`client_id` is `UNIQUE`). Everything after `updated_at` is cached from Stripe so the plan card renders without a round trip. |
+| `payments` | `id, client_id, stripe_customer_id, stripe_object_id, kind, description, amount, currency, status, paid_at, period_start, period_end, invoice_url, receipt_url, invoice_number, card_brand, card_last4, failure_message, created_at` | One row per Stripe invoice or standalone charge, never written by hand. `stripe_object_id` is `UNIQUE`, which is what makes a replayed webhook idempotent. `amount` is in major units. See [Money and Stripe](#money-and-stripe). |
 
 ### The `db` data-access layer
 

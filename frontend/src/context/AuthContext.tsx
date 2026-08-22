@@ -8,6 +8,8 @@ interface AuthContextValue {
   config: PublicConfig | null;
   isLoading: boolean;
   setSession: (user: User, csrfToken?: string) => void;
+  /** Re-read the account after an admin changed its role or section access. */
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -38,6 +40,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
+  async function refreshUser() {
+    try {
+      const res = await api<{ user: User; csrfToken: string }>("GET", "/auth/me");
+      setCsrfToken(res.csrfToken);
+      setUser(res.user);
+    } catch (err) {
+      // A 401 here means the session went away; the route guards handle it.
+      if (err instanceof ApiError && err.status === 401) {
+        setCsrfToken(null);
+        setUser(null);
+        queryClient.clear();
+      }
+    }
+  }
+
   function setSession(nextUser: User, csrfToken?: string) {
     if (csrfToken) setCsrfToken(csrfToken);
     setUser(nextUser);
@@ -54,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, config: config ?? null, isLoading: !ready, setSession, logout }}>
+    <AuthContext.Provider value={{ user, config: config ?? null, isLoading: !ready, setSession, refreshUser, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,0 +1,39 @@
+{
+  "name": "EthixWeb Dashboard",
+  "short_name": "EthixWeb",
+  "description": "Project status, requests, and payments for your account.",
+  "id": "/portal",
+  "start_url": "/portal",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#c20000",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/emblem-mark.png", "sizes": "397x406", "type": "image/png", "purpose": "any" },
+    { "src": "/emblem-mark.png", "sizes": "397x406", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Raise a request",
+      "short_name": "Request",
+      "description": "Ask the team for something",
+      "url": "/portal/tickets"
+    },
+    {
+      "name": "Work in progress",
+      "short_name": "Work",
+      "description": "What the team is doing right now",
+      "url": "/portal/progress"
+    },
+    {
+      "name": "Payments",
+      "short_name": "Money",
+      "description": "Plan, invoices, and payment status",
+      "url": "/portal/billing"
+    }
+  ]
+}

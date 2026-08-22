@@ -1,8 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiUpload } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import type { UserRecord, Project, Task, Ticket, Domain, Report, BudgetItem, Billing, Notification } from "@/lib/entities";
-import type { OtpLogEntry } from "@/lib/types";
+import type { UserRecord, Project, Task, Ticket, Domain, Report, BudgetItem, Billing, Notification, PaymentSummary } from "@/lib/entities";
+import { canSeePage } from "@/lib/permissions";
+import type { ClientPageKey, OtpLogEntry } from "@/lib/types";
+
+/**
+ * A client only fetches the sections their admin left switched on. The API
+ * refuses the rest anyway; this keeps the UI from firing doomed requests and
+ * showing error states for pages the user is not meant to have.
+ */
+function useAllowedPage(page: ClientPageKey) {
+  const { user } = useAuth();
+  return Boolean(user) && canSeePage(user, page);
+}
 
 export function useUsers() {
   return useQuery({ queryKey: ["users"], queryFn: () => api<{ users: UserRecord[] }>("GET", "/users").then((d) => d.users) });
@@ -23,7 +34,12 @@ export function useRevealOtpCode() {
 }
 
 export function useProjects() {
-  return useQuery({ queryKey: ["projects"], queryFn: () => api<{ projects: Project[] }>("GET", "/projects").then((d) => d.projects) });
+  const allowed = useAllowedPage("projects");
+  return useQuery({
+    queryKey: ["projects"],
+    queryFn: () => api<{ projects: Project[] }>("GET", "/projects").then((d) => d.projects),
+    enabled: allowed,
+  });
 }
 
 export function useCreateProject() {
@@ -86,8 +102,22 @@ export function useDeleteTask() {
 export function useCreateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; email: string; role: string; company: string | null; password?: string; passwordExpiresAt?: number | null }) =>
-      api<{ user: UserRecord; temporaryPassword: string }>("POST", "/users", body),
+    mutationFn: (body: {
+      name: string;
+      email: string;
+      role: string;
+      company: string | null;
+      password?: string;
+      passwordExpiresAt?: number | null;
+      allowedPages?: string[] | null;
+      /** Defaults to true on the server: mail the credentials to the new user. */
+      sendEmail?: boolean;
+    }) =>
+      api<{ user: UserRecord; temporaryPassword: string; emailed: boolean; emailConfigured: boolean }>(
+        "POST",
+        "/users",
+        body,
+      ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
   });
 }
@@ -96,7 +126,11 @@ export function useUpdateUser() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) =>
-      api<{ user: UserRecord; temporaryPassword?: string }>("PUT", `/users/${id}`, patch),
+      api<{ user: UserRecord; temporaryPassword?: string; emailed?: boolean; emailConfigured?: boolean }>(
+        "PUT",
+        `/users/${id}`,
+        patch,
+      ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
   });
 }
@@ -110,13 +144,18 @@ export function useDeleteUser() {
 }
 
 export function useTickets() {
-  return useQuery({ queryKey: ["tickets"], queryFn: () => api<{ tickets: Ticket[] }>("GET", "/tickets").then((d) => d.tickets) });
+  const allowed = useAllowedPage("tickets");
+  return useQuery({
+    queryKey: ["tickets"],
+    queryFn: () => api<{ tickets: Ticket[] }>("GET", "/tickets").then((d) => d.tickets),
+    enabled: allowed,
+  });
 }
 
 export function useCreateTicket() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { subject: string; category: string; description: string; clientId?: string }) =>
+    mutationFn: (body: { subject: string; category: string; description: string; priority?: string; clientId?: string }) =>
       api<{ ticket: Ticket }>("POST", "/tickets", body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tickets"] }),
   });
@@ -131,7 +170,12 @@ export function useUpdateTicket() {
 }
 
 export function useDomains() {
-  return useQuery({ queryKey: ["domains"], queryFn: () => api<{ domains: Domain[] }>("GET", "/domains").then((d) => d.domains) });
+  const allowed = useAllowedPage("domains");
+  return useQuery({
+    queryKey: ["domains"],
+    queryFn: () => api<{ domains: Domain[] }>("GET", "/domains").then((d) => d.domains),
+    enabled: allowed,
+  });
 }
 
 export function useCreateDomain() {
@@ -170,7 +214,12 @@ export function useDeleteDomain() {
 }
 
 export function useReports() {
-  return useQuery({ queryKey: ["reports"], queryFn: () => api<{ reports: Report[] }>("GET", "/reports").then((d) => d.reports) });
+  const allowed = useAllowedPage("reports");
+  return useQuery({
+    queryKey: ["reports"],
+    queryFn: () => api<{ reports: Report[] }>("GET", "/reports").then((d) => d.reports),
+    enabled: allowed,
+  });
 }
 
 export function useUploadReport() {
@@ -190,16 +239,61 @@ export function useDeleteReport() {
 }
 
 export function useBudget(clientId?: string) {
+  const allowed = useAllowedPage("budget");
   return useQuery({
     queryKey: ["budget", clientId ?? "all"],
     queryFn: () => api<{ items: BudgetItem[] }>("GET", clientId ? `/budget?clientId=${clientId}` : "/budget").then((d) => d.items),
+    enabled: allowed,
   });
 }
 
 export function useBillingStatus() {
+  const allowed = useAllowedPage("billing");
   return useQuery({
     queryKey: ["billing"],
     queryFn: () => api<{ enabled: boolean; billing: Billing | Billing[] }>("GET", "/billing/status"),
+    enabled: allowed,
+  });
+}
+
+/**
+ * The real payment history, mirrored from Stripe by the server.
+ *
+ * Clients get their own; staff get the whole workspace, or one account when a
+ * `clientId` is named. The figures are Stripe's, so nothing here is ever
+ * reconciled by hand.
+ */
+export function usePayments(clientId?: string) {
+  const allowed = useAllowedPage("billing");
+  return useQuery({
+    queryKey: ["payments", clientId ?? "all"],
+    queryFn: () =>
+      api<PaymentSummary>("GET", clientId ? `/billing/payments?clientId=${encodeURIComponent(clientId)}` : "/billing/payments"),
+    enabled: allowed,
+  });
+}
+
+/** Admin-only repair: pull everything Stripe has and mirror it locally. */
+export function useSyncStripe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (clientId?: string) =>
+      api<{ ok: boolean; synced: { name: string; payments?: number; error?: string }[] }>(
+        "POST",
+        "/billing/sync",
+        clientId ? { clientId } : {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["payments"] });
+      qc.invalidateQueries({ queryKey: ["billing"] });
+    },
+  });
+}
+
+/** Opens Stripe's own hosted page, where card details are entered. */
+export function useBillingPortal() {
+  return useMutation({
+    mutationFn: () => api<{ url: string }>("POST", "/billing/portal"),
   });
 }
 

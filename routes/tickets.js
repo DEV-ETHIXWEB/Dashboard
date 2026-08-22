@@ -5,10 +5,16 @@ const router = express.Router();
 
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
+const { requirePage } = require('../utils/clientPages');
 const clickup = require('../utils/clickup');
 const workflow = require('../utils/ticketWorkflow');
+const intake = require('../utils/ticketIntake');
+const mailer = require('../utils/mailer');
+const messages = require('../utils/emailMessages');
+const slaWatch = require('../utils/slaWatch');
 
 router.use(requireAuth);
+router.use(requirePage('tickets'));
 
 // Visibility now also covers collaborators, so `visibleTo` is async.
 const visibleTo = (user, ticket) => workflow.canView(user, ticket);
@@ -45,24 +51,6 @@ function handleWorkflow(fn) {
   };
 }
 
-/**
- * Push a new ticket into ClickUp so the team works one queue instead of two.
- * Deliberately non-fatal: if ClickUp is unreachable or misconfigured, the
- * ticket still exists here and we just log the failure.
- */
-async function mirrorToClickUp(ticket) {
-  if (!clickup.isTicketMirroringEnabled()) return null;
-  try {
-    const client = ticket.clientId ? await db.find('users', ticket.clientId) : null;
-    const task = await clickup.mirrorTicket(ticket, { clientName: client?.name });
-    if (!task) return null;
-    return db.update('tickets', ticket.id, { clickupTaskId: task.id, clickupTaskUrl: task.url });
-  } catch (err) {
-    console.error(`Could not mirror ticket ${ticket.id} to ClickUp:`, err.message);
-    return null;
-  }
-}
-
 /** Keep the mirrored ClickUp task in step when a ticket is closed or reopened. */
 async function syncStatusToClickUp(ticket, status) {
   if (!ticket.clickupTaskId || !clickup.isEnabled()) return;
@@ -75,8 +63,68 @@ async function syncStatusToClickUp(ticket, status) {
   }
 }
 
+/**
+ * Tell the client their ticket moved, by email and in their Slack thread.
+ * Never throws: the status change is already saved.
+ */
+async function announceStatusChange(ticket, fromStatus, toStatus, actor) {
+  try {
+    const [client, assignee] = await Promise.all([
+      ticket.clientId ? db.find('users', ticket.clientId) : null,
+      ticket.assigneeId ? db.find('users', ticket.assigneeId) : null,
+    ]);
+
+    await intake.echoActivity(ticket, `🔁 *${actor.name}* moved ${ticket.id} from ${fromStatus} to *${toStatus}*`);
+
+    if (!client?.email) return;
+    await mailer.sendTemplate({
+      to: client.email,
+      message: messages.ticketStatusChanged({
+        ticket, fromStatus, toStatus, clientName: client.name, assigneeName: assignee?.name || null,
+      }),
+      template: 'ticket_status',
+      entity: 'ticket',
+      entityId: ticket.id,
+    });
+    if (['Resolved', 'Closed'].includes(toStatus)) {
+      await db.update('tickets', ticket.id, { resolvedNotifiedAt: Date.now() });
+    }
+  } catch (err) {
+    console.error(`Could not announce the status change on ticket ${ticket.id}:`, err.message);
+  }
+}
+
+/** Tell the new owner, by email, that a ticket is now theirs. */
+async function announceAssignment(ticket, assigneeId, actor) {
+  try {
+    const [assignee, client] = await Promise.all([
+      db.find('users', assigneeId),
+      ticket.clientId ? db.find('users', ticket.clientId) : null,
+    ]);
+    if (!assignee?.email) return;
+
+    await intake.echoActivity(ticket, `👤 *${actor.name}* assigned ${ticket.id} to *${assignee.name}*`);
+    await mailer.sendTemplate({
+      to: assignee.email,
+      message: messages.ticketAssigned({
+        ticket, assigneeName: assignee.name, clientName: client?.name || null, actorName: actor.name,
+      }),
+      template: 'ticket_assigned',
+      entity: 'ticket',
+      entityId: ticket.id,
+    });
+  } catch (err) {
+    console.error(`Could not announce the assignment on ticket ${ticket.id}:`, err.message);
+  }
+}
+
 router.get('/', async (req, res, next) => {
   try {
+    // Deadline alerts ride along on normal traffic rather than a scheduler,
+    // and are throttled inside maybeSweep. Deliberately not awaited: nobody
+    // should wait on outbound email to see their ticket list.
+    if (['admin', 'project_manager'].includes(req.user.role)) void slaWatch.maybeSweep();
+
     const all = await db.all('tickets');
     const visible = [];
     for (const t of all) if (await visibleTo(req.user, t)) visible.push(t);
@@ -112,19 +160,22 @@ router.post('/', requireCSRF, async (req, res, next) => {
       .filter((n) => !isNaN(n));
     const nextNumber = (numbers.length ? Math.max(...numbers) : 1000) + 1;
 
+    const priority = intake.normalizePriority(req.body.priority);
     const ticket = await db.insert('tickets', {
       id: `ticket-${nextNumber}`,
       subject, category: category || 'General', clientId, assigneeId: null,
       status: 'Open', description: description || '', createdAt: new Date().toISOString(),
+      priority, responseDueAt: intake.responseDueAt(priority), firstResponseAt: null,
     });
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [clientId];
     await audit(req.user.id, 'create', 'ticket', ticket.id);
 
-    const staff = await db.filter('users', (u) => ['admin', 'project_manager'].includes(u.role));
-    for (const u of staff) await notify(u.id, `New ticket: "${subject}"`, 'ticket');
+    // Auto-assign, start it in ClickUp, then alert the team in-app, on Slack,
+    // and over email -- all handled in one place.
+    const routed = await intake.onTicketCreated(ticket);
 
-    const mirrored = await mirrorToClickUp(ticket);
-
-    res.status(201).json({ ticket: mirrored || ticket });
+    res.status(201).json({ ticket: routed });
   } catch (err) {
     next(err);
   }
@@ -145,15 +196,29 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
     delete patch.clickupTaskId;
     delete patch.clickupTaskUrl;
 
+    if (patch.priority) {
+      patch.priority = intake.normalizePriority(patch.priority);
+      // Re-basing the clock on the original open time keeps the SLA honest.
+      patch.responseDueAt = intake.responseDueAt(patch.priority, new Date(ticket.createdAt).getTime());
+    }
+    delete patch.firstResponseAt;
+
     const updated = await db.update('tickets', req.params.id, patch);
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [ticket.clientId];
     await audit(req.user.id, 'update', 'ticket', req.params.id);
+
+    // Any staff touch counts as the first response.
+    if (isStaff) await intake.markFirstResponse(updated, req.user);
 
     if (patch.status && patch.status !== ticket.status) {
       await notify(ticket.clientId, `Your ticket "${ticket.subject}" is now ${patch.status}`, 'ticket');
       await syncStatusToClickUp(ticket, patch.status);
+      await announceStatusChange(updated, ticket.status, patch.status, req.user);
     }
     if (patch.assigneeId && patch.assigneeId !== ticket.assigneeId) {
       await notify(patch.assigneeId, `You were assigned ticket: "${ticket.subject}"`, 'ticket');
+      await announceAssignment(updated, patch.assigneeId, req.user);
     }
     res.json({ ticket: updated });
   } catch (err) {
@@ -198,6 +263,7 @@ router.post('/:id/updates', requireCSRF, loadTicket, handleWorkflow(async (req, 
     return res.status(403).json({ error: 'Not allowed to post updates on this ticket' });
   }
   const update = await workflow.addProgressUpdate(req.user, req.ticket, { body, progress, stage });
+  await intake.markFirstResponse(req.ticket, req.user);
   res.status(201).json({ update });
 }));
 

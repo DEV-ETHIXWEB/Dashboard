@@ -16,8 +16,12 @@ import {
   Clock,
   AlertTriangle,
   Infinity as InfinityIcon,
+  LayoutGrid,
+  Check,
+  Link2,
 } from "lucide-react";
 import { useUsers, useCreateUser, useUpdateUser, useDeleteUser } from "@/hooks/useData";
+import { api, ApiError } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
@@ -36,12 +40,92 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { SummaryCard } from "@/components/SummaryCard";
 import { initials, toLocalISO, parseLocalISO } from "@/lib/format";
+import { CLIENT_PAGES, CLIENT_PAGE_KEYS, describeAccess } from "@/lib/permissions";
+import { cn } from "@/lib/utils";
 import type { UserRecord } from "@/lib/entities";
+import type { ClientPageKey, LoginLinkResponse } from "@/lib/types";
 
 const DAY_MS = 86_400_000;
 
-type Credential = { name: string; email: string; password: string };
+type Credential = { name: string; email: string; password: string; emailed: boolean };
+type SignInLink = { name: string; email: string; url: string; expiresAt: number };
+
+/**
+ * Tick list of the sections a client login may open. Ticking every box sends
+ * `null` -- "no restriction" -- so the account keeps any section added later.
+ */
+function PageToggles({
+  selected,
+  onChange,
+  className,
+}: {
+  selected: ClientPageKey[];
+  onChange: (next: ClientPageKey[]) => void;
+  className?: string;
+}) {
+  const allOn = selected.length === CLIENT_PAGE_KEYS.length;
+
+  return (
+    <div className={`space-y-2 rounded-xl border border-border/60 bg-muted/20 p-3 ${className ?? ""}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <LayoutGrid className="size-3.5 shrink-0 text-primary" />
+          <span className="text-xs font-medium">What this client can see</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => onChange(allOn ? [] : [...CLIENT_PAGE_KEYS])}
+          className="text-[11px] font-medium text-primary hover:underline"
+        >
+          {allOn ? "Clear all" : "Select all"}
+        </button>
+      </div>
+
+      <div className="grid gap-1.5 sm:grid-cols-2">
+        {CLIENT_PAGES.map((page) => {
+          const on = selected.includes(page.key);
+          return (
+            <button
+              key={page.key}
+              type="button"
+              aria-pressed={on}
+              onClick={() =>
+                onChange(on ? selected.filter((k) => k !== page.key) : [...selected, page.key])
+              }
+              className={`flex items-start gap-2 rounded-lg border p-2 text-left transition-colors ${
+                on
+                  ? "border-primary/40 bg-primary/10"
+                  : "border-border/60 bg-background/40 hover:border-border"
+              }`}
+            >
+              <span
+                className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border ${
+                  on ? "border-primary bg-primary text-primary-foreground" : "border-border/70"
+                }`}
+              >
+                {on && <Check className="size-3" />}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-xs font-medium text-foreground">{page.label}</span>
+                <span className="block text-[11px] leading-tight text-muted-foreground">
+                  {page.description}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {selected.length === 0 && (
+        <p className="text-[11px] leading-relaxed text-amber-500">
+          Nothing selected - they will sign in and only see their dashboard.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function toDateInput(ts?: number | null) {
   return ts ? toLocalISO(new Date(ts)) : "";
@@ -93,11 +177,16 @@ export default function ClientAccess() {
   const [company, setCompany] = useState("");
   const [noExpiry, setNoExpiry] = useState(false);
   const [expiresAt, setExpiresAt] = useState("");
+  const [pages, setPages] = useState<ClientPageKey[]>([...CLIENT_PAGE_KEYS]);
 
   const [expiryTarget, setExpiryTarget] = useState<UserRecord | null>(null);
   const [expiryDraft, setExpiryDraft] = useState("");
 
+  const [accessTarget, setAccessTarget] = useState<UserRecord | null>(null);
+  const [accessDraft, setAccessDraft] = useState<ClientPageKey[]>([]);
+
   const [credential, setCredential] = useState<Credential | null>(null);
+  const [signInLink, setSignInLink] = useState<SignInLink | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
@@ -123,6 +212,8 @@ export default function ClientAccess() {
         (u) => u.passwordExpiresAt && u.passwordExpiresAt > now && u.passwordExpiresAt - now <= 7 * DAY_MS,
       ).length,
       perpetual: clients.filter((u) => !u.passwordExpiresAt).length,
+      limited: clients.filter((u) => u.allowedPages != null && u.allowedPages.length < CLIENT_PAGE_KEYS.length)
+        .length,
     };
   }, [clients]);
 
@@ -132,6 +223,7 @@ export default function ClientAccess() {
     setCompany("");
     setNoExpiry(false);
     setExpiresAt(toDateInput(Date.now() + 30 * DAY_MS));
+    setPages([...CLIENT_PAGE_KEYS]);
     setIssueOpen(true);
   }
 
@@ -151,11 +243,13 @@ export default function ClientAccess() {
         role: "client",
         company: company || null,
         passwordExpiresAt: noExpiry ? null : endOfDay(expiresAt),
+        // Everything ticked means "no restriction", so future sections stay visible.
+        allowedPages: pages.length === CLIENT_PAGE_KEYS.length ? null : pages,
       },
       {
         onSuccess: (data) => {
           setIssueOpen(false);
-          setCredential({ name, email, password: data.temporaryPassword });
+          setCredential({ name, email, password: data.temporaryPassword, emailed: Boolean(data.emailed) });
         },
         onError: (err) => toast.error(err instanceof Error ? err.message : "Could not create the client"),
       },
@@ -175,13 +269,45 @@ export default function ClientAccess() {
       {
         onSuccess: (data) => {
           if (data.temporaryPassword) {
-            setCredential({ name: u.name, email: u.email, password: data.temporaryPassword });
+            setCredential({
+              name: u.name,
+              email: u.email,
+              password: data.temporaryPassword,
+              emailed: Boolean(data.emailed),
+            });
           }
         },
         onError: (err) => toast.error(err instanceof Error ? err.message : "Could not regenerate the password"),
         onSettled: () => setBusyId(null),
       },
     );
+  }
+
+  /**
+   * Mint a one-tap sign-in link for this client and show it for handover.
+   *
+   * The absolute URL is built from the origin this portal is being served from,
+   * not from anything the server guesses: in development that is the Vite dev
+   * server on :5173, which proxies /api to the backend, so the link a client
+   * receives points at the same address the admin is looking at.
+   */
+  async function issueSignInLink(u: UserRecord) {
+    setBusyId(u.id);
+    try {
+      const d = await api<LoginLinkResponse>("POST", `/auth/login-link/${u.id}`);
+      const url = `${window.location.origin}${d.path}`;
+      setSignInLink({ name: u.name, email: u.email, url, expiresAt: d.expiresAt });
+      try {
+        await navigator.clipboard.writeText(url);
+        toast.success("Sign-in link copied");
+      } catch {
+        toast.message("Link ready - copy it from the dialog");
+      }
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Could not create a sign-in link");
+    } finally {
+      setBusyId(null);
+    }
   }
 
   function openExpiry(u: UserRecord) {
@@ -200,6 +326,32 @@ export default function ClientAccess() {
           setExpiryTarget(null);
         },
         onError: (err) => toast.error(err instanceof Error ? err.message : "Could not update the expiry"),
+        onSettled: () => setBusyId(null),
+      },
+    );
+  }
+
+  function openAccess(u: UserRecord) {
+    setAccessTarget(u);
+    setAccessDraft(u.allowedPages == null ? [...CLIENT_PAGE_KEYS] : [...u.allowedPages]);
+  }
+
+  function saveAccess() {
+    if (!accessTarget) return;
+    setBusyId(accessTarget.id);
+    updateUser.mutate(
+      {
+        id: accessTarget.id,
+        patch: {
+          allowedPages: accessDraft.length === CLIENT_PAGE_KEYS.length ? null : accessDraft,
+        },
+      },
+      {
+        onSuccess: () => {
+          toast.success("Access updated");
+          setAccessTarget(null);
+        },
+        onError: (err) => toast.error(err instanceof Error ? err.message : "Could not update access"),
         onSettled: () => setBusyId(null),
       },
     );
@@ -227,7 +379,7 @@ export default function ClientAccess() {
             </DialogTrigger>
             <DialogContent
               showCloseButton={false}
-              className="sm:max-w-md p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
+              className="sm:max-w-3xl p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
             >
               <div className="relative p-6 pb-4 border-b border-border/40 bg-gradient-to-br from-primary/10 via-background to-background">
                 <div className="flex items-start justify-between gap-4">
@@ -250,7 +402,9 @@ export default function ClientAccess() {
                 </div>
               </div>
 
-              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* Two columns: who they are on the left, what they get on the right. */}
+              <div className="no-scrollbar grid max-h-[72svh] gap-5 overflow-y-auto overscroll-contain p-6 md:grid-cols-2">
+                <div className="space-y-4">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-medium">Full Name *</Label>
                   <Input
@@ -285,7 +439,7 @@ export default function ClientAccess() {
                 <div className="space-y-2 rounded-xl border border-border/60 bg-muted/20 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5">
-                      <CalendarClock className="size-3.5 text-primary shrink-0" />
+                      <CalendarClock className="size-3.5 shrink-0 text-primary" />
                       <span className="text-xs font-medium">Password expires</span>
                     </div>
                     <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
@@ -313,6 +467,9 @@ export default function ClientAccess() {
                     </>
                   )}
                 </div>
+                </div>
+
+                <PageToggles selected={pages} onChange={setPages} className="md:h-full" />
               </div>
 
               <DialogFooter className="m-0 px-6 py-4 bg-muted/30 border-t border-border/40 flex flex-row items-center justify-end gap-2.5 rounded-b-2xl">
@@ -339,32 +496,22 @@ export default function ClientAccess() {
         }
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { icon: ShieldCheck, value: stats.total, label: "Client Logins", accent: true },
-          { icon: AlertTriangle, value: stats.expired, label: "Expired" },
-          { icon: Clock, value: stats.expiring, label: "Expiring ≤ 7d" },
-          { icon: InfinityIcon, value: stats.perpetual, label: "No Expiry" },
-        ].map((s) => (
-          <div
-            key={s.label}
-            className="p-4 rounded-2xl border border-border/60 bg-card/80 shadow-xs backdrop-blur-xs flex items-center gap-3"
-          >
-            <div
-              className={
-                s.accent
-                  ? "flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary border border-primary/20"
-                  : "flex size-10 items-center justify-center rounded-xl bg-muted/80 text-foreground border border-border/50"
-              }
-            >
-              <s.icon className="size-5" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-foreground tracking-tight">{s.value}</div>
-              <div className="text-xs text-muted-foreground font-medium">{s.label}</div>
-            </div>
-          </div>
-        ))}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <SummaryCard icon={ShieldCheck} value={stats.total} label="Client Logins" tone="primary" />
+        <SummaryCard
+          icon={AlertTriangle}
+          value={stats.expired}
+          label="Expired"
+          tone={stats.expired > 0 ? "danger" : "muted"}
+        />
+        <SummaryCard
+          icon={Clock}
+          value={stats.expiring}
+          label="Expiring ≤ 7d"
+          tone={stats.expiring > 0 ? "warning" : "muted"}
+        />
+        <SummaryCard icon={InfinityIcon} value={stats.perpetual} label="No Expiry" />
+        <SummaryCard icon={LayoutGrid} value={stats.limited} label="Limited Access" />
       </div>
 
       <div className="flex items-center gap-3 p-1.5 bg-card/60 border border-border/60 rounded-xl backdrop-blur-xs">
@@ -452,11 +599,20 @@ export default function ClientAccess() {
                           {new Date(u.passwordExpiresAt).toLocaleDateString()}
                         </span>
                       )}
+                      <span
+                        className="flex items-center gap-1 truncate"
+                        title={describeAccess(u.allowedPages)}
+                      >
+                        <LayoutGrid className="size-3 shrink-0 text-muted-foreground/70" />
+                        {describeAccess(u.allowedPages)}
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                {/* Four buttons do not fit beside a name on a phone: let them
+                    wrap under it rather than widening the page. */}
+                <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
                   <Button
                     variant="outline"
                     size="sm"
@@ -466,6 +622,27 @@ export default function ClientAccess() {
                   >
                     {busy ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
                     New password
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => issueSignInLink(u)}
+                    title="Create a one-tap sign-in link to send this client"
+                    className="h-8 text-xs gap-1.5"
+                  >
+                    {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Link2 className="size-3.5" />}
+                    Sign-in link
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => openAccess(u)}
+                    className="h-8 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <LayoutGrid className="size-3.5" />
+                    Access
                   </Button>
                   <Button
                     variant="ghost"
@@ -495,10 +672,58 @@ export default function ClientAccess() {
         </div>
       )}
 
+      <Dialog open={Boolean(accessTarget)} onOpenChange={(v) => !v && setAccessTarget(null)}>
+        <DialogContent
+          showCloseButton={false}
+          className="sm:max-w-md p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
+        >
+          <div className="relative p-6 pb-4 border-b border-border/40 bg-gradient-to-br from-primary/10 via-background to-background">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary border border-primary/20 shadow-xs">
+                  <LayoutGrid className="size-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg font-semibold tracking-tight text-foreground">
+                    Section access
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                    For {accessTarget?.name}. Takes effect on their next page load.
+                  </DialogDescription>
+                </div>
+              </div>
+              <DialogClose className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors">
+                <X className="size-4" />
+              </DialogClose>
+            </div>
+          </div>
+
+          <div className="p-6">
+            <PageToggles selected={accessDraft} onChange={setAccessDraft} />
+          </div>
+
+          <DialogFooter className="m-0 px-6 py-4 bg-muted/30 border-t border-border/40 flex flex-row items-center justify-end gap-2.5 rounded-b-2xl">
+            <DialogClose render={<Button variant="ghost" className="h-9 text-xs px-3.5 text-muted-foreground hover:text-foreground" />}>
+              Cancel
+            </DialogClose>
+            <Button onClick={saveAccess} disabled={updateUser.isPending} className="h-9 px-4 text-xs font-medium gap-1.5 shadow-xs">
+              {updateUser.isPending ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                "Save access"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={Boolean(expiryTarget)} onOpenChange={(v) => !v && setExpiryTarget(null)}>
         <DialogContent
           showCloseButton={false}
-          className="sm:max-w-sm p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
+          className="sm:max-w-xl p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
         >
           <div className="relative p-6 pb-4 border-b border-border/40 bg-gradient-to-br from-primary/10 via-background to-background">
             <div className="flex items-start justify-between gap-4">
@@ -521,7 +746,7 @@ export default function ClientAccess() {
             </div>
           </div>
 
-          <div className="p-6 space-y-3">
+          <div className="grid items-start gap-5 p-6 md:grid-cols-2">
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">Expires on</Label>
               <DatePicker
@@ -531,7 +756,7 @@ export default function ClientAccess() {
                 placeholder="No expiry - permanent access"
               />
             </div>
-            <p className="text-[11px] text-muted-foreground leading-relaxed">
+            <p className="text-[11px] leading-relaxed text-muted-foreground md:pt-6">
               Leave the date empty to remove the expiry entirely and give them permanent access.
             </p>
           </div>
@@ -550,6 +775,81 @@ export default function ClientAccess() {
                 "Save expiry"
               )}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(signInLink)} onOpenChange={(v) => !v && setSignInLink(null)}>
+        <DialogContent
+          showCloseButton={false}
+          className="sm:max-w-lg p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
+        >
+          <div className="relative p-6 pb-4 border-b border-border/40 bg-gradient-to-br from-primary/10 via-background to-background">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary border border-primary/20 shadow-xs">
+                  <Link2 className="size-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg font-semibold tracking-tight text-foreground">
+                    Sign-in link ready
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                    For {signInLink?.name}. Send it over WhatsApp, SMS, or email.
+                  </DialogDescription>
+                </div>
+              </div>
+              <DialogClose className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors">
+                <X className="size-4" />
+              </DialogClose>
+            </div>
+          </div>
+
+          <div className="space-y-4 p-6">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-muted-foreground">Link</Label>
+              <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-background/50 px-3 py-2.5">
+                <span className="flex-1 break-all font-mono text-xs leading-relaxed text-foreground select-all">
+                  {signInLink?.url}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Copy sign-in link"
+                  onClick={async () => {
+                    if (!signInLink) return;
+                    try {
+                      await navigator.clipboard.writeText(signInLink.url);
+                      toast.success("Sign-in link copied");
+                    } catch {
+                      toast.error("Couldn't copy - select and copy manually");
+                    }
+                  }}
+                >
+                  <Copy className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 text-[11px] leading-relaxed text-warning">
+              <AlertTriangle className="mt-px size-3.5 shrink-0" />
+              <span>
+                Anyone who opens this link is signed in as {signInLink?.name} - it works once, and
+                only until{" "}
+                {signInLink ? new Date(signInLink.expiresAt).toLocaleTimeString() : ""}. Send it
+                straight to them, not to a shared channel.
+              </span>
+            </div>
+
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Creating a link cancels any earlier unused one for this client. Their password keeps
+              working either way.
+            </p>
+          </div>
+
+          <DialogFooter className="m-0 px-6 py-4 bg-muted/30 border-t border-border/40 flex flex-row items-center justify-end gap-2.5 rounded-b-2xl">
+            <DialogClose render={<Button className="h-9 text-xs px-4 font-medium" />}>Done</DialogClose>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -580,10 +880,10 @@ export default function ClientAccess() {
             </div>
           </div>
 
-          <div className="p-6 space-y-4">
+          <div className="grid gap-4 p-6 md:grid-cols-2">
             <div className="space-y-1.5">
               <Label className="text-xs font-medium text-muted-foreground">Login ID</Label>
-              <div className="rounded-lg border border-border/60 bg-background/50 px-3 py-2.5 text-sm text-foreground">
+              <div className="truncate rounded-lg border border-border/60 bg-background/50 px-3 py-2.5 text-sm text-foreground">
                 {credential?.email}
               </div>
             </div>
@@ -614,10 +914,31 @@ export default function ClientAccess() {
               </div>
             </div>
 
-            <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Give this to {credential?.name} over a separate channel (phone or chat). It isn't stored
-              anywhere you can read it again - if it's lost, use “New password” to issue another.
-            </p>
+            <div className="md:col-span-2 space-y-2">
+              <div
+                className={cn(
+                  "flex items-start gap-2 rounded-lg px-3 py-2 text-[11px] leading-relaxed",
+                  credential?.emailed
+                    ? "bg-success/10 text-success"
+                    : "bg-warning/10 text-warning",
+                )}
+              >
+                {credential?.emailed ? (
+                  <Check className="mt-px size-3.5 shrink-0" />
+                ) : (
+                  <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                )}
+                <span>
+                  {credential?.emailed
+                    ? `Emailed to ${credential.email} with sign-in instructions.`
+                    : "Not emailed - no mail transport is configured, so hand this over yourself."}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                It isn't stored anywhere you can read it again - if it's lost, use “New password” to
+                issue another.
+              </p>
+            </div>
           </div>
 
           <DialogFooter className="m-0 px-6 py-4 bg-muted/30 border-t border-border/40 flex flex-row items-center justify-end gap-2.5 rounded-b-2xl">

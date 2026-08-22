@@ -1,77 +1,57 @@
-import { type ReactNode, useState } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
-import {
-  LayoutDashboard, FolderKanban, ListChecks, Ticket, Globe, FileText, PieChart, CreditCard,
-  Settings, Bell, LogOut, Menu, X, Users, Home, LifeBuoy, KeyRound, ShieldCheck,
-  ListTodo, MessageSquare,
-} from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { motion, useReducedMotion } from "framer-motion";
+import { LogOut } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { useLive } from "@/context/LiveContext";
 import { useNotifications } from "@/hooks/useData";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
+import { LiveIndicator } from "@/components/LiveIndicator";
+import { BottomTabs } from "@/components/mobile/BottomTabs";
+import { MoreSheet } from "@/components/mobile/MoreSheet";
+import { PullToRefresh } from "@/components/mobile/PullToRefresh";
+import { TopBar } from "@/components/mobile/TopBar";
+import { InstallCard } from "@/components/mobile/InstallCard";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { initials } from "@/lib/format";
+import { isClientNav, navFor, type NavGroup, type NavItem } from "@/lib/nav";
+import { clearOfflineCaches } from "@/lib/pwa";
 import { cn } from "@/lib/utils";
-import type { Role } from "@/lib/types";
-
-interface NavItem {
-  to: string;
-  label: string;
-  icon: typeof LayoutDashboard;
-  roles?: Role[];
-
-  badge?: number;
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { to: "/portal", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/portal/projects", label: "Projects", icon: FolderKanban, roles: ["admin", "sales", "project_manager", "client"] },
-  { to: "/portal/tasks", label: "Tasks", icon: ListChecks, roles: ["admin", "project_manager", "employee"] },
-  { to: "/portal/tickets", label: "Tickets", icon: Ticket },
-  { to: "/portal/domains", label: "Domains", icon: Globe, roles: ["admin", "sales", "project_manager", "client"] },
-  { to: "/portal/reports", label: "Reports", icon: FileText, roles: ["admin", "sales", "project_manager", "client"] },
-  { to: "/portal/budget", label: "Budget", icon: PieChart, roles: ["admin", "project_manager", "client"] },
-  { to: "/portal/billing", label: "Billing", icon: CreditCard, roles: ["admin", "client"] },
-  { to: "/portal/team", label: "Team", icon: Users, roles: ["admin"] },
-  { to: "/portal/client-access", label: "Client Access", icon: ShieldCheck, roles: ["admin"] },
-  { to: "/portal/otp-monitor", label: "Login Codes", icon: KeyRound, roles: ["admin"] },
-  { to: "/portal/clickup", label: "ClickUp", icon: ListTodo, roles: ["admin"] },
-  { to: "/portal/slack", label: "Slack", icon: MessageSquare, roles: ["admin"] },
-  { to: "/portal/notifications", label: "Notifications", icon: Bell },
-  { to: "/portal/settings", label: "Settings", icon: Settings },
-];
-
-const GROUPS: { heading: string; labels: string[] }[] = [
-  { heading: "Workspace", labels: ["Dashboard", "Projects", "Tasks", "Domains"] },
-  { heading: "Operations & Finance", labels: ["Tickets", "Reports", "Budget", "Billing"] },
-  { heading: "Integrations", labels: ["ClickUp", "Slack"] },
-  { heading: "Administration", labels: ["Team", "Client Access", "Login Codes"] },
-  { heading: "Account", labels: ["Notifications", "Settings"] },
-];
-
-const MOBILE_NAV: NavItem[] = [
-  { to: "/portal", label: "Home", icon: Home },
-  { to: "/portal/budget", label: "Spending", icon: PieChart, roles: ["admin", "project_manager", "client"] },
-  { to: "/portal/billing", label: "Payments", icon: CreditCard, roles: ["admin", "client"] },
-  { to: "/portal/tickets", label: "Help", icon: LifeBuoy },
-  { to: "/portal/tasks", label: "Tasks", icon: ListChecks, roles: ["admin", "project_manager", "employee"] },
-  { to: "/portal/projects", label: "Projects", icon: FolderKanban, roles: ["admin", "sales", "project_manager", "client"] },
-];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const { refresh } = useLive();
   const { data: notifications } = useNotifications();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const { pathname } = useLocation();
+  const reduceMotion = useReducedMotion();
+
+  const [moreOpen, setMoreOpen] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
 
   const unread = notifications?.filter((n) => !n.read).length ?? 0;
-  const visible = (item: NavItem) => !item.roles || (user != null && item.roles.includes(user.role));
-  const items = NAV_ITEMS.filter(visible).map((i) =>
-    i.label === "Notifications" ? { ...i, badge: unread } : i,
+  const nav = useMemo(() => navFor(user), [user]);
+  const client = isClientNav(user);
+
+  const secondary = useMemo(
+    () =>
+      nav.secondary.map((i) => (i.to === "/portal/notifications" ? { ...i, badge: unread } : i)),
+    [nav.secondary, unread],
   );
-  const mobileItems = MOBILE_NAV.filter(visible).slice(0, 4);
+
+  const title = useMemo(
+    () => titleFor(pathname, [...nav.primary, ...nav.secondary]),
+    [pathname, nav.primary, nav.secondary],
+  );
+
+  // A new screen starts at its own top, the way a pushed view does on a phone.
+  useEffect(() => {
+    setMoreOpen(false);
+    mainRef.current?.scrollTo({ top: 0 });
+  }, [pathname]);
 
   return (
-    <div className="flex min-h-svh bg-secondary/30">
+    <div className="flex h-svh overflow-hidden bg-secondary/30">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-lg focus:bg-card focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:ring-2 focus:ring-primary"
@@ -80,84 +60,78 @@ export function AppShell({ children }: { children: ReactNode }) {
       </a>
 
       <aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
-        <SidebarContent items={items} />
+        <SidebarContent primary={nav.primary} secondary={secondary} groups={nav.groups} flat={client} />
       </aside>
 
-      {menuOpen && (
-        <div className="fixed inset-0 z-50 animate-in fade-in-0 duration-200 md:hidden">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-xs" onClick={() => setMenuOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 flex w-[280px] max-w-[calc(100vw-3rem)] flex-col bg-sidebar border-r border-sidebar-border/60 shadow-2xl animate-in slide-in-from-left duration-200">
-            <SidebarContent items={items} onNavigate={() => setMenuOpen(false)} onClose={() => setMenuOpen(false)} />
-          </aside>
-        </div>
-      )}
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        <TopBar title={title} unread={unread} scrollRef={mainRef} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-background px-2 md:hidden">
-          <div className="flex min-w-0 items-center gap-1">
-            <Button variant="ghost" size="icon" className="tap-target" aria-label="Open menu" onClick={() => setMenuOpen(true)}>
-              <Menu className="size-5" />
-            </Button>
-            <Brand compact />
-          </div>
-
-          {user && (
-            <NavLink
-              to="/portal/notifications"
-              aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
-              className="tap-target focus-clear relative inline-flex items-center justify-center rounded-lg text-foreground hover:bg-secondary"
+        <main
+          id="main"
+          ref={mainRef}
+          // overflow-x-hidden is the guard the body used to provide: one
+          // stray wide element must never turn the whole app into a
+          // sideways-scrolling page.
+          className="relative flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain p-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+        >
+          <PullToRefresh onRefresh={refresh} scrollRef={mainRef}>
+            <motion.div
+              key={pathname}
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.4, 0, 0.2, 1] }}
             >
-              <Bell className="size-5" />
-              {unread > 0 && (
-                <span className="absolute top-1.5 right-1.5 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
-                  {unread > 9 ? "9+" : unread}
-                </span>
-              )}
-            </NavLink>
-          )}
-        </header>
-
-        <main id="main" className="flex-1 overflow-y-auto p-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
-          {children}
+              {children}
+            </motion.div>
+            <InstallCard />
+          </PullToRefresh>
         </main>
       </div>
 
-      <BottomNav items={mobileItems} />
+      <BottomTabs
+        items={nav.primary}
+        moreCount={secondary.length}
+        moreOpen={moreOpen}
+        onOpenMore={() => setMoreOpen(true)}
+      />
+      <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} items={secondary} unread={unread} />
     </div>
   );
 }
 
-function Brand({ compact = false }: { compact?: boolean }) {
+/** The name of the screen you are on, for the phone's top bar. */
+function titleFor(pathname: string, items: NavItem[]): string {
+  const exact = items.find((i) => i.to === pathname);
+  if (exact) return exact.label;
+  const nested = items
+    .filter((i) => i.to !== "/portal" && pathname.startsWith(i.to))
+    .sort((a, b) => b.to.length - a.to.length)[0];
+  return nested?.label ?? "EthixWeb";
+}
+
+function Brand() {
   return (
     <div className="flex min-w-0 items-center gap-2.5">
       <div
-        className={cn(
-          "flex shrink-0 items-center justify-center rounded-xl bg-zinc-950 border border-zinc-800 p-1 shadow-sm ring-1 ring-primary/20",
-          compact ? "size-7" : "size-8"
-        )}
+        className="flex size-8 shrink-0 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 p-1 shadow-sm ring-1 ring-primary/20"
       >
-        <img
-          src="/emblem-mark.png"
-          alt="EthixWeb Emblem"
-          className="size-full object-contain"
-        />
+        <img src="/emblem-mark.png" alt="EthixWeb Emblem" className="size-full object-contain" />
       </div>
       <div className="min-w-0">
         <div className="truncate text-sm leading-tight font-semibold tracking-tight text-sidebar-foreground">
           EthixWeb
         </div>
-        {!compact && <div className="truncate text-xs text-muted-foreground">Client portal</div>}
+        <div className="truncate text-xs text-muted-foreground">Client portal</div>
       </div>
     </div>
   );
 }
 
-function NavRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
+function NavRow({ item }: { item: NavItem }) {
   return (
     <NavLink
       to={item.to}
       end={item.to === "/portal"}
-      onClick={onNavigate}
       className={({ isActive }) =>
         cn(
           "focus-clear relative flex h-10 items-center gap-2.5 rounded-lg px-3 text-sm transition-colors",
@@ -183,18 +157,25 @@ function NavRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }
   );
 }
 
+/**
+ * Two sidebars in one component, because they differ only in how much index
+ * they need. Staff get headed groups over the whole workspace; a client gets a
+ * flat, unlabelled list -- four places they go, then everything else, with no
+ * section headings to read past.
+ */
 function SidebarContent({
-  items,
-  onNavigate,
-  onClose,
+  primary,
+  secondary,
+  groups,
+  flat,
 }: {
-  items: NavItem[];
-  onNavigate?: () => void;
-  onClose?: () => void;
+  primary: NavItem[];
+  secondary: NavItem[];
+  groups: NavGroup[];
+  flat: boolean;
 }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const byLabel = new Map(items.map((i) => [i.label, i]));
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
@@ -202,47 +183,53 @@ function SidebarContent({
         <img
           src="/spiderweb.svg"
           alt=""
-          className="absolute -top-8 -left-24 w-[540px] max-w-none opacity-30 dark:opacity-45 select-none"
+          className="absolute -top-8 -left-24 w-[540px] max-w-none opacity-30 select-none dark:opacity-45"
         />
       </div>
 
       <div className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border/60 px-4">
         <Brand />
-        {onClose && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 shrink-0 rounded-lg text-muted-foreground hover:text-foreground hover:bg-sidebar-accent md:hidden"
-            aria-label="Close menu"
-            onClick={onClose}
-          >
-            <X className="size-5" />
-          </Button>
-        )}
       </div>
 
-      <nav aria-label="Sections" className="relative z-10 flex-1 min-h-0 overflow-y-auto no-scrollbar px-2.5 py-3">
-        {GROUPS.map((group) => {
-          const groupItems = group.labels.map((l) => byLabel.get(l)).filter((i): i is NavItem => i != null);
-          if (groupItems.length === 0) return null;
-          return (
+      <nav aria-label="Sections" className="no-scrollbar relative z-10 min-h-0 flex-1 overflow-y-auto px-2.5 py-3">
+        {flat ? (
+          <>
+            <div className="space-y-0.5">
+              {primary.map((item) => (
+                <NavRow key={item.to} item={item} />
+              ))}
+            </div>
+            {secondary.length > 0 && (
+              <>
+                <hr className="my-3 border-sidebar-border/60" />
+                <div className="space-y-0.5">
+                  {secondary.map((item) => (
+                    <NavRow key={item.to} item={item} />
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        ) : (
+          groups.map((group) => (
             <div key={group.heading} className="mb-4 last:mb-0">
               <div className="px-3 pb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 {group.heading}
               </div>
               <div className="space-y-0.5">
-                {groupItems.map((item) => (
-                  <NavRow key={item.to} item={item} onNavigate={onNavigate} />
+                {group.items.map((item) => (
+                  <NavRow key={item.to} item={item} />
                 ))}
               </div>
             </div>
-          );
-        })}
+          ))
+        )}
       </nav>
 
       <div className="relative z-10 shrink-0 border-t border-sidebar-border/60 px-4 py-3">
-        <div className="pb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Appearance
+        <div className="flex items-center justify-between pb-1.5">
+          <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Appearance</span>
+          <LiveIndicator />
         </div>
         <ThemeSwitch />
       </div>
@@ -265,7 +252,7 @@ function SidebarContent({
             title="Sign out"
             className="tap-target shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
             onClick={() => {
-              onNavigate?.();
+              clearOfflineCaches();
               logout();
               navigate("/login");
             }}
@@ -275,43 +262,5 @@ function SidebarContent({
         </div>
       </div>
     </div>
-  );
-}
-
-function BottomNav({ items }: { items: NavItem[] }) {
-  if (items.length === 0) return null;
-
-  return (
-    <nav
-      aria-label="Main"
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background pb-[env(safe-area-inset-bottom)] md:hidden"
-    >
-      <ul className="flex">
-        {items.map((item) => (
-          <li key={item.to} className="flex-1">
-            <NavLink
-              to={item.to}
-              end={item.to === "/portal"}
-              className={({ isActive }) =>
-                cn(
-                  "focus-clear relative flex h-14 w-full flex-col items-center justify-center gap-0.5 px-1",
-                  isActive ? "text-primary" : "text-muted-foreground",
-                )
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && <span aria-hidden className="absolute inset-x-3 top-0 h-0.5 rounded-b-full bg-primary" />}
-                  <item.icon aria-hidden className="size-5 shrink-0" strokeWidth={isActive ? 2.4 : 1.9} />
-                  <span className={cn("text-xs leading-none", isActive ? "font-semibold" : "font-normal")}>
-                    {item.label}
-                  </span>
-                </>
-              )}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
-    </nav>
   );
 }

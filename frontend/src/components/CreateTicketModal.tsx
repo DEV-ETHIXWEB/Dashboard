@@ -12,8 +12,10 @@ import {
   Sparkles,
   Loader2,
   FileText,
+  Flame,
   X,
 } from "lucide-react";
+import { TICKET_PRIORITIES, type TicketPriority } from "@/lib/tickets";
 import { useAuth } from "@/context/AuthContext";
 import { useCreateTicket, useUsers } from "@/hooks/useData";
 import { Button } from "@/components/ui/button";
@@ -38,6 +40,14 @@ const CATEGORIES = [
   { name: "Billing", icon: CreditCard, description: "Invoices, payments, or subscriptions" },
   { name: "Other", icon: HelpCircle, description: "General inquiries & support" },
 ];
+
+/** Mirrors RESPONSE_HOURS in utils/ticketIntake.js. */
+const RESPONSE_TARGET: Record<TicketPriority, string> = {
+  Urgent: "within 1 hour",
+  High: "within 4 hours",
+  Normal: "within 8 hours",
+  Low: "within 24 hours",
+};
 
 const QUICK_TEMPLATES = [
   "CTA button not working",
@@ -71,6 +81,7 @@ export function CreateTicketModal({
   const [category, setCategory] = useState("Website");
   const [description, setDescription] = useState("");
   const [clientId, setClientId] = useState("");
+  const [priority, setPriority] = useState<TicketPriority>("Normal");
 
   function submit() {
     if (!subject.trim()) {
@@ -82,14 +93,15 @@ export function CreateTicketModal({
       return;
     }
     createTicket.mutate(
-      { subject, category, description, ...(isStaff ? { clientId } : {}) },
+      { subject, category, description, priority, ...(isStaff ? { clientId } : {}) },
       {
         onSuccess: () => {
-          toast.success("Ticket created");
+          toast.success("Ticket created - the team has been alerted");
           setOpen?.(false);
           setSubject("");
           setDescription("");
           setClientId("");
+          setPriority("Normal");
         },
         onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to create ticket"),
       },
@@ -101,7 +113,7 @@ export function CreateTicketModal({
       {trigger && <DialogTrigger render={trigger} />}
       <DialogContent
         showCloseButton={false}
-        className="sm:max-w-lg p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
+        className="sm:max-w-3xl p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
       >
         <div className="relative p-6 pb-4 border-b border-border/40 bg-gradient-to-br from-primary/10 via-background to-background">
           <div className="flex items-start justify-between gap-4">
@@ -125,7 +137,9 @@ export function CreateTicketModal({
           </div>
         </div>
 
-        <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
+        {/* Two columns: what the request is on the left, how to route it on the right. */}
+        <div className="no-scrollbar grid max-h-[72svh] gap-5 overflow-y-auto overscroll-contain p-6 md:grid-cols-2">
+          <div className="space-y-5">
           {isStaff && (
             <div className="space-y-2">
               <Label className="text-xs font-medium text-foreground/90 flex items-center gap-1.5">
@@ -178,8 +192,27 @@ export function CreateTicketModal({
           </div>
 
           <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="description" className="text-xs font-medium text-foreground/90">
+                Tell us more
+              </Label>
+              <span className="text-[11px] text-muted-foreground">{description.length} characters</span>
+            </div>
+            <Textarea
+              id="description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Add details, steps to reproduce, or context..."
+              rows={6}
+              className="bg-background/50 border-border/60 focus-visible:ring-primary/40 text-sm resize-none"
+            />
+          </div>
+          </div>
+
+          <div className="space-y-5">
+          <div className="space-y-2">
             <Label className="text-xs font-medium text-foreground/90">Category</Label>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {CATEGORIES.map((cat) => {
                 const Icon = cat.icon;
                 const isSelected = category === cat.name;
@@ -203,20 +236,32 @@ export function CreateTicketModal({
           </div>
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="description" className="text-xs font-medium text-foreground/90">
-                Tell us more
-              </Label>
-              <span className="text-[11px] text-muted-foreground">{description.length} characters</span>
+            <Label className="text-xs font-medium text-foreground/90 flex items-center gap-1.5">
+              <Flame className="size-3.5 text-primary" /> How urgent is it?
+            </Label>
+            <div className="grid grid-cols-4 gap-2">
+              {TICKET_PRIORITIES.map((p) => {
+                const isSelected = priority === p;
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setPriority(p)}
+                    className={`rounded-xl border p-2 text-xs font-medium transition-all duration-150 cursor-pointer ${
+                      isSelected
+                        ? "border-primary bg-primary/10 text-primary ring-1 ring-primary/30"
+                        : "border-border/60 bg-background/40 text-foreground/80 hover:border-border hover:bg-muted/70"
+                    }`}
+                  >
+                    {p}
+                  </button>
+                );
+              })}
             </div>
-            <Textarea
-              id="description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Add details, steps to reproduce, or context..."
-              rows={4}
-              className="bg-background/50 border-border/60 focus-visible:ring-primary/40 text-sm resize-none"
-            />
+            <p className="text-[11px] text-muted-foreground">
+              Sets how fast we owe you a first reply: {RESPONSE_TARGET[priority]}.
+            </p>
+          </div>
           </div>
         </div>
 

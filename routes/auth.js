@@ -9,10 +9,14 @@ const router = express.Router();
 const { db } = require('../db/setup');
 const {
   SESSION_COOKIE, createSession, promoteSession, destroySession, safeUser,
-  requireAuth, requireRole, requireCSRF, audit, PORTAL_PATH,
+  requireAuth, requireRole, requireCSRF, audit, PORTAL_PATH, sessionTtlFor,
 } = require('../middleware/auth');
 const { isGoogleSignInConfigured, verifyGoogleIdToken } = require('../utils/googleAuth');
 const { encryptCode, decryptCode, codesMatch } = require('../utils/otpCrypto');
+const loginLinks = require('../utils/loginLinks');
+const { baseUrl } = require('../utils/appUrl');
+const mailer = require('../utils/mailer');
+const messages = require('../utils/emailMessages');
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
@@ -76,7 +80,38 @@ async function finishLogin(req, res, user) {
     attempts: 0,
   });
 
-  res.json({ requiresOtp: true, csrfToken: pendingSession.csrfToken, otpExpiresAt: expiresAt });
+  // Email the code so signing in does not depend on an admin reading it out of
+  // the Login Codes page. That page stays as the fallback for a workspace with
+  // no mail transport configured yet.
+  let codeEmailed = false;
+  try {
+    const result = await mailer.sendTemplate({
+      to: user.email,
+      message: messages.loginCode({ user, code, expiresAt, ipAddress: normalizeIp(req.ip) }),
+      template: 'login_code',
+      entity: 'user',
+      entityId: user.id,
+    });
+    codeEmailed = Boolean(result.ok);
+  } catch (err) {
+    console.error('Could not email the sign-in code:', err.message);
+  }
+
+  res.json({
+    requiresOtp: true,
+    csrfToken: pendingSession.csrfToken,
+    otpExpiresAt: expiresAt,
+    codeEmailed,
+    codeDestination: codeEmailed ? maskEmail(user.email) : null,
+  });
+}
+
+/** "da***@example.com" -- enough to recognise the inbox, not enough to harvest it. */
+function maskEmail(email) {
+  const [name, domain] = String(email || '').split('@');
+  if (!domain) return null;
+  const head = name.slice(0, 2);
+  return `${head}${'*'.repeat(Math.max(1, name.length - 2))}@${domain}`;
 }
 
 router.post('/login', loginLimiter, async (req, res, next) => {
@@ -116,6 +151,76 @@ router.post('/google', loginLimiter, async (req, res, next) => {
   }
 });
 
+/**
+ * Mint a one-tap sign-in link for a client, for an admin to hand over.
+ *
+ * Admin-only and deliberately not self-service: a link is a bearer credential,
+ * so whoever holds it is signed in as that client. An admin decides who gets
+ * one and over which channel. Only client accounts are eligible -- staff and
+ * admin accounts can change other people's access, and a pasteable URL is not
+ * a strong enough gate for that.
+ *
+ * The response carries a `path`, not just an absolute URL, so the admin portal
+ * can build the link against the origin it is actually being served from. In
+ * development that is the Vite origin (localhost:5173), while the backend only
+ * ever sees the proxy's own host -- an absolute URL built server-side would
+ * point at the wrong place.
+ */
+router.post('/login-link/:userId', requireAuth, requireRole('admin'), requireCSRF, async (req, res, next) => {
+  try {
+    const user = await db.find('users', req.params.userId);
+    if (!user) return res.status(404).json({ error: 'No such user' });
+    if (user.role !== 'client') {
+      return res.status(400).json({ error: 'Sign-in links are for client accounts only.' });
+    }
+    if (user.passwordExpiresAt && Number(user.passwordExpiresAt) < Date.now()) {
+      return res.status(409).json({ error: `${user.name}'s access has expired. Set a new expiry date first.` });
+    }
+
+    const { path, expiresAt } = await loginLinks.issueFor(user, { ipAddress: normalizeIp(req.ip) });
+    await audit(req.user.id, 'issue_login_link', 'user', user.id, { expiresAt });
+    res.json({ path, url: baseUrl() ? `${baseUrl()}${path}` : null, expiresAt });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Open a sign-in link. This is a top-level navigation from an inbox, so it
+ * answers with a redirect rather than JSON, and failures land back on the
+ * login page with a reason the UI can explain.
+ */
+router.get('/magic-link/verify', async (req, res, next) => {
+  const fail = (reason) => res.redirect(`/login?linkError=${reason}`);
+  try {
+    const parsed = loginLinks.parseToken(req.query.token);
+    if (!parsed) return fail('invalid');
+
+    const row = await db.find('login_links', parsed.id);
+    if (!row) return fail('invalid');
+    if (row.consumed) return fail('used');
+    if (Number(row.expiresAt) < Date.now()) return fail('expired');
+    if (!loginLinks.secretMatches(parsed.secret, row.tokenHash)) return fail('invalid');
+
+    const user = await db.find('users', row.userId);
+    if (!user || user.role !== 'client') return fail('invalid');
+    if (user.passwordExpiresAt && Number(user.passwordExpiresAt) < Date.now()) return fail('access_expired');
+
+    // Claim the link before minting the session: two clicks racing each other
+    // means exactly one of them gets a row back here.
+    const claimed = await db.consumeLoginLink(row.id);
+    if (!claimed) return fail('used');
+
+    const ttlMs = sessionTtlFor(user);
+    const session = await createSession(user.id, { ttlMs });
+    res.cookie(SESSION_COOKIE, session.id, { ...COOKIE_OPTS, maxAge: ttlMs });
+    await audit(user.id, 'login', 'user', user.id, { via: 'magic_link' });
+    res.redirect('/portal');
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
   try {
     const sid = req.cookies?.[SESSION_COOKIE];
@@ -147,7 +252,11 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
     }
 
     await db.update('otp_codes', otp.id, { consumed: true });
-    const promoted = await promoteSession(session.id);
+    const ttlMs = sessionTtlFor(user);
+    const promoted = await promoteSession(session.id, { ttlMs });
+    // The pending cookie was written with the default window; re-issue it so the
+    // browser keeps the session for as long as the server will honour it.
+    res.cookie(SESSION_COOKIE, session.id, { ...COOKIE_OPTS, maxAge: ttlMs });
     await audit(user.id, 'login', 'user', user.id, { via: 'otp' });
     res.json({ user: safeUser(user), csrfToken: promoted.csrfToken, redirect: PORTAL_PATH[user.role] || '/portal.html' });
   } catch (err) {

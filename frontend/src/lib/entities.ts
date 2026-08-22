@@ -1,4 +1,4 @@
-import type { Role } from "./types";
+import type { ClientPageKey, Role } from "./types";
 
 export interface UserRecord {
   id: string;
@@ -7,6 +7,8 @@ export interface UserRecord {
   role: Role;
   company?: string | null;
   passwordExpiresAt?: number | null;
+  /** null = every client section; an array = only these. */
+  allowedPages?: ClientPageKey[] | null;
 }
 
 export interface Project {
@@ -46,6 +48,10 @@ export interface Ticket {
   /** 0-100, driven by the stage or set directly by the team. */
   progress?: number | null;
   stage?: string | null;
+  /** Intake routing: urgency and the first-response clock. */
+  priority?: "Low" | "Normal" | "High" | "Urgent" | string | null;
+  responseDueAt?: number | null;
+  firstResponseAt?: number | null;
 }
 
 export interface Domain {
@@ -93,6 +99,53 @@ export interface Billing {
   plan?: string;
   status: string;
   updatedAt?: string;
+  /** Everything below is mirrored from Stripe by utils/stripeSync.js. */
+  currency?: string;
+  amount?: number | null;
+  interval?: string | null;
+  currentPeriodEnd?: string | null;
+  cancelAtPeriodEnd?: boolean;
+  cardBrand?: string | null;
+  cardLast4?: string | null;
+  latestInvoiceUrl?: string | null;
+  syncedAt?: string | null;
+}
+
+/**
+ * One real money movement, copied from a Stripe invoice or charge. Never
+ * written by hand -- see utils/stripeSync.js.
+ */
+export interface Payment {
+  id: string;
+  clientId: string | null;
+  stripeObjectId: string;
+  kind: "invoice" | "charge" | "refund";
+  description?: string | null;
+  amount: number;
+  currency: string;
+  status: "paid" | "failed" | "open" | "refunded" | string;
+  paidAt?: string | null;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+  invoiceUrl?: string | null;
+  receiptUrl?: string | null;
+  invoiceNumber?: string | null;
+  cardBrand?: string | null;
+  cardLast4?: string | null;
+  failureMessage?: string | null;
+  createdAt?: string;
+}
+
+/** What `GET /api/billing/payments` returns. */
+export interface PaymentSummary {
+  enabled: boolean;
+  total: number;
+  currency: string;
+  count: number;
+  lastPaidAt?: string | null;
+  categories: { id: string; label: string; amount: number }[];
+  payments: Payment[];
+  client?: { id: string; name: string };
 }
 
 export interface Notification {

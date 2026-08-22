@@ -445,21 +445,51 @@ async function postMessage({ channelId, text, threadTs }) {
   return { ok: true, ts: data.ts, message: data.message };
 }
 
-/** Send an event notification to Slack. */
+/**
+ * Work out which channel an event notification should land in: the one asked
+ * for, then the configured default, then the first channel the bot is in.
+ */
+async function resolveNotificationChannel(channelId) {
+  const preferred = channelId || process.env.SLACK_NOTIFICATION_CHANNEL;
+  if (preferred) return preferred;
+  const channels = await fetchChannels();
+  return channels.find((c) => c.isMember)?.id || null;
+}
+
+/**
+ * Send an event notification to Slack.
+ *
+ * Returns `{ channelId, ts }` on success and `null` when Slack is off or the
+ * post failed, so callers can keep the thread reference without having to care
+ * whether Slack is configured. Never throws: a Slack outage must not take a
+ * ticket down with it.
+ */
 async function notifySlack(text, channelId) {
-  if (!isEnabled()) return;
+  if (!isEnabled()) return null;
   try {
-    let targetChannel = channelId || process.env.SLACK_NOTIFICATION_CHANNEL;
-    if (!targetChannel) {
-      const channels = await fetchChannels();
-      const memberChannel = channels.find((c) => c.isMember);
-      if (memberChannel) targetChannel = memberChannel.id;
-    }
-    if (!targetChannel) return;
-    await postMessage({ channelId: targetChannel, text });
+    const targetChannel = await resolveNotificationChannel(channelId);
+    if (!targetChannel) return null;
+    const result = await postMessage({ channelId: targetChannel, text });
+    return { channelId: targetChannel, ts: result.ts };
   } catch (err) {
     // Silent fail for event notifications so application flow is not interrupted
     console.error('Slack event notification failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Reply inside an existing thread, best-effort. Used to keep every update on a
+ * ticket under the one Slack message the ticket started.
+ */
+async function replyInThread({ channelId, threadTs, text }) {
+  if (!isEnabled() || !channelId || !threadTs) return null;
+  try {
+    const result = await postMessage({ channelId, text, threadTs });
+    return { channelId, ts: result.ts };
+  } catch (err) {
+    console.error('Slack thread reply failed:', err.message);
+    return null;
   }
 }
 
@@ -516,5 +546,7 @@ module.exports = {
   fetchCategorisedFeed,
   postMessage,
   notifySlack,
+  replyInThread,
+  resolveNotificationChannel,
   sendSlackDigest,
 };

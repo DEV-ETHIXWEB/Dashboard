@@ -2,25 +2,36 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { db } = require('../db/setup');
+const { parseAllowedPages } = require('../utils/clientPages');
+const live = require('../utils/liveBus');
 
 const SESSION_COOKIE = 'ew_sid';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// Clients sign in from a phone, often at a job site, and every expiry is a
+// full sign-in round trip they did not ask for. Staff keep the shorter window
+// because their accounts can change other people's access.
+const CLIENT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-async function createSession(userId, { pending = false } = {}) {
+/** How long a signed-in session should last for this account. */
+function sessionTtlFor(user) {
+  return user?.role === 'client' ? CLIENT_SESSION_TTL_MS : SESSION_TTL_MS;
+}
+
+async function createSession(userId, { pending = false, ttlMs = SESSION_TTL_MS } = {}) {
   const session = {
     id: uuidv4(),
     userId,
     csrfToken: uuidv4(),
     createdAt: Date.now(),
-    expiresAt: Date.now() + (pending ? 10 * 60 * 1000 : SESSION_TTL_MS), // pending sessions expire in 10 min
+    expiresAt: Date.now() + (pending ? 10 * 60 * 1000 : ttlMs), // pending sessions expire in 10 min
     pending,
   };
   await db.insert('sessions', session);
   return session;
 }
 
-async function promoteSession(sessionId) {
-  return db.update('sessions', sessionId, { pending: false, expiresAt: Date.now() + SESSION_TTL_MS });
+async function promoteSession(sessionId, { ttlMs = SESSION_TTL_MS } = {}) {
+  return db.update('sessions', sessionId, { pending: false, expiresAt: Date.now() + ttlMs });
 }
 
 async function getSession(req) {
@@ -43,6 +54,9 @@ async function destroySession(req) {
 function safeUser(user) {
   if (!user) return null;
   const { password, demoPassword, ...rest } = user;
+  // Stored as JSON text on Postgres, as an array on Firestore -- callers always
+  // get an array, or null meaning "no page restrictions".
+  rest.allowedPages = parseAllowedPages(rest.allowedPages);
   return rest;
 }
 
@@ -91,11 +105,22 @@ async function audit(actorId, action, entity, entityId, meta) {
 
 async function notify(userId, message, type) {
   if (!userId) return;
+  // Every role gets notifications: staff need "new ticket" and handover alerts,
+  // not just clients.
   const user = await db.find('users', userId);
-  if (!user || user.role !== 'client') return;
+  if (!user) return;
   await db.insert('notifications', {
     id: uuidv4(), userId, message, type: type || 'general', read: false, createdAt: new Date().toISOString(),
   });
+  // Straight to that one person's open tabs. The event says only "you have
+  // notifications"; the browser fetches the text through the usual endpoint.
+  live.publish('notifications', { to: [userId] });
+}
+
+/** Force one account's tabs to re-read who they are -- role or page access moved. */
+function refreshSession(userId) {
+  if (!userId) return;
+  live.publish('session', { to: [userId] });
 }
 
 const PORTAL_PATH = {
@@ -108,7 +133,7 @@ const PORTAL_PATH = {
 
 module.exports = {
   SESSION_COOKIE,
-  createSession, getSession, destroySession, promoteSession, safeUser,
+  createSession, getSession, destroySession, promoteSession, safeUser, sessionTtlFor,
   requireAuth, requireRole, requireCSRF,
-  audit, notify, PORTAL_PATH,
+  audit, notify, refreshSession, PORTAL_PATH,
 };

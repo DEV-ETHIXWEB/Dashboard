@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "./index.css";
 import App from "./App.tsx";
 import { AuthProvider } from "@/context/AuthContext";
+import { LiveProvider } from "@/context/LiveContext";
+import { registerServiceWorker } from "@/lib/pwa";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -17,9 +19,13 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
-          <App />
+          <LiveProvider>
+            <App />
+          </LiveProvider>
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,
 );
+
+registerServiceWorker();

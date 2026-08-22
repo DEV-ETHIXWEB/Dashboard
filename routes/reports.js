@@ -7,10 +7,12 @@ const router = express.Router();
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
 const { isDriveConfigured, uploadToDrive } = require('../utils/googleDrive');
+const { requirePage } = require('../utils/clientPages');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 router.use(requireAuth);
+router.use(requirePage('reports'));
 
 function visibleTo(user, report) {
   if (['admin', 'sales', 'project_manager'].includes(user.role)) return true;
@@ -56,13 +58,15 @@ router.post('/', requireCSRF, requireRole('admin', 'sales', 'project_manager'), 
     } else {
       if (req.file.size > 4 * 1024 * 1024) {
         return res.status(413).json({
-          error: 'Files over 4MB need Google Drive storage configured first (see README) -- database storage is a temporary fallback with limited capacity.',
+          error: 'Files over 4MB need Google Drive storage configured first (see README). Database storage is a fallback with limited capacity.',
         });
       }
       reportData = { ...reportData, storageType: 'database', contentBase64: req.file.buffer.toString('base64') };
     }
 
     const report = await db.insert('reports', reportData);
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [clientId];
     await audit(req.user.id, 'create', 'report', report.id);
     await notify(clientId, `New report available: "${reportData.name}"`, 'report');
     res.status(201).json({ report: withoutContent(report) });

@@ -23,6 +23,7 @@ import {
 import { formatRelativeTime, initials } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { DEFAULT_STAGES, isRequest, stageLabel, type TicketUpdate } from "@/lib/tickets";
+import { PriorityBadge, SlaBadge } from "@/components/tickets/TicketMeta";
 
 const NO_STAGE = "__unchanged__";
 
@@ -139,7 +140,7 @@ export function TicketTimelineDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="scrollbar-slim max-h-[90svh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="scrollbar-slim max-h-[90svh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="pr-8">{ticket?.subject ?? "Ticket"}</DialogTitle>
           <DialogDescription>
@@ -152,7 +153,14 @@ export function TicketTimelineDialog({
         ) : timeline.isLoading || !data || !ticket ? (
           <Skeleton className="h-72 w-full rounded-xl" />
         ) : (
-          <div className="space-y-5">
+          <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
+            {/* Story on the left, the controls that change it on the right. */}
+            <div className="space-y-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <PriorityBadge priority={ticket.priority} />
+              <SlaBadge ticket={ticket} />
+            </div>
+
             <ProgressBar progress={ticket.progress ?? 0} stage={stageLabel(ticket.stage, stages)} />
 
             <WorkingOn
@@ -179,11 +187,13 @@ export function TicketTimelineDialog({
               onAnswer={answer}
               answering={respond.isPending}
             />
+            </div>
 
+            <div className="space-y-5">
             {/* Post an update. Clients get a plain note box; the team also gets
                 the stage and percentage controls. */}
             {(canRecord || isClient) && (
-              <form onSubmit={submitUpdate} className="space-y-3 border-t border-border pt-4">
+              <form onSubmit={submitUpdate} className="space-y-3 rounded-xl bg-secondary/30 p-4">
                 <Label htmlFor="ticket-note">{isClient ? "Reply" : "Post an update"}</Label>
                 <Textarea
                   id="ticket-note"
@@ -321,6 +331,7 @@ export function TicketTimelineDialog({
                 </div>
               </form>
             )}
+            </div>
           </div>
         )}
       </DialogContent>

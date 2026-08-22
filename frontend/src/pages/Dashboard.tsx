@@ -3,13 +3,14 @@ import { Link } from "react-router-dom";
 import { ArrowRight, Wallet, FolderKanban, LifeBuoy, Globe, FileText, Plus } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import {
-  useBudget, useBillingStatus, useTickets, useProjects, useDomains, useReports,
+  useBudget, useBillingStatus, useTickets, useProjects, useDomains, useReports, usePayments,
 } from "@/hooks/useData";
 import {
   MoneyPanel, PanelLink, PanelEmpty, BigMoney, SpendBreakdown, StatTile,
   DataList, DataRow, BentoGrid, BentoColumns, bento,
 } from "@/components/money/Money";
 import { AttentionNotice, TrustFooter } from "@/components/money/Trust";
+import { PaymentList, PlanSummary, paymentMoney } from "@/components/money/Payments";
 import { ErrorState } from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,7 +20,9 @@ import { cn } from "@/lib/utils";
 import { money, monthKey, plainMonth, plainDate, describeChange } from "@/lib/money";
 import { formatBytes } from "@/lib/format";
 import { apiUrl } from "@/lib/api";
+import { canSeePage } from "@/lib/permissions";
 import type { Billing, BudgetItem } from "@/lib/entities";
+import type { ClientPageKey } from "@/lib/types";
 
 const NEEDS_ACTION = new Set(["past_due", "unpaid", "incomplete", "incomplete_expired", "canceled"]);
 
@@ -32,6 +35,9 @@ export default function Dashboard() {
   const { user } = useAuth();
   const isClient = user?.role === "client";
 
+  /** Sections this account may open; staff always get all of them. */
+  const can = (page: ClientPageKey) => canSeePage(user, page);
+
   const queryClient = useQueryClient();
 
   const budgetQuery = useBudget(isClient ? user?.id : undefined);
@@ -40,6 +46,7 @@ export default function Dashboard() {
   const projectsQuery = useProjects();
   const domainsQuery = useDomains();
   const reportsQuery = useReports();
+  const paymentsQuery = usePayments();
 
   const { data: budgetItems, isLoading } = budgetQuery;
   const { data: billingStatus } = billingQuery;
@@ -47,8 +54,9 @@ export default function Dashboard() {
   const { data: projects } = projectsQuery;
   const { data: domains } = domainsQuery;
   const { data: reports } = reportsQuery;
+  const { data: payments } = paymentsQuery;
 
-  const queries = [budgetQuery, billingQuery, ticketsQuery, projectsQuery, domainsQuery, reportsQuery];
+  const queries = [budgetQuery, billingQuery, ticketsQuery, projectsQuery, domainsQuery, reportsQuery, paymentsQuery];
   const isError = queries.some((q) => q.isError);
   const firstError = queries.find((q) => q.isError)?.error;
 
@@ -82,6 +90,17 @@ export default function Dashboard() {
   const { latest, previous, allTime, categories } = periods;
   const change = describeChange(latest.total, previous.total);
 
+  /**
+   * Real payments beat tracked spend.
+   *
+   * `budget_items` are what the team recorded by hand; `payments` are what the
+   * payment processor actually took. When both exist the processor wins the
+   * headline, because that is the number a client can check against their own
+   * bank statement -- the hand-tracked spend keeps its own panel below.
+   */
+  const paid = payments && payments.count > 0 ? payments : null;
+  const recentPayments = paid?.payments.slice(0, 5) ?? [];
+
   return (
     <BentoGrid className="mx-auto w-full max-w-6xl">
       <header className={`flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between ${bento(4)}`}>
@@ -94,20 +113,22 @@ export default function Dashboard() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
           <CreateTicketModal
             trigger={
-              <Button className="h-9 px-3.5 text-xs font-medium gap-1.5 shadow-xs cursor-pointer">
-                <Plus className="size-3.5" />
+              <Button className="h-11 w-full cursor-pointer gap-1.5 px-4 text-sm font-medium shadow-xs sm:h-9 sm:w-auto sm:px-3.5 sm:text-xs">
+                <Plus className="size-4 sm:size-3.5" />
                 Create ticket
               </Button>
             }
           />
+          {/* Both of these are a tab away on a phone, and the tiles below link
+              to them too. Only a desktop has room to spare for the shortcut. */}
           <Link
             to="/portal/reports"
             className={cn(
               buttonVariants({ variant: "outline", size: "sm" }),
-              "h-9 px-3.5 text-xs font-medium gap-1.5 border-border/70 hover:bg-muted/80"
+              "hidden h-9 gap-1.5 border-border/70 px-3.5 text-xs font-medium hover:bg-muted/80 sm:inline-flex"
             )}
           >
             <FileText className="size-3.5 text-muted-foreground" />
@@ -117,7 +138,7 @@ export default function Dashboard() {
             to="/portal/domains"
             className={cn(
               buttonVariants({ variant: "outline", size: "sm" }),
-              "h-9 px-3.5 text-xs font-medium gap-1.5 border-border/70 hover:bg-muted/80"
+              "hidden h-9 gap-1.5 border-border/70 px-3.5 text-xs font-medium hover:bg-muted/80 sm:inline-flex"
             )}
           >
             <Globe className="size-3.5 text-muted-foreground" />
@@ -161,38 +182,47 @@ export default function Dashboard() {
         </div>
       )}
 
-      <StatTile
-        className={bento(1)}
-        label="Projects"
-        value={activeProjects.length}
-        hint={`${projects?.length ?? 0} in total`}
-        icon={FolderKanban}
-        to="/portal/projects"
-      />
-      <StatTile
-        className={bento(1)}
-        label="Requests"
-        value={openTickets.length}
-        hint={openTickets.length === 0 ? "Nothing waiting" : "Waiting on us"}
-        icon={LifeBuoy}
-        to="/portal/tickets"
-      />
-      <StatTile
-        className={bento(1)}
-        label="Websites"
-        value={domains?.length ?? 0}
-        hint={expiringDomains.length > 0 ? `${expiringDomains.length} renewing soon` : "All up to date"}
-        icon={Globe}
-        to="/portal/domains"
-      />
-      <StatTile
-        className={bento(1)}
-        label="Documents"
-        value={reports?.length ?? 0}
-        hint="Ready to read"
-        icon={FileText}
-        to="/portal/reports"
-      />
+      {/* Only tiles for sections this account can actually open. */}
+      {can("projects") && (
+        <StatTile
+          className={bento(1)}
+          label="Projects"
+          value={activeProjects.length}
+          hint={`${projects?.length ?? 0} in total`}
+          icon={FolderKanban}
+          to="/portal/projects"
+        />
+      )}
+      {can("tickets") && (
+        <StatTile
+          className={bento(1)}
+          label="Requests"
+          value={openTickets.length}
+          hint={openTickets.length === 0 ? "Nothing waiting" : "Waiting on us"}
+          icon={LifeBuoy}
+          to="/portal/tickets"
+        />
+      )}
+      {can("domains") && (
+        <StatTile
+          className={bento(1)}
+          label="Websites"
+          value={domains?.length ?? 0}
+          hint={expiringDomains.length > 0 ? `${expiringDomains.length} renewing soon` : "All up to date"}
+          icon={Globe}
+          to="/portal/domains"
+        />
+      )}
+      {can("reports") && (
+        <StatTile
+          className={bento(1)}
+          label="Documents"
+          value={reports?.length ?? 0}
+          hint="Ready to read"
+          icon={FileText}
+          to="/portal/reports"
+        />
+      )}
 
       <div className={bento(4)}>
         <BentoColumns
@@ -201,7 +231,21 @@ export default function Dashboard() {
               key: "hero",
               node: (
                 <section className="rounded-2xl bg-card px-4 py-4 ring-1 ring-foreground/10 sm:px-5 sm:py-5">
-                  {latest.key ? (
+                  {paid ? (
+                    <>
+                      <BigMoney
+                        label="Money you have paid us"
+                        amount={paid.total}
+                        direction="out"
+                        caption={paid.lastPaidAt ? `Last payment ${plainDate(paid.lastPaidAt)}` : undefined}
+                        footnote={`${paid.count} payment${paid.count === 1 ? "" : "s"} on record.${latest.key ? ` ${money(latest.total)} of tracked spend in ${plainMonth(latest.key)}.` : ""}`}
+                      />
+                      <p className="mt-4 border-t border-border pt-3 text-sm text-muted-foreground">
+                        Every figure here comes from our payment provider, not from us. Each payment
+                        has a receipt you can open and check.
+                      </p>
+                    </>
+                  ) : latest.key ? (
                     <>
                       <BigMoney
                         label={`Money out in ${plainMonth(latest.key)}`}
@@ -228,13 +272,41 @@ export default function Dashboard() {
                 </section>
               ),
             },
+            ...(paid && paid.categories.length > 0
+              ? [
+                  {
+                    key: "breakdown-paid",
+                    node: (
+                      <MoneyPanel
+                        title="Where your money went"
+                        subtitle="From your own payments"
+                        action={<PanelLink to="/portal/billing">See every payment</PanelLink>}
+                      >
+                        <SpendBreakdown categories={paid.categories} total={paid.total} />
+                      </MoneyPanel>
+                    ),
+                  },
+                  {
+                    key: "payments",
+                    node: (
+                      <MoneyPanel
+                        title="Your payments"
+                        subtitle={`${paymentMoney(paid.total, paid.currency)} in total`}
+                        action={<PanelLink to="/portal/billing">See all</PanelLink>}
+                      >
+                        <PaymentList payments={recentPayments} />
+                      </MoneyPanel>
+                    ),
+                  },
+                ]
+              : []),
             ...(latest.key
               ? [
                   {
                     key: "breakdown",
                     node: (
                       <MoneyPanel
-                        title="Where your money went"
+                        title={paid ? "Ad and project spend" : "Where your money went"}
                         subtitle={plainMonth(latest.key)}
                         action={<PanelLink to="/portal/budget">See all spending</PanelLink>}
                       >
@@ -377,6 +449,15 @@ export default function Dashboard() {
               ? "Your last payment did not go through. See the message at the top of this page."
               : "Your payments are going through normally. There is nothing you need to do."}
           </p>
+          <PlanSummary
+            amount={billing.amount}
+            currency={billing.currency}
+            interval={billing.interval}
+            currentPeriodEnd={billing.currentPeriodEnd}
+            cancelAtPeriodEnd={billing.cancelAtPeriodEnd}
+            cardBrand={billing.cardBrand}
+            cardLast4={billing.cardLast4}
+          />
           {billing.updatedAt && (
             <p className="mt-1 text-sm text-muted-foreground">Last checked {plainDate(billing.updatedAt)}.</p>
           )}

@@ -5,8 +5,10 @@ const router = express.Router();
 
 const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit } = require('../middleware/auth');
+const { requirePage } = require('../utils/clientPages');
 
 router.use(requireAuth);
+router.use(requirePage('budget'));
 
 function visibleTo(user, item) {
   if (['admin', 'sales', 'project_manager'].includes(user.role)) return true;
@@ -37,6 +39,9 @@ router.post('/', requireCSRF, requireRole('admin', 'sales', 'project_manager'), 
     const thisMonth = month || new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 
     const item = await db.insert('budget_items', { clientId, label, amount: Number(amount), color, month: thisMonth });
+    // Tell this client's open tabs, not everyone's.
+    res.locals.liveAudience = [clientId];
+
     await audit(req.user.id, 'create', 'budget_item', item.id);
     res.status(201).json({ item });
   } catch (err) {

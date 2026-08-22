@@ -341,6 +341,11 @@ async function fetchListTasks(listId) {
   }, TTL_TASKS);
 }
 
+/** One task by id -- how a mirrored ticket reads its live state back. */
+async function fetchTask(taskId) {
+  return cached(`clickup:task:${taskId}`, async () => normaliseTask(await request(`/task/${taskId}`)), TTL_TASKS);
+}
+
 /** Everyone in the workspace, for assignee pickers. */
 async function fetchMembers() {
   return cached('clickup:members', async () => {
@@ -471,16 +476,22 @@ function isTicketMirroringEnabled() {
  * Callers treat failure as non-fatal -- a ticket must still be raised when
  * ClickUp is down.
  */
+/** Dashboard priority -> ClickUp priority. */
+const CLICKUP_PRIORITY = { Urgent: 'urgent', High: 'high', Normal: 'normal', Low: 'low' };
+
 async function mirrorTicket(ticket, { clientName } = {}) {
   const listId = ticketsListId();
   if (!listId) return null;
 
+  const due = ticket.responseDueAt ? new Date(Number(ticket.responseDueAt)) : null;
   const lines = [
     `Raised from the EthixWeb dashboard.`,
     ``,
     `**Ticket:** ${ticket.id}`,
     `**Category:** ${ticket.category || 'General'}`,
+    `**Priority:** ${ticket.priority || 'Normal'}`,
     clientName ? `**Client:** ${clientName}` : null,
+    due ? `**First response due:** ${due.toISOString()}` : null,
     ``,
     ticket.description || '_No description given._',
   ].filter((l) => l !== null);
@@ -488,7 +499,13 @@ async function mirrorTicket(ticket, { clientName } = {}) {
   const task = await createTask(listId, {
     name: `[${ticket.id}] ${ticket.subject}`,
     description: lines.join('\n'),
-    priority: ticket.category === 'Bug' ? 'high' : 'normal',
+    // A bug still counts as at least high, whatever the client picked.
+    priority:
+      ticket.category === 'Bug'
+        ? 'high'
+        : CLICKUP_PRIORITY[ticket.priority] || 'normal',
+    // The response deadline is the date the team is actually held to.
+    ...(due ? { dueAt: due.getTime() } : {}),
   });
   return task;
 }
@@ -501,6 +518,7 @@ module.exports = {
   fetchOverview,
   fetchTree,
   fetchListTasks,
+  fetchTask,
   fetchMembers,
   fetchListStatuses,
   fetchComments,
