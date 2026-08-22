@@ -149,11 +149,43 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
     const isOwner = req.user.role === 'client' && ticket.clientId === req.user.id;
     if (!isStaff && !isOwner) return res.status(403).json({ error: 'Not allowed to edit this ticket' });
 
+    // "Staff" was one bucket, so an employee had exactly the reach of an admin
+    // over every ticket in the workspace. An employee works on the tickets that
+    // are theirs: assigned to them, or one they were brought onto. Admins and
+    // project managers still see the whole queue, which is their job.
+    if (req.user.role === 'employee') {
+      const collaborators = await db.filter(
+        'ticket_collaborators',
+        (c) => c.ticketId === req.params.id && c.userId === req.user.id,
+      );
+      const mine = ticket.assigneeId === req.user.id || collaborators.length > 0;
+      if (!mine) {
+        return res.status(403).json({ error: 'This ticket is not assigned to you.' });
+      }
+    }
+
     const patch = isStaff ? { ...req.body } : { description: req.body.description };
     delete patch.id;
+    delete patch.createdAt;
     // The ClickUp link is owned by the mirroring code, never by the client.
     delete patch.clickupTaskId;
     delete patch.clickupTaskUrl;
+
+    // Which client a ticket belongs to decides which portal shows it. Moving a
+    // ticket sideways puts one client's support request in front of another,
+    // so it is an administrator's decision, not part of working the ticket.
+    const movingClient = 'clientId' in patch && patch.clientId !== ticket.clientId;
+    if (movingClient && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only an admin can move a ticket to a different client.' });
+    }
+    if (movingClient) {
+      const nextClient = await db.find('users', patch.clientId);
+      if (!nextClient || nextClient.role !== 'client') {
+        return res.status(400).json({ error: 'That is not a client account.' });
+      }
+    } else {
+      delete patch.clientId;
+    }
 
     if (patch.priority) {
       patch.priority = intake.normalizePriority(patch.priority);
@@ -183,9 +215,14 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
     }
 
     const updated = await db.update('tickets', req.params.id, patch);
-    // Tell this client's open tabs, not everyone's.
-    res.locals.liveAudience = [ticket.clientId];
-    await audit(req.user.id, 'update', 'ticket', req.params.id);
+    // Tell this client's open tabs, not everyone's -- and when the ticket has
+    // changed hands, both sides, or the new owner's tabs never hear that it
+    // arrived and the old owner's never hear that it left.
+    res.locals.liveAudience = [...new Set([ticket.clientId, updated.clientId].filter(Boolean))];
+    await audit(req.user.id, 'update', 'ticket', req.params.id, {
+      changed: Object.keys(patch),
+      ...(movingClient ? { clientFrom: ticket.clientId, clientTo: updated.clientId } : {}),
+    });
 
     // Any staff touch counts as the first response.
     if (isStaff) await intake.markFirstResponse(updated, req.user);

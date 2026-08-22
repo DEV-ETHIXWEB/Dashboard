@@ -115,6 +115,10 @@ export interface LoginResponse {
   csrfToken: string;
   redirect?: string;
   requiresOtp?: boolean;
+  /** Set when an admin finished sign-in with a backup code instead of the emailed one. */
+  usedRecoveryCode?: boolean;
+  /** How many backup codes this admin has left, so the UI can nag at zero. */
+  recoveryCodesRemaining?: number;
   otpExpiresAt?: number;
   /** True when the sign-in code actually left the building by email. */
   codeEmailed?: boolean;
@@ -143,6 +147,14 @@ export const LINK_LIFETIMES: { minutes: number; label: string }[] = [
   { minutes: 60 * 24 * 3, label: "3 days" },
   { minutes: 60 * 24 * 7, label: "7 days" },
 ];
+
+/** What the Security page knows about an admin's backup codes. Never the codes. */
+export interface RecoveryCodeStatus {
+  total: number;
+  remaining: number;
+  used: number;
+  generatedAt: string | null;
+}
 
 export interface OtpLogEntry {
   id: string;

@@ -41,12 +41,64 @@ function originFromHeaders(req) {
   return host ? `${req.protocol}://${host}` : null;
 }
 
-/** Called once per request; the first usable value sticks. */
+/**
+ * Origins this deployment will admit to being, when APP_BASE_URL is not set.
+ *
+ * Whatever ends up in `observed` is glued onto the front of one-tap sign-in
+ * links in client welcome emails. Taking it from whoever spoke first meant an
+ * attacker who reached a freshly restarted server -- with an Origin header
+ * naming their own site -- had every subsequent welcome email carrying a
+ * working login link pointed at them. The client clicks, their server catches
+ * the token, and it replays as that client.
+ *
+ * So a learned origin now has to be one the operator already named somewhere:
+ * APP_BASE_URL itself, or an entry in CORS_ORIGINS. A header cannot nominate a
+ * new one.
+ */
+function allowedOrigins() {
+  return [process.env.APP_BASE_URL, ...String(process.env.CORS_ORIGINS || '').split(',')]
+    .map((s) => String(s || '').trim().replace(/\/$/, ''))
+    .filter(Boolean);
+}
+
+/**
+ * Whether an origin is one this process is allowed to believe it is.
+ *
+ * Outside production a loopback or private-LAN origin is also accepted, because
+ * that is the Vite dev proxy case this learning existed for in the first place
+ * -- and a developer's own machine is not a phishing target. A public address
+ * is never learned from a header in any environment.
+ */
+function mayLearn(origin) {
+  const clean = String(origin || '').replace(/\/$/, '');
+  if (!clean) return false;
+  if (allowedOrigins().includes(clean)) return true;
+  if (process.env.NODE_ENV === 'production') return false;
+  return !isPubliclyReachable(clean);
+}
+
+/** Called once per request; the first *allowed* value sticks. */
 function rememberFromRequest(req) {
   if (process.env.APP_BASE_URL || observed) return;
   const found = originFromHeaders(req);
-  if (!found) return;
+  if (!found || !mayLearn(found)) return;
   observed = found;
+}
+
+/**
+ * Say so at boot rather than letting the first client discover it.
+ *
+ * With no APP_BASE_URL and nothing learnable, `baseUrl()` is empty, and the
+ * callers that build links already treat that as "send the credentials without
+ * a one-tap link". That is the safe outcome, not a broken one -- but it is a
+ * degraded one, and it should not be a surprise.
+ */
+function warnIfUnset() {
+  if (process.env.APP_BASE_URL) return;
+  console.warn(
+    '[appUrl] APP_BASE_URL is not set. Absolute links in email (one-tap sign-in, the wordmark) ' +
+      'will be omitted rather than guessed from request headers. Set APP_BASE_URL in .env.',
+  );
 }
 
 /** Configured value first, then whatever the app learned from traffic. */
@@ -93,4 +145,4 @@ function logoUrl() {
   return `${base}/ethixweb.png`;
 }
 
-module.exports = { rememberFromRequest, baseUrl, logoUrl, isPubliclyReachable };
+module.exports = { rememberFromRequest, baseUrl, logoUrl, isPubliclyReachable, warnIfUnset };

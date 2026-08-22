@@ -58,10 +58,24 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
     if (!domain) return res.status(404).json({ error: 'Domain not found' });
     const patch = { ...req.body };
     delete patch.id;
+
+    // Same rule as projects: a domain row is shown in one client's portal, so
+    // the owner it is moved to has to be a real client account.
+    const movingClient = 'clientId' in patch && patch.clientId !== domain.clientId;
+    if (movingClient) {
+      const nextClient = await db.find('users', patch.clientId);
+      if (!nextClient || nextClient.role !== 'client') {
+        return res.status(400).json({ error: 'That is not a client account.' });
+      }
+    }
+
     const updated = await db.update('domains', req.params.id, patch);
-    // Tell this client's open tabs, not everyone's.
-    res.locals.liveAudience = [domain.clientId];
-    await audit(req.user.id, 'update', 'domain', req.params.id);
+    // Tell this client's open tabs, not everyone's -- both sides when it moved.
+    res.locals.liveAudience = [...new Set([domain.clientId, updated.clientId].filter(Boolean))];
+    await audit(req.user.id, 'update', 'domain', req.params.id, {
+      changed: Object.keys(patch),
+      ...(movingClient ? { clientFrom: domain.clientId, clientTo: updated.clientId } : {}),
+    });
     res.json({ domain: updated });
   } catch (err) {
     next(err);

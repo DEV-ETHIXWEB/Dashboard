@@ -42,10 +42,20 @@ app.use(helmet({
   },
 }));
 
+// A named list only. `*` is refused outright rather than quietly passed to the
+// cors package: paired with `credentials: true` it would let any site on the
+// internet make authenticated admin requests with the reader's own cookie.
 const corsOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map((s) => s.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .filter((origin) => {
+    if (origin === '*') {
+      console.warn('[cors] CORS_ORIGINS contains "*", which cannot be combined with credentials. Ignoring it.');
+      return false;
+    }
+    return true;
+  });
 if (corsOrigins.length > 0) {
   app.use(cors({ origin: corsOrigins, credentials: true }));
 }
@@ -63,6 +73,19 @@ app.use((req, res, next) => {
 app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), require('./routes/billing').webhookHandler);
 
 app.use(express.json({ limit: '2mb' }));
+
+// A body the parser could not read is a bad request, not a server fault. It
+// used to fall through to the catch-all below and answer 500, which says "we
+// broke" about something the caller did -- and buries real faults in noise.
+app.use((err, req, res, next) => {
+  if (err && (err.type === 'entity.parse.failed' || err instanceof SyntaxError)) {
+    return res.status(400).json({ error: 'That request body is not valid JSON.' });
+  }
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'That request body is too large.' });
+  }
+  return next(err);
+});
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
     // Helmet defaults every response to Cross-Origin-Resource-Policy:
@@ -142,10 +165,15 @@ if (require.main === module) {
     // cannot sign in without an admin reading a code out of the Login Codes
     // page -- which is the fallback, not the plan. Say so loudly at boot
     // rather than letting the first client discover it.
+    appUrl.warnIfUnset();
     if (!require('./utils/mailer').isEnabled()) {
       console.warn(
         '[mail] No mail transport is configured, so sign-in codes cannot be delivered. ' +
           'Clients will be stuck waiting on an admin. Set SMTP_*, RESEND_API_KEY, or MAIL_WEBHOOK_URL in .env.',
+      );
+      console.warn(
+        '[mail] Administrators now sign in with a password AND an emailed code, like everyone else. ' +
+          'Without a transport they cannot complete a sign-in either. Configure mail before restarting in production.',
       );
     }
   });

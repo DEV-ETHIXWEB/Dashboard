@@ -14,6 +14,10 @@ const mailer = require('../utils/mailer');
 const messages = require('../utils/emailMessages');
 const admins = require('../utils/admins');
 const loginLinks = require('../utils/loginLinks');
+const userFields = require('../utils/userFields');
+const provisioning = require('../utils/userProvisioning');
+const { sensitiveAdminLimiter, credentialIssueLimiter, recoveryCodeLimiter } = require('../utils/rateLimits');
+const recoveryCodes = require('../utils/recoveryCodes');
 const { baseUrl } = require('../utils/appUrl');
 
 router.use(requireAuth);
@@ -28,51 +32,6 @@ function handleAdmin(fn) {
       next(err);
     }
   };
-}
-
-/** Human labels for the sections a login can open, for the welcome email. */
-function sectionLabels(user) {
-  const keys = allowedPagesFor(user);
-  return CLIENT_PAGES.filter((p) => keys.includes(p.key)).map((p) => p.label);
-}
-
-/**
- * Email someone the credentials an admin just issued them. Best-effort: an
- * unreachable inbox must not fail the account creation, and the admin still
- * sees the password on screen either way.
- */
-async function emailCredentials(user, temporaryPassword, { invitedBy, isReset = false, ipAddress = null }) {
-  // Clients get a one-tap link in the same email, so the first sign-in costs
-  // no typing on a phone. Staff do not: their accounts can change other
-  // people's access, which a link in an inbox is not a strong enough gate for.
-  // Best-effort -- a link that cannot be minted must not stop the credentials
-  // going out.
-  let signInUrl = null;
-  if (user.role === 'client' && baseUrl()) {
-    try {
-      const { path } = await loginLinks.issueFor(user, { ipAddress, ttlMs: loginLinks.WELCOME_TOKEN_TTL_MS });
-      signInUrl = `${baseUrl()}${path}`;
-    } catch (err) {
-      console.error('Could not mint the welcome sign-in link:', err.message);
-    }
-  }
-
-  const result = await mailer.sendTemplate({
-    to: user.email,
-    message: messages.credentialsIssued({
-      user,
-      temporaryPassword,
-      expiresAt: user.passwordExpiresAt || null,
-      sections: user.role === 'client' ? sectionLabels(user) : null,
-      invitedBy,
-      isReset,
-      signInUrl,
-    }),
-    template: 'credentials',
-    entity: 'user',
-    entityId: user.id,
-  });
-  return Boolean(result.ok);
 }
 
 /**
@@ -109,16 +68,6 @@ async function announceRosterChange({ actor, target, change }) {
   }
 }
 
-const PASSWORD_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-function generatePassword(length = 14) {
-  let out = '';
-  const bytes = crypto.randomBytes(length);
-  for (let i = 0; i < length; i++) {
-    out += PASSWORD_ALPHABET[bytes[i] % PASSWORD_ALPHABET.length];
-  }
-  return out;
-}
-
 const { isFirebaseAdminConfigured, verifyFirebaseIdToken } = require('../utils/firebaseAdmin');
 
 router.post('/me/2fa/enable', requireCSRF, async (req, res, next) => {
@@ -146,6 +95,61 @@ router.post('/me/2fa/disable', requireCSRF, async (req, res, next) => {
     const updated = await db.update('users', req.user.id, { twoFactorEnabled: false, twoFactorContact: null });
     await audit(req.user.id, 'update', 'user', req.user.id, { action: '2fa_disabled' });
     res.json({ user: safeUser(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Backup codes: how many are left.
+ *
+ * Never the codes themselves. They are shown once, at the moment they are
+ * generated, and after that the server genuinely cannot produce them -- only
+ * their hashes are kept. A page that could re-display them would make the
+ * screen as good as the codes.
+ */
+router.get('/me/recovery-codes', async (req, res, next) => {
+  try {
+    if (!roles.isAdmin(req.user)) {
+      return res.status(403).json({ error: 'Backup codes are for administrator accounts.' });
+    }
+    res.json({ status: await recoveryCodes.statusFor(req.user.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Generate a fresh set, replacing any earlier one.
+ *
+ * Your own account only. An admin who could generate codes for another admin
+ * would be minting themselves a way into that account, which is the same power
+ * the password reset was locked down for.
+ */
+router.post('/me/recovery-codes', requireCSRF, recoveryCodeLimiter, async (req, res, next) => {
+  try {
+    if (!roles.isAdmin(req.user)) {
+      return res.status(403).json({ error: 'Backup codes are for administrator accounts.' });
+    }
+
+    const previous = await recoveryCodes.statusFor(req.user.id);
+    const codes = await recoveryCodes.issueFor(req.user.id);
+
+    await audit(req.user.id, 'recovery_codes', 'user', req.user.id, {
+      action: 'regenerated',
+      count: codes.length,
+      replaced: previous.total,
+    });
+    // Every other admin hears about it. A new set silently replacing an old one
+    // is indistinguishable from somebody who has taken the account doing the
+    // same thing.
+    await admins.notifyAdmins(
+      `${req.user.name} generated a new set of sign-in backup codes.`,
+      'security',
+      { exceptUserId: req.user.id },
+    );
+
+    res.json({ codes, status: await recoveryCodes.statusFor(req.user.id) });
   } catch (err) {
     next(err);
   }
@@ -199,14 +203,51 @@ router.get('/client-pages', (req, res) => {
   res.json({ pages: CLIENT_PAGES.map(({ key, label, description }) => ({ key, label, description })) });
 });
 
+/**
+ * The people list, in three widths.
+ *
+ * An admin gets the full records, because managing accounts is the job. Staff
+ * get the internal directory, because assigning work needs names. A client
+ * gets themselves plus the specific colleagues already working on their
+ * account -- and nothing else.
+ *
+ * That last one used to be the same list staff see: every employee and every
+ * administrator, each with their role attached. An outside customer was handed
+ * the internal team roster and told which two people to phish.
+ */
 router.get('/', async (req, res, next) => {
   try {
     const users = await db.all('users');
+
     if (req.user.role === 'admin') {
       return res.json({
         users: users.map((u) => ({ ...safeUser(u), allowedPages: parseAllowedPages(u.allowedPages) })),
       });
     }
+
+    if (req.user.role === 'client') {
+      // Whoever this client can already see the work of: the manager on their
+      // projects, and the person handling each of their tickets. Names, so the
+      // portal can say who replied -- never the role, so the roster stays shut.
+      const [projects, tickets] = await Promise.all([db.all('projects'), db.all('tickets')]);
+      const connected = new Set();
+      for (const p of projects) {
+        if (p.clientId === req.user.id && p.assignedPmId) connected.add(p.assignedPmId);
+      }
+      for (const t of tickets) {
+        if (t.clientId === req.user.id && t.assigneeId) connected.add(t.assigneeId);
+      }
+
+      const self = users.find((u) => u.id === req.user.id);
+      const visible = [
+        ...(self ? [{ id: self.id, name: self.name, role: self.role, company: self.company || null }] : []),
+        ...users
+          .filter((u) => u.role !== 'client' && connected.has(u.id))
+          .map((u) => ({ id: u.id, name: u.name, role: 'staff', company: null })),
+      ];
+      return res.json({ users: visible });
+    }
+
     const directory = users
       .filter((u) => u.role !== 'client' || u.id === req.user.id)
       .map((u) => ({ id: u.id, name: u.name, role: u.role, company: u.company || null }));
@@ -216,7 +257,7 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-router.post('/', requireCSRF, requireRole('admin'), async (req, res, next) => {
+router.post('/', requireCSRF, requireRole('admin'), credentialIssueLimiter, async (req, res, next) => {
   try {
     const {
       name, email, role, company, password, passwordExpiresAt, allowedPages, sendEmail,
@@ -241,7 +282,7 @@ router.post('/', requireCSRF, requireRole('admin'), async (req, res, next) => {
     // Page toggles only mean anything for clients; staff always see their whole role.
     const pages = role === 'client' ? normalizeAllowedPages(allowedPages) : null;
 
-    const plaintextPassword = password || generatePassword();
+    const plaintextPassword = password || provisioning.generatePassword();
 
     // An admin nobody has vouched for yet proposes; somebody else releases it.
     const gate = await approvals.gate(req, res, {
@@ -256,31 +297,40 @@ router.post('/', requireCSRF, requireRole('admin'), async (req, res, next) => {
     });
     if (gate.held) return;
 
-    const user = await db.insert('users', {
-      name, email, role, company: company || null, password: bcrypt.hashSync(plaintextPassword, 10),
+    const user = await provisioning.createUserRecord({
+      name, email, role, company: company || null, plaintextPassword,
       passwordExpiresAt: passwordExpiresAt != null ? Number(passwordExpiresAt) : null,
       allowedPages: pages === undefined ? null : pages,
-      // Only a client has a channel; staff reach all of Slack through the
-      // integrations page anyway.
       ...(role === 'client' ? normaliseChannel(slackChannelId, slackChannelName) : {}),
     });
-    await audit(req.user.id, 'create', 'user', user.id, pages ? { allowedPages: pages } : undefined);
+    await audit(req.user.id, 'create', 'user', user.id, {
+      role,
+      ...(pages ? { allowedPages: pages } : {}),
+    });
 
     // Get the bot into the channel now, while an admin is here to read the
     // answer, rather than at the moment the client first opens Messages.
-    const joined = await joinAssignedChannel(user);
+    const joined = await provisioning.joinAssignedChannel(user);
 
     // Default to emailing the credentials; an admin can opt out and hand them
     // over in person instead.
     const emailed = sendEmail === false
       ? false
-      : await emailCredentials(user, plaintextPassword, { invitedBy: req.user.name, ipAddress: req.ip });
+      : await provisioning.emailCredentials(user, plaintextPassword, { invitedBy: req.user.name, ipAddress: req.ip });
 
     if (role === 'admin') await announceRosterChange({ actor: req.user, target: user, change: 'added' });
+
+    // An administrator is issued backup codes with their password, and for the
+    // same reason: they are the account that cannot ask anyone else for help
+    // getting back in. Shown once, here, alongside the password. The new admin
+    // can replace them from their own Security page, which is what they should
+    // do if these were read over someone's shoulder.
+    const backupCodes = role === 'admin' ? await recoveryCodes.issueFor(user.id) : null;
 
     res.status(201).json({
       user: { ...safeUser(user), allowedPages: parseAllowedPages(user.allowedPages) },
       temporaryPassword: plaintextPassword,
+      ...(backupCodes ? { recoveryCodes: backupCodes } : {}),
       emailed,
       emailConfigured: mailer.isEnabled(),
       ...(joined ? { slackChannel: joined } : {}),
@@ -291,14 +341,53 @@ router.post('/', requireCSRF, requireRole('admin'), async (req, res, next) => {
   }
 });
 
-router.put('/:id', requireCSRF, requireRole('admin'), handleAdmin(async (req, res) => {
-  const patch = { ...req.body };
-  delete patch.id;
-  const sendEmail = patch.sendEmail;
-  delete patch.sendEmail;
+/**
+ * Edit somebody else's account.
+ *
+ * Three separate boundaries meet on this one route, and they are checked in
+ * this order because each is meaningless without the one above it:
+ *
+ *   1. Which fields may be written at all. The body is never copied onto the
+ *      row; only the names in utils/userFields.js survive. Admin standing is
+ *      not among them, at any spelling.
+ *   2. Who may touch this particular account. Another administrator's account
+ *      -- their password above all -- is a super admin's business alone.
+ *   3. Whether this administrator may act unsupervised, or whether the change
+ *      is parked for a second signature.
+ */
+router.put('/:id', requireCSRF, requireRole('admin'), credentialIssueLimiter, handleAdmin(async (req, res) => {
+  const body = req.body || {};
+
+  // Refuse by name rather than dropping silently. A caller reaching for
+  // `isSuperAdmin` -- or `is_super_admin`, or any other spelling of it -- gets
+  // told where that actually lives instead of a 200 that changed nothing.
+  const refused = userFields.unknownFields(body);
+  if (refused.length > 0) {
+    return res.status(400).json({
+      error: `These fields cannot be set here: ${refused.join(', ')}. `
+        + 'Admin standing is changed on the standing endpoint, and a password is changed on your own profile.',
+      fields: refused,
+    });
+  }
+
+  const patch = userFields.pickEditable(body);
+  const sendEmail = body.sendEmail;
 
   const before = await db.find('users', req.params.id);
   if (!before) return res.status(404).json({ error: 'User not found' });
+
+  const isSelf = before.id === req.user.id;
+
+  // An administrator's account is not ordinary user data. Resetting its
+  // password hands the account over outright -- admins sign in with a password
+  // plus an emailed code, and the person doing the reset is the one who reads
+  // the new password off the screen. So every edit of another admin, not only
+  // the password, belongs to whoever may appoint admins in the first place.
+  if (before.role === 'admin' && !isSelf && !roles.canManageAdmins(req.user)) {
+    return res.status(403).json({
+      error: 'Only a super admin can change another administrator’s account.',
+    });
+  }
 
   // Moving the last administrator off the admin role would lock the whole
   // workspace out of user management.
@@ -306,10 +395,26 @@ router.put('/:id', requireCSRF, requireRole('admin'), handleAdmin(async (req, re
     await admins.assertRosterSurvives(req.params.id, { nextRole: patch.role });
   }
 
+  if (patch.role !== undefined) {
+    const validRoles = ['admin', 'sales', 'project_manager', 'employee', 'client'];
+    if (!validRoles.includes(patch.role)) return res.status(400).json({ error: 'Invalid role' });
+  }
+
   if (patch.passwordExpiresAt !== undefined && patch.passwordExpiresAt !== null && !Number.isFinite(Number(patch.passwordExpiresAt))) {
     return res.status(400).json({ error: 'passwordExpiresAt must be a timestamp or null' });
   }
   if (patch.passwordExpiresAt != null) patch.passwordExpiresAt = Number(patch.passwordExpiresAt);
+
+  // Taking an address another account already uses would lock that account
+  // out. The self-service profile screen has always said so; this one used to
+  // let the database raise it as a 500 instead.
+  if (patch.email && String(patch.email).toLowerCase() !== String(before.email).toLowerCase()) {
+    const taken = await db.filter(
+      'users',
+      (u) => u.id !== req.params.id && String(u.email).toLowerCase() === String(patch.email).toLowerCase(),
+    );
+    if (taken.length > 0) return res.status(409).json({ error: 'That email is already in use' });
+  }
 
   if ('slackChannelId' in patch || 'slackChannelName' in patch) {
     Object.assign(patch, normaliseChannel(patch.slackChannelId, patch.slackChannelName));
@@ -323,40 +428,49 @@ router.put('/:id', requireCSRF, requireRole('admin'), handleAdmin(async (req, re
     if (patch.allowedPages === undefined) delete patch.allowedPages;
   }
 
-  let temporaryPassword;
-  if (patch.regeneratePassword) {
-    temporaryPassword = generatePassword();
-    patch.password = bcrypt.hashSync(temporaryPassword, 10);
-  } else if (patch.password) {
-    patch.password = bcrypt.hashSync(patch.password, 10);
-  } else {
-    delete patch.password;
-  }
-  delete patch.regeneratePassword;
+  // An explicit password is hashed straight away -- the admin already knows it,
+  // so nothing secret has to be parked anywhere.
+  if (body.password) patch.password = bcrypt.hashSync(body.password, 10);
 
-  // Two separate rules on the same call. Who may touch the admin roster at all
-  // is a hard limit; whether this particular admin needs a second signature is
-  // the softer one below it.
+  // A *generated* password is different: on the approval path the value would
+  // have to survive in the queue until somebody signs it off, and a plaintext
+  // password sitting in a table is exactly what this codebase should not do.
+  // So the intent travels and the queue mints the password at execution time,
+  // emailing it to the account itself.
+  const wantsGeneratedPassword = Boolean(body.regeneratePassword);
+  let temporaryPassword;
+  if (wantsGeneratedPassword && !roles.needsApproval(req.user)) {
+    temporaryPassword = provisioning.generatePassword();
+    patch.password = bcrypt.hashSync(temporaryPassword, 10);
+  }
+
+  // Who may touch the admin roster at all is a hard limit, separate from
+  // whether this particular admin needs a second signature.
   const touchesAdminRoster = (patch.role && patch.role !== before.role)
     && (patch.role === 'admin' || before.role === 'admin');
   if (touchesAdminRoster && !roles.canManageAdmins(req.user)) {
     return res.status(403).json({ error: 'Only a super admin can add or remove an administrator.' });
   }
-  if ('isSuperAdmin' in patch || 'adminTrusted' in patch) {
-    return res.status(400).json({ error: 'Use the super-admin endpoints to change admin standing.' });
-  }
+
+  const changedFields = Object.keys(patch).filter((k) => k !== 'password');
 
   const gate = await approvals.gate(req, res, {
     action: 'user.update',
-    summary: describeUserChange(before, patch, temporaryPassword != null),
-    payload: { userId: req.params.id, patch },
+    summary: describeUserChange(before, patch, wantsGeneratedPassword),
+    payload: {
+      userId: req.params.id,
+      patch,
+      regeneratePassword: wantsGeneratedPassword,
+      sendEmail: sendEmail !== false,
+      requestedBy: req.user.name,
+    },
   });
   if (gate.held) return;
 
   const updated = await db.update('users', req.params.id, patch);
   if (!updated) return res.status(404).json({ error: 'User not found' });
 
-  const joinedChannel = patch.slackChannelId ? await joinAssignedChannel(updated) : null;
+  const joinedChannel = patch.slackChannelId ? await provisioning.joinAssignedChannel(updated) : null;
 
   // Role or section access may have moved under this person's feet. Their open
   // tabs re-read who they are and redraw the navigation without a refresh.
@@ -366,11 +480,26 @@ router.put('/:id', requireCSRF, requireRole('admin'), handleAdmin(async (req, re
     await db.removeWhere('sessions', (s) => s.userId === req.params.id);
   }
 
-  await audit(req.user.id, 'update', 'user', req.params.id, temporaryPassword ? { passwordRegenerated: true } : undefined);
+  // Backup codes only mean anything for an administrator, and a stale set on a
+  // demoted account is a credential nobody is watching.
+  if (patch.role && patch.role !== before.role && before.role === 'admin') {
+    await recoveryCodes.clearFor(req.params.id);
+  }
+
+  // What changed, not merely that something did. An audit row reading
+  // "update, user" with no detail is the difference between noticing an
+  // account takeover and never knowing it happened. Field names only -- never
+  // a password or a hash.
+  await audit(req.user.id, 'update', 'user', req.params.id, {
+    changed: changedFields,
+    ...(patch.role && patch.role !== before.role ? { roleFrom: before.role, roleTo: patch.role } : {}),
+    ...(temporaryPassword ? { passwordRegenerated: true } : {}),
+    targetRole: before.role,
+  });
 
   // A regenerated password is useless if the person never receives it.
   const emailed = temporaryPassword && sendEmail !== false
-    ? await emailCredentials(updated, temporaryPassword, { invitedBy: req.user.name, isReset: true, ipAddress: req.ip })
+    ? await provisioning.emailCredentials(updated, temporaryPassword, { invitedBy: req.user.name, isReset: true, ipAddress: req.ip })
     : false;
 
   if (patch.role && patch.role !== before.role && (patch.role === 'admin' || before.role === 'admin')) {
@@ -416,6 +545,7 @@ router.delete('/:id', requireCSRF, requireRole('admin'), handleAdmin(async (req,
 
   await db.removeWhere('sessions', (s) => s.userId === req.params.id);
   await db.removeWhere('otp_codes', (o) => o.userId === req.params.id);
+  await recoveryCodes.clearFor(req.params.id);
 
   const tasks = await db.filter('tasks', (t) => t.assigneeId === req.params.id);
   for (const t of tasks) await db.update('tasks', t.id, { assigneeId: null });
@@ -436,7 +566,7 @@ router.delete('/:id', requireCSRF, requireRole('admin'), handleAdmin(async (req,
  * Promoting someone is not the same kind of act as fixing a typo in a name,
  * and it should not be possible to do one while meaning the other.
  */
-router.post('/:id/standing', requireCSRF, requireRole('admin'), handleAdmin(async (req, res) => {
+router.post('/:id/standing', requireCSRF, requireRole('admin'), sensitiveAdminLimiter, handleAdmin(async (req, res) => {
   if (!roles.canManageAdmins(req.user)) {
     return res.status(403).json({ error: 'Only a super admin can change admin standing.' });
   }
@@ -501,31 +631,6 @@ router.post('/:id/standing', requireCSRF, requireRole('admin'), handleAdmin(asyn
 }));
 
 /**
- * Add the bot to a client's channel as soon as one is chosen.
- *
- * A public channel it can join itself; a private one needs an invite from
- * somebody already in it. Either way the answer comes back now, to the admin
- * who just made the choice, instead of surfacing later as an empty page the
- * client cannot explain. Best-effort: Slack being down must not fail the
- * account change that already succeeded.
- */
-async function joinAssignedChannel(user) {
-  if (!user?.slackChannelId) return null;
-  const slack = require('../utils/slack');
-  if (!slack.isEnabled()) {
-    return { joined: false, message: 'Slack is not connected, so the bot could not be added yet.' };
-  }
-  try {
-    const result = await slack.joinChannel(user.slackChannelId);
-    return result.joined
-      ? { joined: true }
-      : { joined: false, message: result.message || 'The bot could not add itself to that channel.' };
-  } catch (err) {
-    return { joined: false, message: err.message };
-  }
-}
-
-/**
  * The Slack channel a client is tied to.
  *
  * Slack ids look like C0123ABCD (public), G… (private), or D… (a DM). A DM is
@@ -544,16 +649,37 @@ function normaliseChannel(id, name) {
   };
 }
 
-/** A one-line description of what an update actually changes, for the queue. */
+/**
+ * A one-line description of what an update actually changes, for the queue.
+ *
+ * The approver reads this sentence and nothing else before clicking. It used
+ * to describe only the fields it happened to know about, so anything it did
+ * not recognise was summarised as "their details" -- which is how a promotion
+ * came to be presented as a name change. Every field in the patch is now
+ * named, and anything unrecognised is listed raw rather than swallowed.
+ */
 function describeUserChange(before, patch, passwordRegenerated) {
+  const described = new Set();
   const parts = [];
-  if (patch.role && patch.role !== before.role) parts.push(`role to ${patch.role}`);
-  if ('allowedPages' in patch) parts.push('which sections they can open');
-  if (patch.name && patch.name !== before.name) parts.push('their name');
-  if (patch.email && patch.email !== before.email) parts.push(`their email to ${patch.email}`);
-  if ('passwordExpiresAt' in patch) parts.push('when their access expires');
-  if (passwordRegenerated) parts.push('a new password');
-  const what = parts.length > 0 ? parts.join(', ') : 'their details';
+  const say = (field, text) => { described.add(field); if (text) parts.push(text); };
+
+  say('role', patch.role && patch.role !== before.role ? `their role from ${before.role} to ${patch.role}` : null);
+  say('allowedPages', 'allowedPages' in patch ? 'which sections they can open' : null);
+  say('name', patch.name && patch.name !== before.name ? `their name to "${patch.name}"` : null);
+  say('email', patch.email && patch.email !== before.email ? `their email to ${patch.email}` : null);
+  say('company', 'company' in patch && patch.company !== before.company ? 'their company' : null);
+  say('passwordExpiresAt', 'passwordExpiresAt' in patch ? 'when their access expires' : null);
+  say('slackChannelId', 'slackChannelId' in patch ? 'their Slack channel' : null);
+  say('slackChannelName', null);
+  say('password', passwordRegenerated ? 'a new password' : null);
+
+  // Anything this function has not been taught about is still shown, by name.
+  // Silence here is exactly what made the queue misleading.
+  for (const key of Object.keys(patch)) {
+    if (!described.has(key)) parts.push(`${key}`);
+  }
+
+  const what = parts.length > 0 ? parts.join(', ') : 'nothing';
   return `Change ${what} for ${before.name} (${before.email})`;
 }
 
