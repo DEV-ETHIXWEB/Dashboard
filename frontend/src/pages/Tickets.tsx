@@ -4,7 +4,8 @@ import { toast } from "sonner";
 import { Ticket as TicketIcon, Plus, Search, X } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useTickets, useUpdateTicket, useUsers } from "@/hooks/useData";
-import { wasHeld } from "@/hooks/useApprovals";
+import { isHeldForApproval } from "@/lib/api";
+
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
@@ -110,14 +111,14 @@ export default function Tickets() {
     updateTicket.mutate(
       { id, patch: { status } },
       {
-        onSuccess: (result) => {
-          // Closing a ticket emails the client, so an admin who has not been
-          // vouched for has it held. Reporting "updated" here would send them
-          // away believing the client had already been told.
-          if (wasHeld(result)) toast.success(result.message, { duration: 6000 });
-          else toast.success("Ticket updated");
-        },
-        onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to update ticket"),
+        onSuccess: () => toast.success("Ticket updated"),
+        // Closing a ticket emails the client, so an admin who has not been
+        // vouched for has it held. Reporting "updated" would send them away
+        // believing the client had already been told.
+        onError: (err) =>
+          isHeldForApproval(err)
+            ? toast.success(err.message, { duration: 6000 })
+            : toast.error(err instanceof Error ? err.message : "Failed to update ticket"),
       },
     );
   }

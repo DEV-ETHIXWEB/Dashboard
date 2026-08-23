@@ -128,9 +128,23 @@ export default function DocumentView() {
       ) : viewable ? (
         // An iframe, not <object>: the app's CSP sets `object-src 'none'`, so an
         // <object> would render nothing at all here.
+        //
+        // Sandboxed because the bytes inside are an upload, and an upload is
+        // whatever the person who sent it decided. Without this the document
+        // renders same-origin, and anything it manages to execute runs as the
+        // viewer.
+        //
+        // `allow-scripts` without `allow-same-origin` is the point: the frame
+        // gets an opaque origin, so scripts inside it cannot read this app's
+        // cookies, storage, or DOM, and its requests are cross-origin against
+        // a SameSite=Lax session that will not travel. A bare sandbox="" would
+        // be tighter still, but it stops Chrome's PDF viewer working, and PDFs
+        // are most of what this page shows.
         <iframe
           src={src}
           title={report.name}
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
           className="h-[75svh] w-full rounded-2xl border border-border bg-card"
         />
       ) : (

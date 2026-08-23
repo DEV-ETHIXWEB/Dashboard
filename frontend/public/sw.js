@@ -23,7 +23,11 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(SHELL_CACHE)
-      .then((cache) => cache.addAll([SHELL_URL, "/favicon.svg", "/emblem-mark.png"]))
+      // /favicon.svg used to be in this list and has never existed -- the file
+      // is favicon.png. It did not fail loudly because the SPA fallback answers
+      // every unknown path with the app shell at 200, so the worker cached a
+      // page of HTML under a .svg URL and served it back as an icon.
+      .then((cache) => cache.addAll([SHELL_URL, "/favicon.png", "/emblem-mark.png"]))
       .catch(() => undefined)
       .then(() => self.skipWaiting()),
   );
@@ -48,8 +52,40 @@ function isImmutableAsset(url) {
   return url.pathname.startsWith("/assets/") || /\.(woff2?|ttf|otf)$/.test(url.pathname);
 }
 
+/**
+ * The brand artwork, named by where it lives rather than by how it is spelled.
+ *
+ * Matching a bare extension meant any same-origin path ending in .png was
+ * cacheable -- including one serving somebody's uploaded document, if a
+ * download route is ever mounted outside /api/. The static art sits at the root
+ * and under /mail-icons/, and that is the whole of it.
+ */
+const BRAND_ART = new Set([
+  "/favicon.png",
+  "/emblem-mark.png",
+  "/emblem-mark-red.png",
+  "/ethixweb.png",
+  "/icons.svg",
+  "/spiderweb.svg",
+]);
+
 function isBrandArt(url) {
-  return /\.(svg|png|jpg|jpeg|webp|ico)$/.test(url.pathname);
+  return BRAND_ART.has(url.pathname) || url.pathname.startsWith("/mail-icons/");
+}
+
+/**
+ * Whether a response is safe to keep under the URL that was asked for.
+ *
+ * The SPA fallback answers every unknown path with the app shell at 200, so a
+ * hashed chunk that goes missing after a deploy does not 404 -- it returns
+ * HTML. Cached under its .js name by a cache-first rule that never revalidates,
+ * that leaves the tab permanently broken for that one visitor. A document is
+ * only ever the right answer for a navigation.
+ */
+function isCacheableAsset(res) {
+  if (!res || !res.ok || res.type === "opaque" || res.redirected) return false;
+  const type = res.headers.get("content-type") || "";
+  return !type.includes("text/html");
 }
 
 self.addEventListener("fetch", (event) => {
@@ -75,7 +111,7 @@ self.addEventListener("fetch", (event) => {
         const hit = await cache.match(request);
         if (hit) return hit;
         const res = await fetch(request);
-        if (res.ok) cache.put(request, res.clone());
+        if (isCacheableAsset(res)) cache.put(request, res.clone());
         return res;
       }),
     );
@@ -88,7 +124,7 @@ self.addEventListener("fetch", (event) => {
         const hit = await cache.match(request);
         const network = fetch(request)
           .then((res) => {
-            if (res.ok) cache.put(request, res.clone());
+            if (isCacheableAsset(res)) cache.put(request, res.clone());
             return res;
           })
           .catch(() => hit || Response.error());

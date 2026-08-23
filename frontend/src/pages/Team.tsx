@@ -19,7 +19,8 @@ import {
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useUsers, useCreateUser, useUpdateUser, useDeleteUser } from "@/hooks/useData";
-import { heldMessage, useSetStanding, wasHeld } from "@/hooks/useApprovals";
+import { useSetStanding } from "@/hooks/useApprovals";
+import { isHeldForApproval } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
@@ -110,13 +111,20 @@ export default function Team() {
       updateUser.mutate(
         { id: editing.id, patch },
         {
-          onSuccess: (result) => {
-            // A 202 means the change is parked for a second signature. Saying
-            // "updated" here would send them away believing it landed.
-            toast.success(heldMessage(result, "Team member updated"));
+          onSuccess: () => {
+            toast.success("Team member updated");
             setOpen(false);
           },
-          onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to update"),
+          // A 202 is parked for a second signature, not applied. Saying
+          // "updated" would send them away believing it landed.
+          onError: (err) => {
+            if (isHeldForApproval(err)) {
+              toast.success(err.message, { duration: 6000 });
+              setOpen(false);
+              return;
+            }
+            toast.error(err instanceof Error ? err.message : "Failed to update");
+          },
         },
       );
     } else {
@@ -128,7 +136,7 @@ export default function Team() {
         { name, email, role, company: company || null, password },
         {
           onSuccess: (result) => {
-            toast.success(heldMessage(result, "Team member added"));
+            toast.success("Team member added");
             // A new administrator is issued backup sign-in codes with their
             // password, and this is the only moment either is visible. Hand
             // both over together; the new admin can replace the codes from
@@ -136,7 +144,16 @@ export default function Team() {
             if (result.recoveryCodes?.length) setNewAdminCodes({ name, codes: result.recoveryCodes });
             setOpen(false);
           },
-          onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to add member"),
+          // Held for approval: no account exists yet, so there are no codes to
+          // hand over and nothing to show but the queue's own message.
+          onError: (err) => {
+            if (isHeldForApproval(err)) {
+              toast.success(err.message, { duration: 6000 });
+              setOpen(false);
+              return;
+            }
+            toast.error(err instanceof Error ? err.message : "Failed to add member");
+          },
         },
       );
     }
@@ -164,11 +181,11 @@ export default function Team() {
   function remove(u: UserRecord) {
     if (!window.confirm(`Remove ${u.name}? Their assigned tasks/tickets will show as unassigned.`)) return;
     deleteUser.mutate(u.id, {
-      onSuccess: (result) => {
-        if (wasHeld(result)) toast.success(result.message);
-        else toast.success("User removed");
-      },
-      onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to remove user"),
+      onSuccess: () => toast.success("User removed"),
+      onError: (err) =>
+        isHeldForApproval(err)
+          ? toast.success(err.message, { duration: 6000 })
+          : toast.error(err instanceof Error ? err.message : "Failed to remove user"),
     });
   }
 

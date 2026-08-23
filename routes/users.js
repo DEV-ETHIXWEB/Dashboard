@@ -280,7 +280,12 @@ router.post('/', requireCSRF, requireRole('admin'), credentialIssueLimiter, asyn
     }
 
     // Page toggles only mean anything for clients; staff always see their whole role.
-    const pages = role === 'client' ? normalizeAllowedPages(allowedPages) : null;
+    let pages;
+    try {
+      pages = role === 'client' ? normalizeAllowedPages(allowedPages) : null;
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
 
     const plaintextPassword = password || provisioning.generatePassword();
 
@@ -421,7 +426,12 @@ router.put('/:id', requireCSRF, requireRole('admin'), credentialIssueLimiter, ha
   }
 
   if ('allowedPages' in patch) {
-    const pages = normalizeAllowedPages(patch.allowedPages);
+    let pages;
+    try {
+      pages = normalizeAllowedPages(patch.allowedPages);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
     // Postgres needs JSON text and Firestore needs a real array; the driver
     // layer handles that, but null has to survive as an explicit "no limits".
     patch.allowedPages = pages === undefined ? undefined : pages;
@@ -497,8 +507,12 @@ router.put('/:id', requireCSRF, requireRole('admin'), credentialIssueLimiter, ha
     targetRole: before.role,
   });
 
-  // A regenerated password is useless if the person never receives it.
-  const emailed = temporaryPassword && sendEmail !== false
+  // A regenerated password is useless if the person never receives it. When it
+  // is being withheld from the person doing the resetting, the email is the
+  // only copy, so opting out of it is not offered -- that combination would set
+  // a password nobody on earth knows.
+  const mustEmail = before.role === 'admin' && before.id !== req.user.id;
+  const emailed = temporaryPassword && (mustEmail || sendEmail !== false)
     ? await provisioning.emailCredentials(updated, temporaryPassword, { invitedBy: req.user.name, isReset: true, ipAddress: req.ip })
     : false;
 
@@ -510,9 +524,30 @@ router.put('/:id', requireCSRF, requireRole('admin'), credentialIssueLimiter, ha
     });
   }
 
+  // Handing the new password back on screen is how an admin passes credentials
+  // to a client or a staff member in person, and that stays. It is not how one
+  // administrator should come by another administrator's password: reset a
+  // peer, read it off the response, sign in as them, and the log shows only a
+  // routine password change. For that one case the password goes to the
+  // owner's inbox and nowhere else -- the person resetting it never sees it.
+  const targetIsPeerAdmin = before.role === 'admin' && !isSelf;
+  const withholdPassword = Boolean(temporaryPassword) && targetIsPeerAdmin;
+
   res.json({
     user: { ...safeUser(updated), allowedPages: parseAllowedPages(updated.allowedPages) },
-    ...(temporaryPassword ? { temporaryPassword, emailed, emailConfigured: mailer.isEnabled() } : {}),
+    ...(temporaryPassword && !withholdPassword
+      ? { temporaryPassword, emailed, emailConfigured: mailer.isEnabled() }
+      : {}),
+    ...(withholdPassword
+      ? {
+        passwordSentToOwner: true,
+        emailed,
+        emailConfigured: mailer.isEnabled(),
+        message: emailed
+          ? `A new password was emailed to ${updated.email}. It is not shown here.`
+          : `A new password was set but could not be emailed to ${updated.email}. They will need backup codes or a server-side reset.`,
+      }
+      : {}),
     ...(joinedChannel ? { slackChannel: joinedChannel } : {}),
   });
 }));

@@ -44,7 +44,13 @@ export function canSeePage(
   if (pageKey == null) return true;
   if (user.role !== "client") return true;
   const allowed = user.allowedPages;
-  return allowed == null ? true : allowed.includes(pageKey);
+  // null/undefined is the documented "no restriction" for logins made before
+  // the toggles existed. Anything else that is not a list is unreadable, and an
+  // unreadable value must not be the reason a section opens -- the server takes
+  // the same line in parseAllowedPages.
+  if (allowed == null) return true;
+  if (!Array.isArray(allowed)) return false;
+  return allowed.includes(pageKey);
 }
 
 /** Human summary for the admin list: "All sections" or "Projects, Billing". */

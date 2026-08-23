@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ShieldCheck, Loader2, Lock, Activity, Mail, Accessibility, Sun, Moon, Monitor, Check, Clock } from "lucide-react";
+import { ShieldCheck, Loader2, Lock, Activity, Mail, Sun, Moon, Monitor, Check, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -227,13 +227,19 @@ export default function Login() {
     }
   }
 
+  // The control opens a light/dark/system picker, so it wears the mode it is
+  // currently in rather than a generic glyph -- you can read the theme off the
+  // button without opening it.
+  const ThemeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
+  const themeLabel = theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System";
+
   return (
     <div className="relative flex min-h-svh items-center justify-center overflow-hidden bg-gradient-to-b from-secondary/50 via-background to-background px-0 py-0 text-foreground sm:px-6 sm:py-10 lg:px-10">
       <div ref={themeMenuRef} className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50">
         {themeMenuOpen && (
           <div className="absolute bottom-12 right-0 w-44 rounded-xl border border-border/80 bg-card/95 p-2 shadow-2xl backdrop-blur-md animate-in fade-in-0 zoom-in-95 duration-150 z-50">
             <div className="px-2 py-1 t-label text-muted-foreground tracking-wider flex items-center gap-1.5">
-              <Accessibility className="size-3.5 text-primary shrink-0" />
+              <ThemeIcon className="size-3.5 text-primary shrink-0" />
               <span>Theme options</span>
             </div>
             <div className="my-1.5 h-[1px] bg-border/60" />
@@ -303,12 +309,12 @@ export default function Login() {
           type="button"
           size="icon"
           variant="outline"
-          aria-label="Accessibility & Theme settings"
-          title="Accessibility & Theme settings"
+          aria-label={`Theme: ${themeLabel}. Change theme`}
+          title={`Theme: ${themeLabel}`}
           onClick={() => setThemeMenuOpen((prev) => !prev)}
           className="size-10 sm:size-11 rounded-full border-border/80 bg-card/90 text-primary shadow-xl backdrop-blur-md hover:bg-card hover:scale-105 active:scale-95 transition-all cursor-pointer ring-1 ring-primary/20"
         >
-          <Accessibility className="size-5" />
+          <ThemeIcon className="size-5" />
         </Button>
       </div>
 
