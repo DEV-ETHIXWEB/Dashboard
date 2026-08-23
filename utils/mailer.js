@@ -303,6 +303,22 @@ function storableHtml(entry) {
 }
 
 /**
+ * What is safe to keep of this message's subject.
+ *
+ * Withholding the body of a sign-in email is only half the job: the subject
+ * leads with the code, because someone mid-login reads it off the notification
+ * without opening anything. Stored as-is, that put every live code on the Mail
+ * page, readable by any admin -- passively, unaudited, and unrate-limited,
+ * which is weaker than the reveal endpoint that exists for exactly this and is
+ * held to trusted admins. The inbox still gets the code; the log does not.
+ */
+function storableSubject(entry) {
+  const subject = String(entry.subject || '');
+  if (!UNLOGGED_BODIES.has(entry.template)) return subject;
+  return subject.replace(/\b\d{6}\b/g, '[redacted]');
+}
+
+/**
  * Record what happened. Logging is best-effort too: a missing table on an old
  * deployment must not turn a delivered email into a thrown error.
  */
@@ -317,7 +333,7 @@ async function logEmail(entry) {
     await db.insert('email_log', {
       id: uuidv4(),
       toEmails: entry.to.join(', '),
-      subject: entry.subject || '',
+      subject: storableSubject(entry),
       template: entry.template || 'custom',
       status: entry.status,
       transport: entry.transport || transportName(),
