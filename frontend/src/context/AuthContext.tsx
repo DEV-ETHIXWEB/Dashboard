@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, setCsrfToken } from "@/lib/api";
+import { clearOfflineCaches } from "@/lib/pwa";
 import { NO_CAPABILITIES, type Capabilities, type PublicConfig, type User } from "@/lib/types";
 
 interface AuthContextValue {
@@ -77,6 +78,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setCan(NO_CAPABILITIES);
       queryClient.clear();
+      // The offline shell outlives the session otherwise. Nothing private is in
+      // it -- the worker never caches /api/ -- but the next person on a shared
+      // phone should not inherit a warm app either, and sw.js has always had
+      // the handler for this. Nothing had ever called it.
+      clearOfflineCaches();
     }
   }
 
