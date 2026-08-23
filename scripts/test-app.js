@@ -46,7 +46,21 @@ function makeClient(base) {
       const text = await res.text();
       let data = null;
       try { data = JSON.parse(text); } catch { data = text; }
-      return { status: res.status, data, text };
+      return { status: res.status, data, text, headers: res.headers };
+    },
+    /** The same session, sending multipart -- the only way to reach an upload. */
+    async upload(path, fields, file) {
+      const form = new FormData();
+      for (const [k, v] of Object.entries(fields)) form.set(k, v);
+      if (file) form.set('file', new Blob([file.bytes], { type: file.type }), file.name);
+      const headers = {};
+      if (jar.size) headers.Cookie = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+      if (csrf) headers['X-CSRF-Token'] = csrf;
+      const res = await fetch(base + path, { method: 'POST', headers, body: form });
+      const text = await res.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch { data = text; }
+      return { status: res.status, data, text, headers: res.headers };
     },
   };
 }
@@ -828,6 +842,140 @@ async function main() {
 
     await admin.req('DELETE', `/api/domains/${domainId}`);
   }
+
+  // --- projects ------------------------------------------------------------
+  // Full CRUD on three of the busiest sections had no coverage at all, so a
+  // regression in any of them would have shipped silently.
+  r = await admin.req('POST', '/api/projects', {
+    name: 'Coverage Project', type: 'Website', clientId, status: 'In Progress',
+  });
+  check('an admin can create a project', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+  const coverProjectId = r.data.project?.id;
+
+  r = await admin.req('GET', '/api/projects');
+  check('the new project is in the list', (r.data.projects || []).some((p) => p.id === coverProjectId));
+
+  r = await admin.req('PUT', `/api/projects/${coverProjectId}`, { status: 'On Track' });
+  check('an admin can update a project', r.status === 200 && r.data.project?.status === 'On Track', `${r.status} ${r.text.slice(0, 160)}`);
+
+  r = await client.req('POST', '/api/projects', { name: 'Nope', clientId });
+  check('a client cannot create a project', r.status === 403, `${r.status}`);
+
+  // --- tasks ---------------------------------------------------------------
+  r = await admin.req('POST', '/api/tasks', {
+    projectId: coverProjectId, name: 'Coverage Task',
+  });
+  check('an admin can create a task', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+  const coverTaskId = r.data.task?.id;
+
+  r = await admin.req('PUT', `/api/tasks/${coverTaskId}`, { status: 'Done' });
+  check('an admin can complete a task', r.status === 200 && r.data.task?.status === 'Done', `${r.status} ${r.text.slice(0, 160)}`);
+
+  r = await admin.req('POST', '/api/tasks', { name: 'No project' });
+  check('a task without a project is refused', r.status === 400, `${r.status}`);
+
+  // A client is not blocked from the board outright -- they see the tasks on
+  // their own projects and nothing else, so assert the scoping, not a 403.
+  const clientProjects = (await client.req('GET', '/api/projects')).data.projects || [];
+  const ownProjectIds = new Set(clientProjects.map((p) => p.id));
+  r = await client.req('GET', '/api/tasks');
+  const foreign = (r.data.tasks || []).filter((t) => t.projectId && !ownProjectIds.has(t.projectId));
+  check('a client sees only tasks on their own projects', r.status === 200 && foreign.length === 0, `${r.status}, ${foreign.length} foreign`);
+
+  r = await client.req('POST', '/api/tasks', { projectId: coverProjectId, name: 'Nope' });
+  check('a client cannot create a task', r.status === 403, `${r.status}`);
+
+  r = await admin.req('DELETE', `/api/tasks/${coverTaskId}`);
+  check('an admin can delete a task', r.status === 200, `${r.status}`);
+
+  // --- budget --------------------------------------------------------------
+  r = await admin.req('POST', '/api/budget', {
+    clientId, label: 'Coverage Ads', amount: 1200,
+  });
+  check('an admin can record a budget line', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+  const coverBudgetId = r.data.item?.id;
+
+  r = await admin.req('GET', '/api/budget');
+  check('the budget line is listed', (r.data.items || []).some((i) => i.id === coverBudgetId), r.text.slice(0, 160));
+
+  r = await admin.req('POST', '/api/budget', { clientId, label: 'No amount' });
+  check('a budget line without an amount is refused', r.status === 400, `${r.status}`);
+
+  r = await client.req('POST', '/api/budget', { clientId, label: 'Nope', amount: 5 });
+  check('a client cannot write a budget line', r.status === 403, `${r.status}`);
+
+  r = await admin.req('DELETE', `/api/budget/${coverBudgetId}`);
+  check('an admin can remove a budget line', r.status === 200, `${r.status}`);
+
+  await admin.req('DELETE', `/api/projects/${coverProjectId}`);
+
+  // --- report upload -------------------------------------------------------
+  // The multipart path, the size cap, and who is allowed to reach it. None of
+  // this was exercised, and it is the one route that accepts arbitrary bytes.
+  r = await admin.upload('/api/reports', { clientId, category: 'General' }, {
+    name: 'coverage.txt', type: 'text/plain', bytes: 'hello from the coverage test',
+  });
+  check('an admin can upload a document', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+  const coverReportId = r.data.report?.id;
+  check('the stored row knows it has bytes', r.data.report?.hasFile === true, JSON.stringify(r.data.report));
+  check('the upload never echoes the file back', r.data.report?.contentBase64 === undefined);
+
+  r = await admin.req('GET', `/api/reports/${coverReportId}/download`);
+  check('the document downloads again', r.status === 200 && r.text.includes('coverage test'), `${r.status}`);
+
+  r = await admin.upload('/api/reports', { clientId }, null);
+  check('an upload with no file is refused', r.status === 400, `${r.status}`);
+
+  r = await admin.upload('/api/reports', { category: 'General' }, {
+    name: 'x.txt', type: 'text/plain', bytes: 'x',
+  });
+  check('an upload with no client is refused', r.status === 400, `${r.status}`);
+
+  r = await client.upload('/api/reports', { clientId, category: 'General' }, {
+    name: 'client.txt', type: 'text/plain', bytes: 'nope',
+  });
+  check('a client cannot upload a document', r.status === 403, `${r.status}`);
+
+  // An SVG is a document that can carry script, so it is refused at the door
+  // rather than merely kept off the inline list.
+  r = await admin.upload('/api/reports', { clientId, category: 'General' }, {
+    name: 'art.svg', type: 'image/svg+xml', bytes: '<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>',
+  });
+  check('an SVG is refused on upload', r.status === 415, `${r.status} ${r.text.slice(0, 160)}`);
+
+  r = await admin.upload('/api/reports', { clientId, category: 'General' }, {
+    name: 'payload.html', type: 'text/html', bytes: '<script>alert(1)</script>',
+  });
+  check('an HTML file is refused on upload', r.status === 415, `${r.status} ${r.text.slice(0, 160)}`);
+
+  // What a browser is allowed to render in place, and how it is labelled.
+  const disposition = (await admin.req('GET', `/api/reports/${coverReportId}/download?disposition=inline`))
+    .headers?.get('content-disposition') || '';
+  check('a viewable type may be shown inline', disposition.startsWith('inline'), disposition);
+
+  const attached = (await admin.req('GET', `/api/reports/${coverReportId}/download`))
+    .headers?.get('content-disposition') || '';
+  check('and is a download without that flag', attached.startsWith('attachment'), attached);
+
+  await admin.req('DELETE', `/api/reports/${coverReportId}`);
+
+
+  // --- backup sign-in codes ------------------------------------------------
+  // An administrator's way back in when mail is down. Never covered, and it is
+  // the only path that still works when the transport does not.
+  r = await admin.req('GET', '/api/users/me/recovery-codes');
+  check('an admin can read their backup code status', r.status === 200 && typeof r.data.status?.remaining === 'number', `${r.status} ${r.text.slice(0, 160)}`);
+
+  r = await admin.req('POST', '/api/users/me/recovery-codes', {});
+  const issuedCodes = r.data.codes || [];
+  check('an admin can issue a fresh set of backup codes', r.status === 200 && issuedCodes.length > 0, `${r.status} ${r.text.slice(0, 160)}`);
+  check('the codes are only shown once, as a list', Array.isArray(issuedCodes) && issuedCodes.every((c) => typeof c === 'string'));
+
+  r = await admin.req('GET', '/api/users/me/recovery-codes');
+  check('the status reflects the new set', r.data.status?.remaining === issuedCodes.length, JSON.stringify(r.data.status));
+
+  r = await client.req('GET', '/api/users/me/recovery-codes');
+  check('a client has no backup codes to read', r.status === 403 || r.data.status?.remaining === 0, `${r.status} ${r.text.slice(0, 120)}`);
 
   // --- access control ------------------------------------------------------
   r = await client.req('GET', '/api/mail/log');
