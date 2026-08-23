@@ -48,6 +48,7 @@ const STAFF_NAV: NavItem[] = [
   { to: "/portal/mail", label: "Mail", icon: IconMail, roles: ["admin"] },
   { to: "/portal/approvals", label: "Approvals", short: "Approvals", icon: IconApprovals, roles: ["admin"] },
   { to: "/portal/audit", label: "Audit log", short: "Log", icon: IconAuditLog, roles: ["admin"], superAdminOnly: true },
+  { to: "/portal/security", label: "Security", icon: IconClientAccess, roles: ["admin"] },
   { to: "/portal/notifications", label: "Notifications", icon: IconNotifications },
 ];
 
@@ -56,7 +57,7 @@ const STAFF_GROUPS: { heading: string; labels: string[] }[] = [
   { heading: "Operations & Finance", labels: ["Work progress", "Tickets", "Client messages", "Reports", "Budget", "Billing"] },
   { heading: "Integrations", labels: ["ClickUp", "Slack"] },
   { heading: "Administration", labels: ["Team", "Client Access", "Approvals", "Audit log", "Login Codes", "Mail"] },
-  { heading: "Account", labels: ["Notifications"] },
+  { heading: "Account", labels: ["Security", "Notifications"] },
 ];
 
 /**

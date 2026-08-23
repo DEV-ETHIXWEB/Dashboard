@@ -3,7 +3,7 @@ import { api, apiUpload } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import type { UserRecord, Project, Task, Ticket, Domain, Report, BudgetItem, Billing, Notification, PaymentSummary } from "@/lib/entities";
 import { canSeePage } from "@/lib/permissions";
-import type { ClientPageKey, OtpLogEntry } from "@/lib/types";
+import type { ClientPageKey, OtpLogEntry, RecoveryCodeStatus } from "@/lib/types";
 
 /**
  * A client only fetches the sections their admin left switched on. The API
@@ -32,6 +32,30 @@ export function useOtpLogs() {
 export function useRevealOtpCode() {
   return useMutation({
     mutationFn: (id: string) => api<{ code: string }>("POST", `/auth/otp-logs/${id}/reveal`).then((d) => d.code),
+  });
+}
+
+/**
+ * How many backup codes this admin has left. Never the codes -- the server
+ * keeps only their hashes and genuinely cannot produce them again.
+ */
+export function useRecoveryCodeStatus() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["recovery-codes"],
+    enabled: user?.role === "admin",
+    queryFn: () =>
+      api<{ status: RecoveryCodeStatus }>("GET", "/users/me/recovery-codes").then((d) => d.status),
+  });
+}
+
+/** Replace the set. The plaintext comes back once, and is never fetchable again. */
+export function useRegenerateRecoveryCodes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<{ codes: string[]; status: RecoveryCodeStatus }>("POST", "/users/me/recovery-codes", {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["recovery-codes"] }),
   });
 }
 
@@ -121,6 +145,8 @@ export function useCreateUser() {
       api<{
         user: UserRecord; temporaryPassword: string; emailed: boolean; emailConfigured: boolean;
         slackChannel?: { joined: boolean; message?: string };
+        /** Present when the new account is an administrator. Shown once, never again. */
+        recoveryCodes?: string[];
       }>(
         "POST",
         "/users",

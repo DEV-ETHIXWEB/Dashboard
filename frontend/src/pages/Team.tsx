@@ -62,6 +62,7 @@ export default function Team() {
   const { user: currentUser } = useAuth();
   const { data: users, isLoading, isError, error, refetch } = useUsers();
   const createUser = useCreateUser();
+  const [newAdminCodes, setNewAdminCodes] = useState<{ name: string; codes: string[] } | null>(null);
   const updateUser = useUpdateUser();
   const deleteUser = useDeleteUser();
   const setStanding = useSetStanding();
@@ -128,6 +129,11 @@ export default function Team() {
         {
           onSuccess: (result) => {
             toast.success(heldMessage(result, "Team member added"));
+            // A new administrator is issued backup sign-in codes with their
+            // password, and this is the only moment either is visible. Hand
+            // both over together; the new admin can replace the codes from
+            // their own Security page afterwards.
+            if (result.recoveryCodes?.length) setNewAdminCodes({ name, codes: result.recoveryCodes });
             setOpen(false);
           },
           onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to add member"),
@@ -537,6 +543,50 @@ export default function Team() {
           ))}
         </div>
       )}
+
+      {/* A new administrator's backup sign-in codes. The only time they exist
+          outside the new admin's own head -- the server keeps hashes and cannot
+          reproduce them. Hand them over with the password. */}
+      <Dialog open={newAdminCodes != null} onOpenChange={(v) => !v && setNewAdminCodes(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogTitle>Backup sign-in codes for {newAdminCodes?.name}</DialogTitle>
+          <DialogDescription>
+            Administrators sign in with a password and an emailed code. These eight one-time codes stand in for
+            that emailed code when email is not reaching them. Give them to {newAdminCodes?.name} along with the
+            password — this is the only time they are shown.
+          </DialogDescription>
+          <ul className="my-2 grid grid-cols-2 gap-2">
+            {(newAdminCodes?.codes ?? []).map((c) => (
+              <li
+                key={c}
+                className="rounded-md border border-border/70 bg-secondary/40 px-3 py-2 text-center font-mono text-sm tracking-widest"
+              >
+                {c}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground">
+            They can replace this set at any time from their own Security page, which is what they should do if
+            anyone else has seen it.
+          </p>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                navigator.clipboard
+                  .writeText((newAdminCodes?.codes ?? []).join("\n"))
+                  .then(() => toast.success("Copied to the clipboard"), () => toast.error("Could not copy"));
+              }}
+            >
+              Copy all
+            </Button>
+            <Button type="button" onClick={() => setNewAdminCodes(null)}>
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

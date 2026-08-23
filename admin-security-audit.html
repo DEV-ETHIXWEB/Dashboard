@@ -1,0 +1,511 @@
+<title>Admin Dashboard Audit</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html{background:#ffffff}
+  body{
+    margin:0; background:#ffffff; color:#1a1a1a;
+    font:16px/1.65 Georgia, "Times New Roman", serif;
+  }
+  .wrap{max-width:780px;margin:0 auto;padding:40px 22px 90px}
+
+  h1{font-size:28px;line-height:1.2;margin:0 0 6px;font-weight:normal}
+  h2{font-size:21px;margin:46px 0 10px;font-weight:normal;border-bottom:1px solid #1a1a1a;padding-bottom:6px}
+  h3{font-size:17px;margin:30px 0 6px;font-weight:bold}
+  p{margin:10px 0}
+  .lede{color:#4a4a4a;font-size:15px;margin:0 0 4px}
+  .stamp{color:#666;font-size:13.5px;line-height:1.5;margin-top:14px;
+    border-top:1px solid #d5d5d5;border-bottom:1px solid #d5d5d5;padding:12px 0}
+
+  .box{border:1px solid #c8c8c8;padding:16px 18px;margin:18px 0;background:#fafafa}
+
+  .item{border-top:1px solid #d5d5d5;padding:22px 0 4px}
+  .item:first-of-type{border-top:2px solid #1a1a1a}
+  .rank{font-size:13px;color:#555;letter-spacing:.03em;text-transform:uppercase}
+  .name{font-size:18px;font-weight:bold;margin:4px 0 10px}
+  .lbl{font-weight:bold}
+
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.5px}
+  th,td{text-align:left;padding:9px 10px;border:1px solid #c8c8c8;vertical-align:top}
+  th{background:#f0f0f0;font-weight:bold}
+  .scroll{overflow-x:auto}
+
+  code{font-family:Consolas,"Courier New",monospace;font-size:13.5px;background:#f0f0f0;padding:1px 4px}
+  pre{font-family:Consolas,"Courier New",monospace;font-size:13px;line-height:1.5;
+    background:#f4f4f4;border-left:3px solid #999;padding:11px 13px;overflow-x:auto;margin:10px 0}
+
+  ul,ol{margin:10px 0;padding-left:24px} li{margin:5px 0}
+  hr{border:none;border-top:1px solid #d5d5d5;margin:36px 0}
+  footer{margin-top:50px;border-top:1px solid #1a1a1a;padding-top:14px;color:#555;font-size:13.5px}
+</style>
+
+<div class="wrap">
+
+<h1>Admin Dashboard — Security Audit</h1>
+<p class="lede">EthixWeb CRM. Admin and staff area only.</p>
+
+<div class="stamp">
+Date: 23 August 2026 · Branch <code>deepanshu-branch</code> at commit <code>35c32b1</code><br>
+How it was done: read all the server code, then ran real requests against a throwaway copy of the app with an in-memory database.<br>
+Nothing in production was touched. No code was changed. No passwords or keys are printed in this document.<br>
+This report only says what is broken. It does not tell you how to fix it.
+</div>
+
+<h2>The short version</h2>
+
+<p>The outside wall is good. Every admin web address checks who you are on the server, not just in the browser. There are no leaked passwords or keys in the JavaScript files. The security headers are set properly. Someone who is not logged in cannot get in.</p>
+
+<p>The problem is on the inside. The app is built around three levels of admin — <strong>new admin</strong> (must ask permission), <strong>trusted admin</strong> (can act alone), and <strong>super admin</strong> (runs everything). We were able to jump from the bottom to the top in one request, in two different ways. Once at the top, we reset the real super admin's password, read it off the screen, and logged in as them — because admins log in with a password only, with no code sent to their email.</p>
+
+<div class="box">
+<p><span class="lbl">Plain summary:</span> any admin account on this system — even the newest, most restricted one — can make itself the owner of the whole workspace, and then take over anyone else's account. The permission system exists, but it can be walked around.</p>
+</div>
+
+<h3>The numbers</h3>
+
+<div class="scroll">
+<table>
+<tr><th>Count</th><th>What</th></tr>
+<tr><td>21</td><td>Total items found</td></tr>
+<tr><td>2</td><td>Critical — fix first</td></tr>
+<tr><td>4</td><td>High</td></tr>
+<tr><td>4</td><td>Medium</td></tr>
+<tr><td>3</td><td>Low</td></tr>
+<tr><td>3</td><td>Informational — worth knowing, not urgent</td></tr>
+<tr><td>5</td><td>Things that are simply broken (not security)</td></tr>
+<tr><td>20 of 21</td><td>Proven by actually doing it. One is proven in part.</td></tr>
+<tr><td>0</td><td>Guesses. Nothing here is speculation.</td></tr>
+</table>
+</div>
+
+<h3>The four ways in, in order of danger</h3>
+
+<ol>
+<li><strong>Any admin makes itself super admin.</strong> One request. Two different routes to it — one direct, one hidden inside the approval queue.</li>
+<li><strong>Super admin takes over the real owner account.</strong> Reset their password, read the new one off the response, log in. Admins have no second factor.</li>
+<li><strong>Any admin becomes any client or staff member.</strong> Either by reading their one-time login code, or by creating a "click to sign in" link for them and clicking it yourself.</li>
+<li><strong>An outsider redirects client login links to their own website</strong> — because the app guesses its own web address from whoever talks to it first after a restart.</li>
+</ol>
+
+<hr>
+
+<h2>Security findings</h2>
+
+<!-- 001 -->
+<div class="item">
+<div class="rank">Finding 1 of 16 · CRITICAL · Confirmed</div>
+<div class="name">Any admin can make itself super admin by changing the spelling of one word</div>
+
+<p><span class="lbl">Where:</span> <code>PUT /api/users/:id</code> — the "edit a user" request. Code in <code>routes/users.js</code> and <code>db/setup.js</code>.</p>
+
+<p><span class="lbl">What is wrong:</span> The code has a guard that says "you are not allowed to set the super-admin field here". But the guard only looks for that field written one way — <code>isSuperAdmin</code>. The database layer underneath accepts the same field written the other common way — <code>is_super_admin</code>. So the guard checks one spelling and the database accepts both. Send the second spelling and the guard never notices.</p>
+
+<p><span class="lbl">How we proved it:</span> We signed in as an ordinary trusted admin and sent the two versions back to back.</p>
+<pre>First spelling  → 400  "Use the super-admin endpoints to change admin standing."
+Second spelling → 200  isSuperAdmin = true
+
+Permissions afterwards:
+  canManageAdmins   true      (can now appoint and remove admins)
+  canReadAuditLog   true      (can now read the private activity log)
+  canDecideApprovals true</pre>
+<p>We then opened the super-admin-only audit log with that account and it let us in.</p>
+
+<p><span class="lbl">Steps to repeat:</span> Log in as any admin. Send an edit request for your own user with the body <code>{"is_super_admin": true}</code>. You get a 200. Check <code>/api/auth/me</code> — you are now a super admin.</p>
+
+<p><span class="lbl">What should happen:</span> Only an existing super admin, using the dedicated "change standing" screen, can hand out that power.</p>
+
+<p><span class="lbl">What actually happens:</span> Anyone who can edit a user can hand it to themselves.</p>
+
+<p><span class="lbl">Why it matters:</span> The entire three-tier admin design stops meaning anything. Every admin is effectively the owner. This is also the first step of finding 3.</p>
+
+<p><span class="lbl">What the attacker needs:</span> One logged-in admin account of any level.</p>
+</div>
+
+<!-- 002 -->
+<div class="item">
+<div class="rank">Finding 2 of 16 · CRITICAL · Confirmed</div>
+<div class="name">The approval queue can be tricked into approving a promotion that looks like a name change</div>
+
+<p><span class="lbl">Where:</span> the same edit request, when made by a new (untrusted) admin, plus <code>utils/approvals.js</code>.</p>
+
+<p><span class="lbl">What is wrong:</span> A new admin cannot change things directly — their change is parked in a queue for a second admin to approve. Two things go wrong together. First, the same alternate spelling from finding 1 survives into the parked request. Second, the one-line description shown to the approver is written by a function that also only recognises the first spelling — so a request that grants super admin is described as <em>"Change their details"</em>. The approver reads a harmless sentence, clicks approve, and the promotion goes through.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>New admin submits    → 202  parked for approval
+Summary shown        → "Change their details for Priya Nair (priya.nair@ethixweb.local)"
+What is actually stored → {"name":"Priya Nair","admin_trusted":true,"is_super_admin":true}
+Trusted admin clicks approve → 200
+
+New admin's permissions afterwards:
+  isSuperAdmin      true
+  canManageAdmins   true
+  canReadAuditLog   true</pre>
+
+<p><span class="lbl">Steps to repeat:</span> As a new admin, edit your own user with your real name plus the two flag fields. It parks with the innocent summary. Any trusted colleague approves it. You are super admin.</p>
+
+<p><span class="lbl">What should happen:</span> A privilege change should be refused outright, or the approver should see exactly what is about to change.</p>
+
+<p><span class="lbl">What actually happens:</span> It is stored, described wrongly, and carried out.</p>
+
+<p><span class="lbl">Why it matters:</span> The "second pair of eyes" is the app's main safety net for new admins. It can be beaten by wording alone, with one honest colleague clicking a normal-looking button.</p>
+
+<p><span class="lbl">What the attacker needs:</span> One new admin account, and one colleague who processes the approval queue.</p>
+</div>
+
+<!-- 003 -->
+<div class="item">
+<div class="rank">Finding 3 of 16 · HIGH · Confirmed</div>
+<div class="name">An admin can reset the owner's password and is shown the new one in plain text</div>
+
+<p><span class="lbl">Where:</span> <code>PUT /api/users/:id</code> with <code>regeneratePassword</code>, and the login handler in <code>routes/auth.js</code>.</p>
+
+<p><span class="lbl">What is wrong:</span> Admins can reset anyone's password, and the new password is sent straight back in the response for them to read. Nothing stops an admin from doing this to another admin, including the super admin. Because admins sign in with a password only and no emailed code, that password is everything you need.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>Trusted admin resets the super admin's password → 200, new password returned
+Log in as the super admin with it               → 200, no code requested
+Session permissions: full super admin</pre>
+
+<p><span class="lbl">Steps to repeat:</span> Reset <code>admin@ethixweb.local</code> with email sending turned off, copy the password from the response, log in.</p>
+
+<p><span class="lbl">Why it matters:</span> The one account that should be out of reach of everybody else is reachable by every peer. Combined with findings 1 and 2, any admin at all gets there.</p>
+
+<p><span class="lbl">What the attacker needs:</span> One admin account.</p>
+</div>
+
+<!-- 004 -->
+<div class="item">
+<div class="rank">Finding 4 of 16 · HIGH · Confirmed</div>
+<div class="name">Admins never get a second login step, and the "two-step sign in" switch does nothing at all</div>
+
+<p><span class="lbl">Where:</span> <code>routes/auth.js</code>, and the two-factor setting on the Settings page.</p>
+
+<p><span class="lbl">What is wrong:</span> Two separate problems in one place. First, the login code has a branch that says: if the person is an admin, sign them straight in. Everyone else gets a one-time code emailed to them. So the most powerful accounts have the weakest login. Second, the "Two-step sign in" toggle saves a value to the database that <em>no part of the login process ever reads</em>. We searched the whole login path — the setting is never checked. Turning it on changes nothing.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>Admin logs in    → full session immediately, no code asked for
+Client logs in   → "requiresOtp: true", must enter an emailed code
+Search of login code for the two-factor setting → zero results</pre>
+
+<p><span class="lbl">Steps to repeat:</span> Turn on two-step sign in for an admin. Sign out. Sign back in with just the password. You are straight in.</p>
+
+<p><span class="lbl">Why it matters:</span> Admin accounts are protected by a single password and nothing else — and the seeded accounts all share the same one. Staff and admins believe they have a second factor switched on when they do not. This makes finding 3 far worse.</p>
+</div>
+
+<!-- 005 -->
+<div class="item">
+<div class="rank">Finding 5 of 16 · HIGH · Confirmed</div>
+<div class="name">Any admin can read anyone's live login code, and see everyone's login history and IP address</div>
+
+<p><span class="lbl">Where:</span> <code>GET /api/auth/otp-logs</code> and <code>POST /api/auth/otp-logs/:id/reveal</code>.</p>
+
+<p><span class="lbl">What is wrong:</span> Both are open to anyone with the admin role — there is no distinction between a new admin and the owner. The list shows every recent login attempt with the person's name, email address and IP address. The reveal button decrypts the actual six-digit code. Since a client or staff member's login is just password plus that code, an admin who can see the code can finish somebody else's login.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>New untrusted admin lists the codes  → 200, full list returned
+New untrusted admin reveals a client's code → 200, code returned
+A log row contains: user id, name, email, IP address, time, attempts</pre>
+
+<p><span class="lbl">Why it matters:</span> Any admin can step into any client or staff account. This is an impersonation tool, and unlike deleting a ticket it is not held for a second signature. It also hands over every user's login IP address.</p>
+
+<p><span class="lbl">What the attacker needs:</span> One admin account of any level.</p>
+</div>
+
+<!-- 006 -->
+<div class="item">
+<div class="rank">Finding 6 of 16 · HIGH · Confirmed in part</div>
+<div class="name">The app learns its own web address from whoever talks to it first, and puts that address in client login emails</div>
+
+<p><span class="lbl">Where:</span> <code>utils/appUrl.js</code>, used when building the "click to sign in" link in welcome emails.</p>
+
+<p><span class="lbl">What is wrong:</span> There is a setting called <code>APP_BASE_URL</code> that tells the app its real web address. It is not set on this deployment — we checked. When it is missing, the app takes the address from the very first request it receives after starting up, and keeps it for as long as the process runs. That address is then glued onto the front of the one-tap sign-in links emailed to clients.</p>
+
+<p>So: if an attacker is the first to reach a freshly restarted server, and sends a request claiming to come from their own website, every client welcome email afterwards contains a working login link pointing at the attacker's site. The client clicks it, the attacker's server catches the token, and the attacker replays it to log in as that client.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>Sent one harmless request with a made-up source website
+Asked the app what it thinks its own address is → "https://evil.example.net"
+Created a client → the welcome email link is now built on that address</pre>
+
+<p><span class="lbl">Why it says "in part":</span> The address poisoning is fully proven. We did not send a real email, because no email service is connected in the test setup. The link-building code path is the same either way.</p>
+
+<p><span class="lbl">What the attacker needs:</span> Network access to the server around a restart. No account.</p>
+</div>
+
+<!-- 007 -->
+<div class="item">
+<div class="rank">Finding 7 of 16 · MEDIUM · Confirmed</div>
+<div class="name">Any staff member can read every client's payment history, even though the page is hidden from them</div>
+
+<p><span class="lbl">Where:</span> <code>GET /api/billing/status</code> and <code>GET /api/billing/payments</code>.</p>
+
+<p><span class="lbl">What is wrong:</span> The app hides the Billing page from everyone except admins and clients — but that hiding happens in the browser only. The two billing requests behind it check that you are logged in, and nothing more. Anyone who is not a client gets the whole workspace: every payment, amount, currency, card brand and last four digits, and every invoice and receipt link.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>Logged in as an "employee" — the lowest staff role
+GET /api/billing/status   → 200, all billing rows for all clients
+GET /api/billing/payments → 200, full payment table</pre>
+
+<p><span class="lbl">Why it matters:</span> This is exactly the mistake of trusting the front end. The company's own design says employees should not see this. The server disagrees.</p>
+</div>
+
+<!-- 008 -->
+<div class="item">
+<div class="rank">Finding 8 of 16 · MEDIUM · Confirmed</div>
+<div class="name">Any employee can edit or reassign any ticket, including moving it to a different client</div>
+
+<p><span class="lbl">Where:</span> <code>PUT /api/tickets/:id</code>.</p>
+
+<p><span class="lbl">What is wrong:</span> The handler treats admins, project managers and employees as the same thing — "staff" — and then copies the whole request body onto the ticket. It never checks whether this employee is actually assigned to this ticket. So an employee can change any ticket at all, including the field that says which client it belongs to.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>Employee edits a ticket belonging to Client A,
+setting its client to Client B → 200, ticket now belongs to Client B</pre>
+
+<p><span class="lbl">Why it matters:</span> A ticket can be moved into the wrong client's portal, which shows one client another client's support request. It can also be silently altered or closed by someone with no connection to it.</p>
+</div>
+
+<!-- 009 -->
+<div class="item">
+<div class="rank">Finding 9 of 16 · MEDIUM · Confirmed</div>
+<div class="name">Any admin can create a "click to sign in" link for a client and use it themselves, with almost no record</div>
+
+<p><span class="lbl">Where:</span> <code>POST /api/auth/login-link/:userId</code>.</p>
+
+<p><span class="lbl">What is wrong:</span> This is a real feature — an admin makes a link and sends it to a client so they can sign in without typing. Nothing stops the admin from just opening the link themselves. It works for up to seven days. The only trace is a single log line saying a link was issued; everything the admin then does is recorded as the client doing it.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>New untrusted admin creates a link for a client → 200
+Opened the link with no login at all            → redirected to the portal
+Checked who we were                             → that client</pre>
+
+<p><span class="lbl">Why it matters:</span> Any admin can act as any client — read their reports, billing and messages, raise or change tickets — and the audit trail will show the client doing it, not the admin.</p>
+</div>
+
+<!-- 010 -->
+<div class="item">
+<div class="rank">Finding 10 of 16 · MEDIUM · Confirmed</div>
+<div class="name">The audit log does not record that a promotion happened</div>
+
+<p><span class="lbl">Where:</span> the logging calls in <code>routes/users.js</code>, read back through <code>GET /api/approvals/audit-log</code>.</p>
+
+<p><span class="lbl">What is wrong:</span> When an admin promotes itself using finding 1, the audit log gets one row that says "update, user" with no detail attached at all. A super admin reading the log later cannot tell the difference between someone fixing a typo in a name and someone seizing control of the workspace.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>Admin promotes itself → 200
+Newest audit entry: {"action":"update","entity":"user","meta":null,"actor":"A1"}</pre>
+
+<p><span class="lbl">Why it matters:</span> After the fact, nobody can work out what happened or who did it. Detection and investigation both fail.</p>
+</div>
+
+<!-- 011 -->
+<div class="item">
+<div class="rank">Finding 11 of 16 · LOW · Confirmed</div>
+<div class="name">The session identifier is not replaced after the login code is entered</div>
+
+<p><span class="lbl">Where:</span> <code>middleware/auth.js</code>, the function that upgrades a half-finished login into a real one.</p>
+
+<p><span class="lbl">What is wrong:</span> When someone enters their emailed code, the app upgrades the session they already had rather than issuing a fresh one. The same identifier that existed before they proved who they were carries on afterwards. Good practice is to hand out a new one at the moment someone gains access.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>Session id before the code: f0056a85...
+Session id after the code:  f0056a85...   (identical)</pre>
+
+<p><span class="lbl">Why it is only low:</span> The cookie is set by the server and cannot be read by JavaScript, so there is no easy way for an attacker to plant one in the first place. It becomes a real problem only if some other flaw lets them do that.</p>
+</div>
+
+<!-- 012 -->
+<div class="item">
+<div class="rank">Finding 12 of 16 · LOW · Confirmed</div>
+<div class="name">Uploaded files are not checked, and SVG images are displayed from the app's own address</div>
+
+<p><span class="lbl">Where:</span> the Reports upload and download requests, shown on the document page in a frame.</p>
+
+<p><span class="lbl">What is wrong:</span> There is no list of allowed file types. Whatever type the uploader claims is what gets stored and later sent back. SVG is on the "show it in the page" list, so an uploaded SVG is displayed inside the app itself rather than downloaded. An SVG is not really a picture — it is a document that can contain code.</p>
+
+<p>The only thing stopping that code running is the security policy header the app sends, which blocks scripts written inside the page. That header is currently correct and does block it. But it is the sole line of defence, and the upload side does no checking at all.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>Uploaded an SVG containing script → accepted, 201
+Asked for it to be displayed      → sent back as an image, shown inside the app
+Also uploaded a .js file and an .html file → both accepted and stored as-is</pre>
+
+<p><span class="lbl">Why it matters:</span> If the security policy is ever loosened — a very common change — these stored files turn into code that runs inside the app as whoever is viewing them.</p>
+</div>
+
+<!-- 013 -->
+<div class="item">
+<div class="rank">Finding 13 of 16 · LOW · Confirmed</div>
+<div class="name">Clients can see the full list of your staff, including who the admins are</div>
+
+<p><span class="lbl">Where:</span> <code>GET /api/users</code>, the branch used for non-admins.</p>
+
+<p><span class="lbl">What is wrong:</span> Other clients are correctly hidden, but every staff member and admin is returned, with their name, their role, and their internal id.</p>
+
+<p><span class="lbl">How we proved it:</span></p>
+<pre>Logged in as a client → 200, six people returned, including
+  {"name":"Admin User","role":"admin"} and {"name":"Priya Nair","role":"admin"}</pre>
+
+<p><span class="lbl">Why it matters:</span> An outside customer is handed your internal team list and told exactly which two people are administrators. That is the starting point for a targeted phishing email.</p>
+</div>
+
+<!-- 014 -->
+<div class="item">
+<div class="rank">Finding 14 of 16 · INFORMATIONAL · Confirmed</div>
+<div class="name">The login response quietly tells you whether an account is an admin</div>
+
+<p><span class="lbl">What is wrong:</span> A correct admin password returns a finished session. A correct password for anyone else returns "we have emailed you a code". The two replies look completely different, so anyone testing passwords can tell which accounts are admins — and those are exactly the accounts with no second step.</p>
+</div>
+
+<!-- 015 -->
+<div class="item">
+<div class="rank">Finding 15 of 16 · INFORMATIONAL · Confirmed</div>
+<div class="name">Login attempts are limited, but sensitive admin actions are not limited separately</div>
+
+<p><span class="lbl">What we found:</span> Login is capped at 20 tries per 15 minutes and this works — we hit the wall after 16 attempts. Code entry is capped too, and each code allows only five guesses and expires in five minutes. That part is fine.</p>
+
+<p><span class="lbl">What is missing:</span> Sensitive admin actions — revealing login codes, resetting passwords, changing standing — only fall under the general limit of 600 requests per 15 minutes, which is very generous. All limits are counted per IP address, so they depend on the server being configured to trust the right network layer in production, which we could not check from here.</p>
+</div>
+
+<!-- 016 -->
+<div class="item">
+<div class="rank">Finding 16 of 16 · INFORMATIONAL · Confirmed</div>
+<div class="name">Broken requests return "server error" instead of "bad request"</div>
+
+<p><span class="lbl">What is wrong:</span> Send malformed data and you get a 500 "something went wrong" instead of a 400 "you sent something invalid". This is untidy rather than dangerous.</p>
+
+<p><span class="lbl">The good part:</span> we specifically checked whether error messages leak anything useful to an attacker. They do not. No stack traces, no database messages, no file paths, no version numbers reach the browser. Attempts at directory traversal were also handled safely.</p>
+</div>
+
+<hr>
+
+<h2>Things that are simply broken</h2>
+<p>These are reliability problems, not security holes. Kept separate on purpose.</p>
+
+<h3>B1 — Approved account creation loses the Slack channel</h3>
+<p><span class="lbl">What we tried:</span> a new admin proposed creating a client with a Slack channel attached, and a trusted admin approved it.</p>
+<p><span class="lbl">What should happen:</span> the account is created exactly as it would have been through the direct route.</p>
+<p><span class="lbl">What actually happens:</span> the approval code copies only some of the fields. The Slack channel is silently dropped, so the client's Messages page never works. We checked the created account: the channel field is empty even though the proposal supplied one.</p>
+<p><span class="lbl">Priority:</span> medium.</p>
+
+<h3>B2 — Approved account creation and password resets never deliver the password</h3>
+<p><span class="lbl">What we tried:</span> a new admin proposed creating a client, and separately proposed resetting a password. Both were approved.</p>
+<p><span class="lbl">What should happen:</span> the person receives their credentials, or the admin is shown them.</p>
+<p><span class="lbl">What actually happens:</span> neither. The email is only sent on the direct route, not the approved one. The reply to the proposing admin contains no password either. The account is created, or the password is changed, and then nobody on earth knows what it is. The account is unusable.</p>
+<p>We confirmed it twice: zero credential emails after the approved creation, and zero after the approved reset.</p>
+<p><span class="lbl">Priority:</span> high, for reliability. Onboarding through the new-admin route does not work.</p>
+
+<h3>B3 — Duplicate email addresses crash instead of warning</h3>
+<p><span class="lbl">What we tried:</span> an admin changed one user's email to an address another account already uses.</p>
+<p><span class="lbl">What should happen:</span> a clear message saying that email is already taken — which is exactly what the "edit my own profile" screen does.</p>
+<p><span class="lbl">What actually happens:</span> the admin screen has no such check, so the database rejects it and the user sees "Something went wrong on the server."</p>
+<p><span class="lbl">Priority:</span> low.</p>
+
+<h3>B4 — Two full generations of the app's JavaScript are being served</h3>
+<p><span class="lbl">What we found:</span> the public assets folder holds 111 files, with most components appearing two or three times under different build names — Billing three times, the main bundle four times. One of them, <code>Billing-DCOkWAIH.js</code>, is sitting on disk but is not in version control at all.</p>
+<p><span class="lbl">Why it matters:</span> old versions of pages remain downloadable and can still be reached. One of the old copies is a Settings page that sends a password change without asking for the current password — the server correctly refuses it, so anyone who lands on that old copy gets a silent failure.</p>
+<p><span class="lbl">Priority:</span> low, but it is a build-hygiene problem worth clearing.</p>
+
+<h3>B5 — Live updates go to the wrong client after a ticket is moved</h3>
+<p><span class="lbl">What we found:</span> when a ticket changes hands between clients (see finding 8), the live-update notice is sent using the client the ticket belonged to <em>before</em> the change. The new client's open tabs are never told. Combined with finding 8, the ticket appears and disappears inconsistently across the two portals.</p>
+<p><span class="lbl">Priority:</span> low.</p>
+
+<hr>
+
+<h2>What we tested — the full admin surface</h2>
+
+<h3>Login and sessions</h3>
+<div class="scroll">
+<table>
+<tr><th>Request</th><th>Who can use it</th><th>Notes</th></tr>
+<tr><td><code>POST /api/auth/login</code></td><td>anyone, rate limited</td><td>admins skip the emailed code — finding 4</td></tr>
+<tr><td><code>POST /api/auth/google</code></td><td>anyone, rate limited</td><td>account must already exist</td></tr>
+<tr><td><code>POST /api/auth/verify-otp</code></td><td>half-logged-in user</td><td>session id not replaced — finding 11</td></tr>
+<tr><td><code>POST /api/auth/login-link/:userId</code></td><td>any admin</td><td>impersonation — finding 9</td></tr>
+<tr><td><code>GET /api/auth/magic-link/verify</code></td><td>whoever holds the link</td><td>single use; address from finding 6</td></tr>
+<tr><td><code>GET /api/auth/otp-logs</code></td><td>any admin</td><td>all codes and IPs — finding 5</td></tr>
+<tr><td><code>POST /api/auth/otp-logs/:id/reveal</code></td><td>any admin</td><td>decrypts any code — finding 5</td></tr>
+<tr><td><code>POST /api/auth/logout</code></td><td>logged in</td><td>works properly; old cookie is rejected afterwards</td></tr>
+<tr><td><code>GET /api/auth/me</code></td><td>logged in</td><td>permissions recalculated on every request — good</td></tr>
+</table>
+</div>
+
+<h3>Users, admins and approvals</h3>
+<div class="scroll">
+<table>
+<tr><th>Request</th><th>Who can use it</th><th>Notes</th></tr>
+<tr><td><code>GET /api/users</code></td><td>logged in</td><td>staff list leaks to clients — finding 13</td></tr>
+<tr><td><code>POST /api/users</code></td><td>admin</td><td>only a super admin may create an admin — correct</td></tr>
+<tr><td><code>PUT /api/users/:id</code></td><td>admin</td><td><strong>findings 1, 2 and 3 all live here</strong></td></tr>
+<tr><td><code>DELETE /api/users/:id</code></td><td>admin</td><td>last-admin and super-admin protections work</td></tr>
+<tr><td><code>POST /api/users/:id/standing</code></td><td>super admin only</td><td>correctly locked down — this is the door people walk around</td></tr>
+<tr><td><code>POST /api/users/me/2fa/enable</code> and <code>/disable</code></td><td>logged in</td><td>sets a value nothing reads — finding 4</td></tr>
+<tr><td><code>GET /api/approvals</code></td><td>any admin</td><td>queue visible to all admins</td></tr>
+<tr><td><code>POST /api/approvals/:id/approve</code></td><td>trusted admin</td><td>runs exactly once even under load; wording is the weakness — finding 2</td></tr>
+<tr><td><code>GET /api/approvals/audit-log</code></td><td>super admin only</td><td>correctly locked, but incomplete — finding 10</td></tr>
+</table>
+</div>
+
+<h3>Everything else</h3>
+<div class="scroll">
+<table>
+<tr><th>Area</th><th>Who can use it</th><th>Notes</th></tr>
+<tr><td>Projects, tasks, domains, budget, reports, tickets</td><td>staff by role; deletions need approval</td><td>ticket editing too open — finding 8; uploads unchecked — finding 12</td></tr>
+<tr><td>Report download</td><td>logged in, ownership checked</td><td>filenames are cleaned properly; SVG shown inline — finding 12</td></tr>
+<tr><td>Billing read</td><td>any logged-in staff</td><td>too open — finding 7</td></tr>
+<tr><td>Billing checkout and portal</td><td>clients only</td><td>handled by Stripe; no card data touches this server</td></tr>
+<tr><td>Stripe webhook</td><td>Stripe, signature checked</td><td>signature verified before anything is read — correct</td></tr>
+<tr><td>ClickUp and Slack tools</td><td>admin</td><td>see "what we could not test"</td></tr>
+<tr><td>Mail pages</td><td>admin</td><td>see the warning below</td></tr>
+<tr><td>Client progress and messages</td><td>logged in</td><td>clients correctly locked to their own data — we tried to break this and could not</td></tr>
+<tr><td>Live updates stream</td><td>logged in</td><td>carries only "something changed", never actual data — good design</td></tr>
+</table>
+</div>
+
+<div class="box">
+<p><span class="lbl">A warning about the Mail page.</span> Every email the app sends is saved in full, including its HTML, and any admin can open it from the Mail screen. We checked what is inside those saved emails. A client welcome email contained <strong>the plain-text temporary password</strong> and <strong>a working one-tap sign-in link</strong>. A brand-new untrusted admin was able to open that same saved email and read both.</p>
+<p>In practice this makes the Mail page a permanent store of credentials that every admin can browse. Read alongside findings 4 and 5, treat it as high severity.</p>
+</div>
+
+<h3>Who can actually do what</h3>
+<div class="scroll">
+<table>
+<tr><th>Role</th><th>Meant to be able to</th><th>Actually able to</th></tr>
+<tr><td>Super admin</td><td>run everything</td><td>as designed — but anyone can become one</td></tr>
+<tr><td>Trusted admin</td><td>act without approval</td><td>plus promote itself to super admin, and reset the owner's password</td></tr>
+<tr><td>New (untrusted) admin</td><td>propose changes only</td><td>plus promote itself through a disguised approval, read anyone's login code, and sign in as any client</td></tr>
+<tr><td>Project manager / Sales</td><td>day-to-day work</td><td>plus read every client's payment history</td></tr>
+<tr><td>Employee</td><td>own tasks and tickets</td><td>plus edit or move any ticket, and read every client's payment history</td></tr>
+<tr><td>Client</td><td>their own portal only</td><td>correctly limited for data — we could not break this. But they can see your whole staff list.</td></tr>
+</table>
+</div>
+
+<hr>
+
+<h2>What is working properly</h2>
+<p>Worth stating clearly, because a lot of it is done well.</p>
+<ul>
+<li><strong>Server-side checks are real.</strong> We tried more than forty admin requests with no login at all. Every single one was refused. The browser-side page guards are correctly treated as cosmetic — the audit log page will render for any admin, but the server behind it refuses everyone except the super admin.</li>
+<li><strong>Cross-site request protection works.</strong> Every action that changes data requires a token. We sent a delete without it and it was refused.</li>
+<li><strong>Permissions are re-checked constantly.</strong> Change someone's role and it takes effect on their very next request. Change a password and their other sessions are ended.</li>
+<li><strong>Clients cannot reach across to each other.</strong> We tried adding another client's id to the requests for progress, billing and messages. The server ignored it every time and returned the caller's own data.</li>
+<li><strong>Approvals cannot be run twice.</strong> Two admins approving the same request at the same moment resulted in exactly one execution.</li>
+<li><strong>No leaked secrets.</strong> No keys, tokens or private data in the shipped JavaScript. No source maps. The <code>.env</code> file is excluded from version control and has never been committed. Requests for it, including traversal tricks, return the normal app page.</li>
+<li><strong>Security headers are strong.</strong> A solid content policy that blocks inline scripts, HTTPS enforcement, no content-type sniffing, no referrer leakage, and framing restricted to the site itself. The session cookie is inaccessible to JavaScript and marked secure in production.</li>
+<li><strong>Stripe is handled correctly.</strong> Incoming webhooks are signature-checked before anything in them is trusted.</li>
+<li><strong>The Firestore rules file denies all direct access.</strong></li>
+</ul>
+
+<h2>What we could not test</h2>
+<ul>
+<li><strong>The Firestore database option.</strong> All live testing ran against the Postgres option. Finding 1 depends on how the database layer maps field names, and the Firestore layer is separate code. Finding 1 must be re-checked there before assuming it is or is not affected.</li>
+<li><strong>The real ClickUp, Slack, Google Drive, Firebase and Stripe accounts.</strong> No credentials were available. One thing to look at when they are: the ClickUp requests glue the id from the web address straight into the outgoing address without escaping it, so a crafted id could bend where the request lands. Admin-only, and confined to ClickUp, but unproven either way.</li>
+<li><strong>Production network setup.</strong> The rate limits count per IP address, which depends on how the live server is configured behind its proxy. Not reproducible from a test harness.</li>
+<li><strong>An end-to-end version of finding 6.</strong> The address poisoning is proven. Actually catching a token from a delivered email was not attempted, as no email service was connected.</li>
+<li><strong>Heavy concurrency testing</strong> beyond the approval race we did run.</li>
+</ul>
+
+<footer>
+Admin security audit of EthixWeb CRM · 23 August 2026 · Source review plus live testing against an isolated in-memory database. Nothing in production was touched, nothing was deleted, no real billing or accounts were changed. Passwords and keys are redacted throughout. This report describes what is broken and what it would let someone do. It deliberately contains no fixes.
+</footer>
+
+</div>

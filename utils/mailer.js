@@ -270,6 +270,39 @@ async function sendViaWebhook({ to, subject, text, html }) {
 }
 
 /**
+ * Templates whose body is never kept.
+ *
+ * The Mail page stores every message in full so an admin can see exactly what
+ * went out, which is the right idea for a ticket update and the wrong one for
+ * a credential. A welcome email contains the plaintext temporary password and
+ * a working one-tap sign-in link; a sign-in code email contains the code. Kept
+ * on the Mail page, those became a permanent, browsable store of live
+ * credentials that every administrator could open.
+ *
+ * The row still exists -- who it went to, when, whether it was delivered --
+ * because that is what the page is for. Only the body is dropped.
+ */
+const UNLOGGED_BODIES = new Set(['credentials', 'login_code']);
+
+/**
+ * Belt and braces for every other template: a sign-in token that finds its way
+ * into some future email must not be replayable out of the log either.
+ */
+function scrubStoredHtml(html) {
+  return String(html || '').replace(
+    /(magic-link\/verify\?token=)[^"'&\s<]+/gi,
+    '$1[redacted]',
+  );
+}
+
+/** What is safe to keep of this message's body. */
+function storableHtml(entry) {
+  if (UNLOGGED_BODIES.has(entry.template)) return null;
+  const scrubbed = scrubStoredHtml(entry.html).slice(0, MAX_LOG_HTML);
+  return scrubbed || null;
+}
+
+/**
  * Record what happened. Logging is best-effort too: a missing table on an old
  * deployment must not turn a delivered email into a thrown error.
  */
@@ -291,7 +324,7 @@ async function logEmail(entry) {
       error: entry.error || null,
       entity: entry.entity || null,
       entityId: entry.entityId || null,
-      html: (entry.html || '').slice(0, MAX_LOG_HTML) || null,
+      html: storableHtml(entry),
       createdAt: new Date().toISOString(),
     });
   } catch (err) {

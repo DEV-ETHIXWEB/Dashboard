@@ -83,10 +83,25 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
 
     const patch = { ...req.body };
     delete patch.id;
+
+    // Which client a project belongs to decides whose portal shows it, so a
+    // change of owner is checked rather than taken on trust -- pointing a
+    // project at a staff id, or at nothing, puts it somewhere nobody expects.
+    const movingClient = 'clientId' in patch && patch.clientId !== project.clientId;
+    if (movingClient) {
+      const nextClient = await db.find('users', patch.clientId);
+      if (!nextClient || nextClient.role !== 'client') {
+        return res.status(400).json({ error: 'That is not a client account.' });
+      }
+    }
+
     const updated = await db.update('projects', req.params.id, patch);
-    // Tell this client's open tabs, not everyone's.
-    res.locals.liveAudience = [project.clientId];
-    await audit(req.user.id, 'update', 'project', req.params.id);
+    // Tell this client's open tabs, not everyone's -- both sides when it moved.
+    res.locals.liveAudience = [...new Set([project.clientId, updated.clientId].filter(Boolean))];
+    await audit(req.user.id, 'update', 'project', req.params.id, {
+      changed: Object.keys(patch),
+      ...(movingClient ? { clientFrom: project.clientId, clientTo: updated.clientId } : {}),
+    });
 
     if (patch.status && patch.status !== project.status) {
       await notify(project.clientId, `Your project "${project.name}" moved to ${patch.status}`, 'project');

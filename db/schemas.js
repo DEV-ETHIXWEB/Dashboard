@@ -80,6 +80,10 @@ const SCHEMAS = {
     'executed_at', 'execution_error',
   ],
   otp_codes: ['id', 'user_id', 'code', 'ip_address', 'created_at', 'expires_at', 'consumed', 'attempts'],
+  // Backup codes an administrator can use in place of the emailed one, so a
+  // broken mail transport cannot lock the whole workspace out. Only the bcrypt
+  // hash is stored; see utils/recoveryCodes.js.
+  recovery_codes: ['id', 'user_id', 'code_hash', 'created_at', 'used_at'],
   // One-tap sign-in links emailed to clients. Only the SHA-256 of the secret
   // half of the link is stored, so a database leak cannot be replayed as a
   // login. See utils/loginLinks.js for the token format.
@@ -95,4 +99,24 @@ const SCHEMAS = {
 function toSnake(str) { return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`); }
 function toCamel(str) { return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase()); }
 
-module.exports = { SCHEMAS, toSnake, toCamel };
+/**
+ * One column, one spelling the application is allowed to write it under.
+ *
+ * `toSnake` on its own is a normaliser, not a gate: it maps both `isSuperAdmin`
+ * and `is_super_admin` onto the same column. That turns every guard written
+ * against a camelCase field name into a guard with a synonym that walks around
+ * it. So the drivers accept a key only when it is the canonical camelCase name
+ * of a real column -- `isSuperAdmin` writes, `is_super_admin` is dropped.
+ *
+ * Kept here rather than in either driver so Postgres and Firestore cannot
+ * drift apart on the question.
+ */
+function isWritableField(collection, key) {
+  const cols = SCHEMAS[collection];
+  if (!cols) return false;
+  const snakeKey = toSnake(key);
+  if (!cols.includes(snakeKey)) return false;
+  return key === toCamel(snakeKey);
+}
+
+module.exports = { SCHEMAS, toSnake, toCamel, isWritableField };

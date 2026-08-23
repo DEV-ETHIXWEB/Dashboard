@@ -28,6 +28,8 @@ const bcrypt = require('bcryptjs');
 const { db } = require('../db/setup');
 const roles = require('./roles');
 const live = require('./liveBus');
+const userFields = require('./userFields');
+const provisioning = require('./userProvisioning');
 
 /** A proposal nobody looked at goes stale rather than lurking forever. */
 const TTL_MS = 48 * 60 * 60 * 1000;
@@ -52,28 +54,81 @@ class ApprovalError extends Error {
 const ACTIONS = {
   'user.create': {
     label: 'Create an account',
-    async execute(payload) {
+    async execute(payload, ctx) {
       const existing = await db.filter('users', (u) => u.email.toLowerCase() === String(payload.email).toLowerCase());
       if (existing.length > 0) throw new ApprovalError('A user with that email already exists', 409);
 
-      return db.insert('users', {
+      // The same writer the direct route uses. The short-cut copy that used to
+      // live here dropped the Slack channel, so an approved client account had
+      // a Messages page that never worked.
+      const user = await provisioning.createUserRecord({
         name: payload.name,
         email: payload.email,
         role: payload.role,
         company: payload.company || null,
-        password: bcrypt.hashSync(payload.plaintextPassword, 10),
-        passwordExpiresAt: payload.passwordExpiresAt != null ? Number(payload.passwordExpiresAt) : null,
-        allowedPages: payload.allowedPages === undefined ? null : payload.allowedPages,
+        plaintextPassword: payload.plaintextPassword,
+        passwordExpiresAt: payload.passwordExpiresAt,
+        allowedPages: payload.allowedPages,
+        slackChannelId: payload.slackChannelId || null,
+        slackChannelName: payload.slackChannelName || null,
       });
+
+      await provisioning.joinAssignedChannel(user);
+
+      // And the credentials actually go out. An approved account whose password
+      // nobody knows is not an account, and the proposing admin has no way to
+      // find out what it was.
+      const requester = await db.find('users', ctx?.requestedBy);
+      await provisioning.emailCredentials(user, payload.plaintextPassword, {
+        invitedBy: requester?.name || 'your administrator',
+      });
+
+      return user;
     },
   },
 
   'user.update': {
     label: 'Change an account',
-    async execute(payload) {
+    async execute(payload, ctx) {
       const target = await db.find('users', payload.userId);
       if (!target) throw new ApprovalError('That account no longer exists', 404);
-      return db.update('users', payload.userId, payload.patch);
+
+      // The second lock on the same door. The queue already stores a patch that
+      // was filtered when it was proposed; filtering it again here means a row
+      // written by an older build -- or edited in the database by hand -- still
+      // cannot carry a privilege flag into a live account.
+      const patch = userFields.sanitizePatch(payload.patch);
+
+      // Authority is re-checked at execution time, not only at proposal time.
+      // Editing another administrator is a super admin's business, and the
+      // person who proposed this may have been demoted since.
+      const requester = await db.find('users', ctx?.requestedBy);
+      if (target.role === 'admin' && target.id !== ctx?.requestedBy && !roles.canManageAdmins(requester)) {
+        throw new ApprovalError('Only a super admin can change another administrator’s account', 403);
+      }
+
+      // A generated password is minted here rather than parked in the queue as
+      // plaintext, and it is emailed to the account it belongs to -- otherwise
+      // the reset lands and nobody on earth knows the new password.
+      let temporaryPassword = null;
+      if (payload.regeneratePassword) {
+        temporaryPassword = provisioning.generatePassword();
+        patch.password = bcrypt.hashSync(temporaryPassword, 10);
+      }
+
+      const updated = await db.update('users', payload.userId, patch);
+
+      if (patch.password) {
+        await db.removeWhere('sessions', (s) => s.userId === payload.userId);
+      }
+      if (temporaryPassword && payload.sendEmail !== false) {
+        await provisioning.emailCredentials(updated, temporaryPassword, {
+          invitedBy: requester?.name || 'your administrator',
+          isReset: true,
+        });
+      }
+
+      return updated;
     },
   },
 
@@ -191,6 +246,24 @@ function publicRequest(row, { nameById = new Map() } = {}) {
   };
 }
 
+/**
+ * Drop the secret half of a stored payload once the row is finished with.
+ *
+ * A proposed account creation has to carry the temporary password until
+ * somebody signs it off -- the whole point is that the change has not happened
+ * yet, and the password has to be the one that lands. But the moment the row
+ * reaches a final state, that value has no further use and no business
+ * outliving the decision in a table.
+ *
+ * The API never exposed it (see publicRequest). This is about what is at rest.
+ */
+async function forgetSecrets(row) {
+  const payload = parsePayload(row.payload);
+  if (!('plaintextPassword' in payload) && !('password' in payload)) return;
+  const { plaintextPassword, password, ...rest } = payload;
+  await db.update('approval_requests', row.id, { payload: JSON.stringify(rest) });
+}
+
 /** Pending rows past their window are expired lazily, on read. */
 async function expireStale() {
   const now = Date.now();
@@ -204,6 +277,7 @@ async function expireStale() {
       decidedAt: new Date().toISOString(),
       decisionNote: 'Nobody signed this off within 48 hours.',
     });
+    await forgetSecrets(row);
   }
   return stale.length;
 }
@@ -335,6 +409,7 @@ async function decide(id, approver, decision, note = null) {
     const updated = await db.update('approval_requests', id, {
       status: 'rejected', decidedBy: approver.id, decidedAt, decisionNote: note || null,
     });
+    await forgetSecrets(row);
     await tellRequester(row, approver, 'rejected', note);
     live.publish('approvals');
     return { request: updated, result: null };
@@ -364,6 +439,7 @@ async function decide(id, approver, decision, note = null) {
     });
 
     const done = await db.update('approval_requests', id, { executedAt: new Date().toISOString() });
+    await forgetSecrets(row);
     await tellRequester(row, approver, 'approved', note);
     live.publish('approvals');
     live.publish('users');
@@ -390,6 +466,7 @@ async function cancel(id, actor) {
   const updated = await db.update('approval_requests', id, {
     status: 'cancelled', decidedBy: actor.id, decidedAt: new Date().toISOString(),
   });
+  await forgetSecrets(row);
   live.publish('approvals');
   return updated;
 }

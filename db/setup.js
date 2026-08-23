@@ -3,7 +3,7 @@
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
-const { SCHEMAS, toSnake, toCamel } = require('./schemas');
+const { SCHEMAS, toSnake, toCamel, isWritableField } = require('./schemas');
 
 const DB_DRIVER =
   process.env.DB_DRIVER ||
@@ -63,11 +63,13 @@ function rowToCamel(row, collection) {
 }
 
 function objToSnakeEntries(collection, obj) {
-  const cols = SCHEMAS[collection];
   const entries = [];
   for (const [k, v] of Object.entries(obj)) {
+    // Canonical camelCase only. See isWritableField in db/schemas.js: accepting
+    // `is_super_admin` as a synonym of `isSuperAdmin` is what let a route guard
+    // written against one spelling be walked around with the other.
+    if (!isWritableField(collection, k)) continue;
     const snakeKey = toSnake(k);
-    if (!cols.includes(snakeKey)) continue;
     let value = v;
     if (k === 'meta' && value !== null && typeof value === 'object') value = JSON.stringify(value);
     if (k === 'allowedPages' && Array.isArray(value)) value = JSON.stringify(value);
@@ -260,6 +262,11 @@ async function initPostgresSchema() {
       created_at TEXT, expires_at BIGINT, consumed BOOLEAN DEFAULT FALSE, attempts INTEGER DEFAULT 0
     )`,
     `CREATE INDEX IF NOT EXISTS idx_otp_codes_user_id ON otp_codes(user_id)`,
+    `CREATE TABLE IF NOT EXISTS recovery_codes (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, code_hash TEXT NOT NULL,
+      created_at TEXT, used_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_recovery_codes_user_id ON recovery_codes(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_otp_codes_created_at ON otp_codes(created_at DESC)`,
     `CREATE TABLE IF NOT EXISTS login_links (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL, ip_address TEXT,

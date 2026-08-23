@@ -91,16 +91,21 @@ see "Local development" below.
   hash. Each login can carry an expiry date, after which the client is
   locked out until an admin issues a new one. See
   [Client access & credential lifecycle](#client-access--credential-lifecycle).
-- **Login codes (OTP)** - every non-admin login requires a second step: a
-  6-digit code the client types in. The code is emailed to the account
-  holder the instant the password check succeeds, so signing in needs
-  nobody's help. The admin-only **Login Codes** page
+- **Login codes (OTP)** - *every* login requires a second step, including
+  an administrator's: a 6-digit code emailed to the account holder the
+  instant the password check succeeds. The admin-only **Login Codes** page
   (`/portal/otp-monitor`) is the fallback for a workspace with no mail
-  transport configured: it lists the requester's name, email, and IP, and
-  an admin can reveal one code at a time and read it out. Admin accounts
-  skip the step entirely - they're the only ones who can see the panel, so
-  gating their own login behind it would lock everyone out. See
+  transport: a trusted admin can reveal one client or staff code at a time
+  and read it out. Administrator codes are deliberately absent from that
+  page and cannot be revealed by anyone - showing an admin's code to every
+  other admin would undo the second factor rather than support it. See
   [Login codes (OTP) flow](#login-codes-otp-flow) below.
+- **Backup sign-in codes** - because requiring a code puts the mail
+  transport on the critical path of getting in, every administrator holds
+  eight one-time backup codes, managed from **Security**
+  (`/portal/security`). One takes the place of the emailed code; the
+  password step still applies. See
+  [Backup codes and getting back in](#backup-codes-and-getting-back-in).
 - **One-tap sign-in links** - an admin can mint a single-use link for a
   client from **Client access** and hand it over on WhatsApp, SMS, or
   email. Opening it signs the client straight in: no password, no code.
@@ -418,32 +423,80 @@ when you're on Postgres: every other feature keeps working.
 
 ## Login codes (OTP) flow
 
-1. Client submits email + password at `/login` → `POST /api/auth/login`.
-2. If the password is correct and the account is **not** an admin, the
-   server creates a `pending` session (10-minute TTL) and inserts a row
-   into `otp_codes`: a random 6-digit code, the user's id, `req.ip`, and a
-   5-minute expiry. The response is `{ requiresOtp: true }` - the code
-   itself is never sent to the client that's logging in.
+1. Anyone submits email + password at `/login` → `POST /api/auth/login`.
+2. If the password is correct, the server creates a `pending` session
+   (10-minute TTL) and inserts a row into `otp_codes`: a random 6-digit
+   code, the user's id, `req.ip`, and a 5-minute expiry. The response is
+   `{ requiresOtp: true }` - the code itself is never sent to the client
+   that's logging in. This happens for every role, so the reply shape gives
+   away nothing about which accounts are administrators.
 3. The code is emailed to the account holder straight away, and the
    response carries `codeEmailed` plus a masked `codeDestination` so the
    login screen can say which inbox to look in. If no mail transport is
    configured the send is skipped, `codeEmailed` is false, and the login
-   screen falls back to telling the client to ask an admin. An admin then
-   opens **Login Codes** (`/portal/otp-monitor`, `GET /api/auth/otp-logs`,
-   admin-only), finds the row by name/email/IP, clicks the eye icon to
-   reveal the code, and relays it.
+   screen says to use a backup code or ask an admin. A **trusted** admin
+   then opens **Login Codes** (`/portal/otp-monitor`, `GET
+   /api/auth/otp-logs`), finds the row by name/email, clicks the eye icon
+   to reveal the code, and relays it. Administrator rows never appear on
+   that page and cannot be revealed; IP addresses are shown to a super
+   admin only. The account whose code was read is notified.
 4. The client types the code into the 6-box input and it's submitted to
    `POST /api/auth/verify-otp`. The server checks it against the newest
    non-consumed `otp_codes` row for that user, enforces a 5-attempt cap and
-   the 5-minute expiry, then on success marks the code `consumed`, promotes
-   the pending session to a full one, and logs the client in.
-5. Admin accounts skip steps 2–4 entirely (see `finishLogin` in
-   `routes/auth.js`) - otherwise no admin could ever reach the panel needed
-   to unlock their own login.
+   the 5-minute expiry, then on success marks the code `consumed`, issues a
+   **brand-new session** and destroys the pending one, and logs them in.
+   The identifier that existed before the person proved who they were never
+   survives into the session that follows.
+5. An administrator may type a backup code here instead of the emailed one.
+   See [Backup codes and getting back in](#backup-codes-and-getting-back-in).
 
 Delivery is by email only; there is no SMS provider wired up. The server
 warns at boot when no mail transport is configured, because that is the one
-state where a client cannot sign in without an admin on the phone.
+state where signing in depends on somebody else.
+
+## Backup codes and getting back in
+
+Requiring a code to finish an admin sign-in puts the mail transport on the
+critical path of getting into the building. If mail broke while every
+administrator happened to be signed out, nobody could get in - and the
+Login Codes page is no help, because reaching it means already being signed
+in. Two things close that.
+
+**Backup codes.** Every administrator holds eight one-time codes shaped
+`XXXXX-XXXXX`, from an alphabet with no look-alike characters because they
+get read down a phone line. Managed at **Security** (`/portal/security`);
+a new administrator is issued a set alongside their temporary password.
+
+- They replace the *second* factor, not the first. A backup code is only
+  accepted against a session that has already passed the password step.
+- Only the bcrypt hash is stored, so the table is not a list of working
+  credentials and the server cannot re-display them. They are shown once.
+- One use each. Generating a new set invalidates every earlier code.
+- Using one is announced in-app to every other administrator and written to
+  the audit log as `via: recovery_code`. A quiet break-glass would be worse
+  than no record at all.
+- Administrators only. Everyone else has an admin who can read their code
+  off the Login Codes page.
+
+**The break-glass tool**, for the one case backup codes cannot cover: a
+deployment where mail has never worked and no administrator has ever signed
+in, so nobody holds a code and nobody can generate one.
+
+```bash
+npm run admin:recovery -- list
+npm run admin:recovery -- issue admin@example.com --reason "mail down" --yes
+```
+
+Run on the server. It issues a fresh set for one named administrator and
+prints them once. Nothing happens without `--yes`; the bare command is a dry
+run. It refuses any account that is not an administrator, never touches a
+password, writes an audit entry marked `issued_from_server`, and alerts
+every other administrator.
+
+It grants no power that server access did not already carry - anyone who can
+run it can already rewrite a password hash in the database by hand. What it
+adds is a supported way to do it that leaves a record. Treat shell access to
+this server as equivalent to administrator access to the workspace.
 
 ## One-tap sign-in links
 

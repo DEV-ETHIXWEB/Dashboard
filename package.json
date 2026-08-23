@@ -9,11 +9,13 @@
     "dev": "node --watch --env-file-if-exists=.env server.js",
     "dev:pgmem": "node --watch --env-file-if-exists=.env -r ./scripts/dev-with-pgmem.js server.js",
     "db:check": "node --env-file-if-exists=.env scripts/db-check.js",
+    "admin:recovery": "node --env-file-if-exists=.env scripts/admin-recovery.js",
     "migrate": "node --env-file-if-exists=.env scripts/migrate-local-data.js",
     "build": "node scripts/build-frontend.js",
-    "test": "npm run test:app && npm run test:mail",
+    "test": "npm run test:app && npm run test:mail && npm run test:security",
     "test:app": "node --env-file-if-exists=.env.test -r ./scripts/dev-with-pgmem.js scripts/test-app.js",
-    "test:mail": "node -r ./scripts/dev-with-pgmem.js scripts/test-mail.js"
+    "test:mail": "node -r ./scripts/dev-with-pgmem.js scripts/test-mail.js",
+    "test:security": "node --env-file-if-exists=.env.test -r ./scripts/dev-with-pgmem.js scripts/security-regression.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -28,6 +28,7 @@ const SlackMessages = lazy(() => import("@/pages/SlackMessages"));
 const Notifications = lazy(() => import("@/pages/Notifications"));
 const Approvals = lazy(() => import("@/pages/Approvals"));
 const AuditLog = lazy(() => import("@/pages/AuditLog"));
+const Security = lazy(() => import("@/pages/Security"));
 
 function RouteFallback() {
   return (
@@ -190,6 +191,15 @@ function App() {
             }
           />
           <Route path="/portal/notifications" element={<RoleRoute><Notifications /></RoleRoute>} />
+          {/* Backup sign-in codes. Admin-only, and the API refuses everyone else too. */}
+          <Route
+            path="/portal/security"
+            element={
+              <RoleRoute roles={["admin"]}>
+                <Security />
+              </RoleRoute>
+            }
+          />
           <Route
             path="/portal/approvals"
             element={

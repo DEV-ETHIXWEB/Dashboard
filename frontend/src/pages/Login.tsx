@@ -9,6 +9,7 @@ import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import type { LoginResponse } from "@/lib/types";
 import * as fb2fa from "@/lib/firebase2fa";
 
@@ -66,6 +67,11 @@ export default function Login() {
   const [otpBusy, setOtpBusy] = useState(false);
   const [code, setCode] = useState(["", "", "", "", "", ""]);
   const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
+  // A backup code is typed as one string, not six boxes, so the code step has
+  // two shapes. Administrators fall back to this when email is not reaching
+  // them -- see the Security page.
+  const [useBackupCode, setUseBackupCode] = useState(false);
+  const [backupCode, setBackupCode] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const codeRefs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -182,20 +188,40 @@ export default function Login() {
 
   async function submitOtp() {
     setOtpError(null);
-    const joined = code.join("");
-    if (joined.length !== 6) {
+
+    // Two shapes, one endpoint: six digits from an email, or a backup code an
+    // admin has kept somewhere. The server decides which it was.
+    const submitted = useBackupCode ? backupCode.trim() : code.join("");
+    if (useBackupCode) {
+      if (submitted.replace(/[^A-Za-z0-9]/g, "").length !== 10) {
+        setOtpError("A backup code looks like XXXXX-XXXXX");
+        return;
+      }
+    } else if (submitted.length !== 6) {
       setOtpError("Enter the full 6-digit code");
       return;
     }
+
     setOtpBusy(true);
     try {
-      const d = await api<LoginResponse>("POST", "/auth/verify-otp", { code: joined });
+      const d = await api<LoginResponse>("POST", "/auth/verify-otp", { code: submitted });
       if (d.user) setSession(d.user, d.csrfToken);
+      if (d.usedRecoveryCode) {
+        const left = d.recoveryCodesRemaining ?? 0;
+        toast.warning(
+          left === 0
+            ? "That was your last backup code. Generate a new set on the Security page now."
+            : `Backup code used. ${left} left — generate a new set from the Security page.`,
+        );
+      } else if (d.user?.role === "admin" && d.recoveryCodesRemaining === 0) {
+        toast.warning("You have no backup codes. Without them, an email outage locks you out.");
+      }
       navigate("/portal");
     } catch (err) {
       setOtpError(err instanceof ApiError ? err.message : "Verification failed");
       setCode(["", "", "", "", "", ""]);
-      codeRefs.current[0]?.focus();
+      setBackupCode("");
+      if (!useBackupCode) codeRefs.current[0]?.focus();
     } finally {
       setOtpBusy(false);
     }
@@ -569,11 +595,32 @@ export default function Login() {
                       <h1 className="text-xl sm:t-title text-foreground">Verify it's you</h1>
                     </div>
                     <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-                      {codeDestination
-                        ? `We sent a 6-digit code to ${codeDestination}. Enter it below.`
-                        : "We could not email your code. Ask your admin for the 6-digit code generated for this sign-in, then enter it below."}
+                      {useBackupCode
+                        ? "Enter one of the backup codes you saved. Each one works once, and works even if the emailed code has expired."
+                        : codeDestination
+                          ? `We sent a 6-digit code to ${codeDestination}. Enter it below.`
+                          : "We could not email your code. If you saved backup codes, use one below. Otherwise ask your admin for the code generated for this sign-in."}
                     </p>
 
+                    {useBackupCode ? (
+                      <div className="my-1 flex flex-col gap-2">
+                        <Label htmlFor="backup-code">Backup code</Label>
+                        <Input
+                          id="backup-code"
+                          autoFocus
+                          autoComplete="one-time-code"
+                          spellCheck={false}
+                          placeholder="XXXXX-XXXXX"
+                          maxLength={11}
+                          className="h-12 text-center font-mono text-lg tracking-[0.25em] uppercase bg-background text-foreground border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all"
+                          value={backupCode}
+                          onChange={(e) => setBackupCode(e.target.value.toUpperCase())}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !otpBusy) submitOtp();
+                          }}
+                        />
+                      </div>
+                    ) : (
                     <div className="flex justify-between gap-2 my-1">
                       {code.map((digit, i) => (
                         <Input
@@ -612,8 +659,9 @@ export default function Login() {
                         />
                       ))}
                     </div>
+                    )}
 
-                    {secondsLeft !== null && (
+                    {!useBackupCode && secondsLeft !== null && (
                       <p className={`text-xs ${otpExpired ? "text-destructive font-medium" : "text-muted-foreground"}`}>
                         {otpExpired
                           ? "This code has expired. Go back and sign in again for a new one."
@@ -627,10 +675,33 @@ export default function Login() {
                       </div>
                     )}
 
-                    <Button type="button" disabled={otpBusy || otpExpired} onClick={submitOtp} className="h-10 shadow-md shadow-primary/20 hover:shadow-lg hover:shadow-primary/30 transition-all text-sm font-semibold cursor-pointer">
+                    <Button
+                      type="button"
+                      disabled={otpBusy || (otpExpired && !useBackupCode)}
+                      onClick={submitOtp}
+                      className="h-10 shadow-md shadow-primary/20 hover:shadow-lg hover:shadow-primary/30 transition-all text-sm font-semibold cursor-pointer"
+                    >
                       {otpBusy && <Loader2 className="size-4 animate-spin" />}
                       Confirm code
                     </Button>
+
+                    {/* The way back in when email is not working. Administrators
+                        hold eight one-time codes for exactly this; a backup code
+                        works even after the emailed one has expired. */}
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground cursor-pointer"
+                      onClick={() => {
+                        setUseBackupCode((v) => !v);
+                        setOtpError(null);
+                        setBackupCode("");
+                        setCode(["", "", "", "", "", ""]);
+                      }}
+                    >
+                      {useBackupCode
+                        ? "Enter the emailed code instead"
+                        : "Can't get the email? Use a backup code"}
+                    </button>
 
                     <Button
                       type="button"
@@ -640,6 +711,8 @@ export default function Login() {
                         setStep("credentials");
                         setOtpError(null);
                         setCode(["", "", "", "", "", ""]);
+                        setBackupCode("");
+                        setUseBackupCode(false);
                         setOtpExpiresAt(null);
                       }}
                     >

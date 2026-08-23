@@ -1,0 +1,756 @@
+<title>Admin Security Remediation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html{background:#ffffff}
+  body{
+    margin:0; background:#ffffff; color:#1a1a1a;
+    font:16px/1.65 Georgia, "Times New Roman", serif;
+  }
+  .wrap{max-width:820px;margin:0 auto;padding:40px 22px 90px}
+
+  h1{font-size:28px;line-height:1.2;margin:0 0 6px;font-weight:normal}
+  h2{font-size:21px;margin:46px 0 10px;font-weight:normal;border-bottom:1px solid #1a1a1a;padding-bottom:6px}
+  h3{font-size:17px;margin:30px 0 6px;font-weight:bold}
+  h4{font-size:15px;margin:18px 0 4px;font-weight:bold;letter-spacing:.02em}
+  p{margin:10px 0}
+  .lede{color:#4a4a4a;font-size:15px;margin:0 0 4px}
+  .stamp{color:#666;font-size:13.5px;line-height:1.5;margin-top:14px;
+    border-top:1px solid #d5d5d5;border-bottom:1px solid #d5d5d5;padding:12px 0}
+
+  .box{border:1px solid #c8c8c8;padding:16px 18px;margin:18px 0;background:#fafafa}
+
+  .item{border-top:1px solid #d5d5d5;padding:22px 0 4px}
+  .item:first-of-type{border-top:2px solid #1a1a1a}
+  .rank{font-size:13px;color:#555;letter-spacing:.03em;text-transform:uppercase}
+  .name{font-size:18px;font-weight:bold;margin:4px 0 10px}
+  .lbl{font-weight:bold}
+
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.5px}
+  th,td{text-align:left;padding:9px 10px;border:1px solid #c8c8c8;vertical-align:top}
+  th{background:#f0f0f0;font-weight:bold}
+  .scroll{overflow-x:auto}
+
+  code{font-family:Consolas,"Courier New",monospace;font-size:13.5px;background:#f0f0f0;padding:1px 4px}
+  pre{font-family:Consolas,"Courier New",monospace;font-size:13px;line-height:1.5;
+    background:#f4f4f4;border-left:3px solid #999;padding:11px 13px;overflow-x:auto;margin:10px 0}
+
+  ul,ol{margin:10px 0;padding-left:24px} li{margin:5px 0}
+  hr{border:none;border-top:1px solid #d5d5d5;margin:36px 0}
+  footer{margin-top:50px;border-top:1px solid #1a1a1a;padding-top:14px;color:#555;font-size:13.5px}
+
+  .tag{display:inline-block;font:bold 11.5px/1.4 Consolas,"Courier New",monospace;
+    letter-spacing:.06em;padding:2px 6px;border:1px solid #1a1a1a;white-space:nowrap}
+  .t-fixed{background:#1a1a1a;color:#fff}
+  .t-partial{background:#fff;color:#1a1a1a}
+  .t-open{background:#fff;color:#1a1a1a;border-style:dashed}
+  .t-unver{background:#efefef;color:#444;border-color:#999}
+</style>
+
+<div class="wrap">
+
+<h1>Admin Dashboard — Security Remediation</h1>
+<p class="lede">EthixWeb CRM. Follow-up to the audit of 23 August 2026. Admin and staff area only.</p>
+
+<div class="stamp">
+Date: 23 August 2026 · Branch <code>deepanshu-branch</code>, working tree on top of commit <code>35c32b1</code><br>
+Scope: every finding in <code>admin-security-audit.html</code>, plus the class of bug behind each one wherever else it occurred.<br>
+Method: each vulnerability was reproduced first as an automated test that asserts the <em>secure</em> behaviour, so it failed before the fix and passes after. Fixes were made at the server enforcement layer. Nothing in production was touched; all testing ran against an isolated in-memory Postgres.<br>
+No passwords, keys, tokens, or customer data appear in this document.
+</div>
+
+<h2>1. Executive summary</h2>
+
+<p>Everything the audit confirmed has been fixed, with one exception that is reduced rather than removed and is described plainly below. The two critical privilege-escalation paths are closed at three independent layers — the data layer, the route, and the approval queue — so the same class of bug cannot come back through a different field or a different endpoint.</p>
+
+<p>The single most important change is that <strong>administrators no longer sign in with a password alone</strong>. Every role now completes the same emailed-code step. That one change removes the last rung of the audit's account-takeover chain and, as a side effect, closes the informational finding about the login reply being a role oracle.</p>
+
+<p>That change put the mail transport on the critical path of getting into the building, which raised a fair question: <em>if every admin is signed out and email is not working, how does anyone get back in?</em> They could not have. So each administrator now holds <strong>eight one-time backup codes</strong> that stand in for the emailed one. They are a replacement for the second factor, not a way past it — the password step still has to be completed first.</p>
+
+<div class="box">
+<p><span class="lbl">Plain summary:</span> an admin can no longer promote itself, cannot touch another administrator's account, cannot read anyone's live sign-in code, and cannot sign in with just a password. What an admin legitimately needs to do — issue client logins, reset a client password, manage tickets and projects — all still works, and is covered by tests that prove it still works.</p>
+</div>
+
+<h3>The numbers</h3>
+
+<div class="scroll">
+<table>
+<tr><th>Count</th><th>What</th></tr>
+<tr><td>16</td><td>Security findings in the original audit (2 critical, 4 high, 4 medium, 3 low, 3 informational)</td></tr>
+<tr><td>1</td><td>Additional high-severity issue the audit raised outside the numbered list (the Mail page)</td></tr>
+<tr><td>5</td><td>Reliability defects listed separately in the audit</td></tr>
+<tr><td>16 of 17</td><td>Security findings now <span class="tag t-fixed">FIXED</span></td></tr>
+<tr><td>1 of 17</td><td><span class="tag t-partial">PARTIALLY FIXED</span> — finding 9, admin-issued sign-in links</td></tr>
+<tr><td>5 of 5</td><td>Reliability defects fixed</td></tr>
+<tr><td>7</td><td>New issues found <em>during</em> remediation, all fixed</td></tr>
+<tr><td>181</td><td>Automated security regression checks, all passing</td></tr>
+<tr><td>418</td><td>Total automated checks across all three suites, all passing</td></tr>
+<tr><td>5</td><td>Dependency advisories left open, with a reachability analysis below</td></tr>
+</table>
+</div>
+
+<h3>New issues discovered during remediation</h3>
+
+<ol>
+<li><strong>The Firestore driver had the identical escalation hole.</strong> The audit could not test it and flagged it as unknown. It did. Both drivers now share one gate.</li>
+<li><strong>The approval queue kept a proposed plaintext password at rest forever</strong>, including after the request had been approved, rejected, or expired.</li>
+<li><strong>ClickUp identifiers were glued into outgoing URLs unescaped.</strong> The audit flagged this as unproven for want of credentials; it is fixed regardless.</li>
+<li><strong><code>CORS_ORIGINS</code> would have accepted <code>*</code> alongside credentialed requests.</strong> Not currently exploitable — the variable is unset on this deployment — but it was a loaded gun.</li>
+<li><strong>Projects and domains accepted any <code>clientId</code> at all</strong>, including one belonging to a staff account, which puts a record in a portal nobody expects.</li>
+<li><strong>A high-severity denial-of-service advisory</strong> in the production dependency tree (<code>brace-expansion</code>).</li>
+<li><strong>Our own rate limiting could have caused a lockout.</strong> Generating backup sign-in codes initially shared a budget with revealing OTP codes, so grinding the second endpoint would have starved the one feature whose purpose is preventing a lockout. Found while testing the fix below; it now has its own budget.</li>
+</ol>
+
+<hr>
+
+<h2>2. Remediation table</h2>
+
+<div class="scroll">
+<table>
+<tr><th>ID</th><th>Sev</th><th>Vulnerability</th><th>Root cause</th><th>Status</th><th>Verification</th></tr>
+
+<tr><td>1</td><td>CRITICAL</td><td>Any admin makes itself super admin via <code>is_super_admin</code></td><td>The data layer normalised field-name spellings, so a route guard written against one name had a working synonym</td><td><span class="tag t-fixed">FIXED</span></td><td>11 regression checks incl. both spellings of both flags</td></tr>
+
+<tr><td>2</td><td>CRITICAL</td><td>Approval queue approves a promotion described as a name change</td><td>The summary function only recognised known fields and called everything else "their details"; the patch was stored unfiltered</td><td><span class="tag t-fixed">FIXED</span></td><td>5 regression checks; queue asserted free of privileged payloads</td></tr>
+
+<tr><td>3</td><td>HIGH</td><td>An admin resets the owner's password and reads it</td><td>The user editor treated an administrator's account as ordinary user data</td><td><span class="tag t-fixed">FIXED</span></td><td>6 regression checks, incl. that a super admin still can</td></tr>
+
+<tr><td>4</td><td>HIGH</td><td>Admins skip the second factor; the two-step toggle does nothing</td><td>A role branch in the login handler; a setting written but never read</td><td><span class="tag t-fixed">FIXED</span></td><td>30 regression checks, plus the lockout scenario driven end to end in a browser</td></tr>
+
+<tr><td>5</td><td>HIGH</td><td>Any admin reads any live login code, and everyone's IP</td><td>Both endpoints checked only the <code>admin</code> role, with no notion of standing or of who the code belonged to</td><td><span class="tag t-fixed">FIXED</span></td><td>5 regression checks incl. reveal-your-own-admin-code</td></tr>
+
+<tr><td>6</td><td>HIGH</td><td>The app learns its own address from whoever speaks first</td><td>An unset <code>APP_BASE_URL</code> fell back to trusting request headers</td><td><span class="tag t-fixed">FIXED</span></td><td>3 regression checks: Origin, Referer, Host</td></tr>
+
+<tr><td>M</td><td>HIGH</td><td>The Mail page is a permanent, browsable store of credentials</td><td>Every email was logged with its full body, including passwords and live sign-in tokens</td><td><span class="tag t-fixed">FIXED</span></td><td>3 regression checks against the stored rows</td></tr>
+
+<tr><td>7</td><td>MEDIUM</td><td>Any staff member reads every client's payment history</td><td>The page was hidden in the browser; the endpoints checked only that you were signed in</td><td><span class="tag t-fixed">FIXED</span></td><td>6 regression checks + the sibling write endpoint</td></tr>
+
+<tr><td>8</td><td>MEDIUM</td><td>Any employee edits or reassigns any ticket</td><td>"Staff" was one bucket, and the whole request body was copied onto the row</td><td><span class="tag t-fixed">FIXED</span></td><td>4 regression checks incl. the legitimate assignee</td></tr>
+
+<tr><td>9</td><td>MEDIUM</td><td>An admin makes a client sign-in link and uses it themselves</td><td>The feature is a bearer credential by design; nothing constrained who could mint one or noticed it being used</td><td><span class="tag t-partial">PARTIALLY FIXED</span></td><td>4 regression checks; residual risk stated in §5</td></tr>
+
+<tr><td>10</td><td>MEDIUM</td><td>The audit log does not record what a change did</td><td>Audit calls passed no detail for the most sensitive route in the app</td><td><span class="tag t-fixed">FIXED</span></td><td>3 regression checks incl. "no secret ever reaches the log"</td></tr>
+
+<tr><td>11</td><td>LOW</td><td>The session identifier survives the verification step</td><td>The pending session was upgraded in place rather than replaced</td><td><span class="tag t-fixed">FIXED</span></td><td>2 regression checks: new id issued, old id dead</td></tr>
+
+<tr><td>12</td><td>LOW</td><td>Uploads are unchecked; SVG is rendered in the app's own origin</td><td>No allowlist at all, and SVG on the inline-render list</td><td><span class="tag t-fixed">FIXED</span></td><td>6 regression checks incl. a mislabelled <code>.js</code></td></tr>
+
+<tr><td>13</td><td>LOW</td><td>Clients are handed the full staff list, admins labelled</td><td>The non-admin branch of the directory made no distinction between staff and clients</td><td><span class="tag t-fixed">FIXED</span></td><td>3 regression checks incl. "staff still get the directory"</td></tr>
+
+<tr><td>14</td><td>INFO</td><td>The login reply reveals which accounts are admins</td><td>The same role branch as finding 4</td><td><span class="tag t-fixed">FIXED</span></td><td>Reply shapes asserted identical</td></tr>
+
+<tr><td>15</td><td>INFO</td><td>Sensitive admin actions share the general rate limit</td><td>Only login and code entry had their own budget</td><td><span class="tag t-fixed">FIXED</span></td><td>1 regression check; per-IP caveat is <span class="tag t-unver">UNVERIFIED</span> in production</td></tr>
+
+<tr><td>16</td><td>INFO</td><td>Malformed bodies answer 500 instead of 400</td><td>The body parser's error fell through to the catch-all handler</td><td><span class="tag t-fixed">FIXED</span></td><td>2 regression checks incl. "no internals in the body"</td></tr>
+
+<tr><td>B1</td><td>BUG</td><td>Approved account creation loses the Slack channel</td><td>A second, shorter copy of the creation code inside the queue</td><td><span class="tag t-fixed">FIXED</span></td><td>Round-trip regression check</td></tr>
+
+<tr><td>B2</td><td>BUG</td><td>Approved creation and resets never deliver the password</td><td>The email was sent only on the direct path</td><td><span class="tag t-fixed">FIXED</span></td><td>2 round-trip regression checks</td></tr>
+
+<tr><td>B3</td><td>BUG</td><td>A duplicate email address crashes with 500</td><td>The admin editor had no collision check; the database raised it</td><td><span class="tag t-fixed">FIXED</span></td><td>Now answers 409, matching the profile screen</td></tr>
+
+<tr><td>B4</td><td>BUG</td><td>Two generations of frontend JavaScript are being served</td><td>Build output accumulated without a clean step</td><td><span class="tag t-fixed">FIXED</span></td><td>Resolved by the rebuild this work required: 111 asset files down to 85, one copy of each</td></tr>
+
+<tr><td>B5</td><td>BUG</td><td>Live updates go to the wrong client after a ticket moves</td><td>The audience was the pre-change owner</td><td><span class="tag t-fixed">FIXED</span></td><td>Both owners now notified; same fix applied to projects and domains</td></tr>
+
+<tr><td>N1</td><td>CRITICAL</td><td>The Firestore driver had finding 1's hole too</td><td>The same normalise-then-check pattern, written twice</td><td><span class="tag t-fixed">FIXED</span></td><td>Shared gate unit-checked; live Firestore <span class="tag t-unver">UNVERIFIED</span></td></tr>
+
+<tr><td>N2</td><td>MEDIUM</td><td>Proposed passwords lived in the queue at rest, forever</td><td>The payload was never cleared once the row was decided</td><td><span class="tag t-fixed">FIXED</span></td><td>Regression check on the settled row</td></tr>
+
+<tr><td>N3</td><td>MEDIUM</td><td>ClickUp identifiers unescaped in outgoing URLs</td><td>Path segments built by string interpolation</td><td><span class="tag t-fixed">FIXED</span></td><td>Encoded + traversal guard; live ClickUp <span class="tag t-unver">UNVERIFIED</span></td></tr>
+
+<tr><td>N4</td><td>MEDIUM</td><td><code>CORS_ORIGINS=*</code> would pair a wildcard with credentials</td><td>The value was passed through unvalidated</td><td><span class="tag t-fixed">FIXED</span></td><td>Wildcard now dropped with a warning at boot</td></tr>
+
+<tr><td>N5</td><td>LOW</td><td>Projects and domains accept any <code>clientId</code></td><td>Wholesale body copy, same class as finding 8</td><td><span class="tag t-fixed">FIXED</span></td><td>Owner must be a real client account</td></tr>
+
+<tr><td>N6</td><td>HIGH</td><td>Denial-of-service advisory in a production dependency</td><td><code>brace-expansion</code> unbounded expansion</td><td><span class="tag t-fixed">FIXED</span></td><td><code>npm audit fix</code>, non-breaking; suites re-run</td></tr>
+
+<tr><td>N7</td><td>MEDIUM</td><td>Rate limiting could starve the lockout-recovery path</td><td>Backup-code generation shared a budget with OTP reveals</td><td><span class="tag t-fixed">FIXED</span></td><td>Own budget; regression check generates a set after the reveal budget is spent</td></tr>
+
+</table>
+</div>
+
+<hr>
+
+<h2>3. Before / after</h2>
+
+<!-- 001 -->
+<div class="item">
+<div class="rank">Finding 1 · CRITICAL · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">Any admin can make itself super admin by changing the spelling of one word</div>
+
+<h4>Before</h4>
+<p>The user editor refused a body containing <code>isSuperAdmin</code>. It did not refuse <code>is_super_admin</code>, and the database layer accepted both. A trusted admin sent the second spelling and became the owner of the workspace in one request.</p>
+
+<h4>Root cause</h4>
+<p>Not the guard. The guard was fine as far as it went. The cause was one layer below it: <code>objToSnakeEntries</code> in <code>db/setup.js</code> ran every incoming key through <code>toSnake()</code> and matched the result against the column list. That function is a <em>normaliser</em>, so it happily mapped two different spellings onto the same column. Every authorization check in the application written against a camelCase field name therefore had a synonym that walked around it — and the escalation was simply the first place anyone thought to look.</p>
+
+<h4>After</h4>
+<p>Three layers, any one of which stops it.</p>
+<ul>
+<li><strong>The data layer.</strong> A new <code>isWritableField()</code> in <code>db/schemas.js</code> accepts a key only when it is the canonical camelCase name of a real column. <code>isSuperAdmin</code> writes; <code>is_super_admin</code> is dropped on the floor. Both database drivers call it, so the two cannot drift.</li>
+<li><strong>The route.</strong> <code>PUT /api/users/:id</code> no longer copies the body. <code>utils/userFields.js</code> names the eight fields the editor may write; standing is not among them at any spelling, and anything else is refused <em>by name</em> with a 400 rather than silently ignored — a caller aiming at a privilege flag is told where it actually lives.</li>
+<li><strong>The queue.</strong> The stored patch is filtered again at execution time, so a row written by an older build, or edited in the database by hand, still cannot carry a flag into a live account.</li>
+</ul>
+
+<h4>Verification</h4>
+<pre>camelCase isSuperAdmin                    -> 400   (was 400)
+snake_case is_super_admin                 -> 400   (was 200, promoted)
+camelCase adminTrusted                    -> 400   (was 400)
+snake_case admin_trusted                  -> 400   (was 200, promoted)
+name change + hidden is_super_admin       -> 400   (was 200, promoted)
+capabilities afterwards: isSuperAdmin = false
+
+AUTHORIZED  super admin via /standing     -> 200
+AUTHORIZED  ordinary name change          -> 200
+UNAUTHORIZED trusted admin via /standing  -> 403</pre>
+<p>Bypass variants were tested on the sibling routes that write the same table: account creation (<code>POST /api/users</code>) and the self-service profile screen (<code>PUT /api/users/me</code>). Neither grants standing at any spelling.</p>
+</div>
+
+<!-- 002 -->
+<div class="item">
+<div class="rank">Finding 2 · CRITICAL · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">The approval queue can be tricked into approving a promotion that looks like a name change</div>
+
+<h4>Before</h4>
+<p>A new admin submitted a name change carrying a hidden privilege flag. The queue stored it intact and described it to the approver as <em>"Change their details"</em>. An honest colleague clicked approve and the promotion went through.</p>
+
+<h4>Root cause</h4>
+<p>Two failures compounding. The patch was stored unfiltered, so the flag survived into the parked row. And <code>describeUserChange()</code> only knew how to describe the fields it had been taught about — anything else fell into a catch-all phrase. Silence, presented as reassurance.</p>
+
+<h4>After</h4>
+<p>The flag can no longer get into the patch at all — the field allowlist runs before the queue sees it, so there is nothing to disguise. Independently, the summary function was rewritten so that <strong>every</strong> field in the patch is named, and anything it does not recognise is listed raw rather than swallowed. A future field added to the editor cannot silently become invisible to approvers.</p>
+
+<h4>Verification</h4>
+<pre>New admin submits {name, is_super_admin}  -> 400  (was 202, parked)
+The approval queue, read back             -> no pending request whose
+                                             payload mentions super/trusted
+capabilities afterwards: isSuperAdmin = false, needsApproval = true
+
+AUTHORIZED  untrusted admin proposes a client account  -> 202
+AUTHORIZED  trusted admin signs it off                 -> 200
+UNAUTHORIZED proposer signs off their own              -> 403
+UNAUTHORIZED a second approval of the same row         -> 409</pre>
+</div>
+
+<!-- 003 -->
+<div class="item">
+<div class="rank">Finding 3 · HIGH · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">An admin can reset the owner's password and is shown the new one in plain text</div>
+
+<h4>Before</h4>
+<p>Any admin could reset any other admin's password, including the super admin's, and read the new password straight out of the response. With admins signing in on a password alone, that was the whole account.</p>
+
+<h4>Root cause</h4>
+<p>The user editor made no distinction between an administrator's account and anyone else's. The app already reserved <em>role</em> and <em>standing</em> changes to a super admin, but the password — the one field that hands the account over outright — was left in the general case.</p>
+
+<h4>After</h4>
+<p>Editing another administrator's account, in any respect and not only the password, now requires whoever is entitled to appoint administrators in the first place. An admin still edits their own account, and a super admin still resets an admin's password when that is genuinely needed. The check is re-run at execution time on the approval path too, in case the proposer has been demoted since proposing.</p>
+
+<h4>Verification</h4>
+<pre>trusted admin resets the super admin      -> 403, no password returned  (was 200)
+trusted admin resets another admin        -> 403, no password returned  (was 200)
+untrusted admin queues an admin reset     -> 403                        (was 202)
+
+AUTHORIZED  admin resets a client's password        -> 200 + password
+AUTHORIZED  super admin resets an admin's password  -> 200 + password
+AUTHORIZED  that admin signs in with the new one    -> 200
+AUTHORIZED  the reset ended the old sessions        -> 401 on the old cookie</pre>
+</div>
+
+<!-- 004 -->
+<div class="item">
+<div class="rank">Finding 4 · HIGH · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">Admins never get a second login step, and the two-step switch does nothing</div>
+
+<h4>Before</h4>
+<p>A branch in the login handler read: if this person is an admin, sign them straight in. Everyone else received an emailed code. The most powerful accounts had the weakest sign-in. Separately, the "Two-step sign in" toggle wrote a value to the database that no part of the login path ever read.</p>
+
+<h4>Root cause</h4>
+<p>A convenience shortcut for the accounts that could least afford one. The toggle was a settings screen with no server behind it.</p>
+
+<h4>After</h4>
+<p>The role branch is gone. Every account — client, employee, admin, super admin — opens a <em>pending</em> session with its password and completes it with an emailed code. That closes the takeover chain: even with a password in hand, an attacker needs the inbox.</p>
+<p>The toggle now decides something the server enforces: an account with two-step sign in switched on cannot have a one-tap sign-in link minted for it, and an existing link stops working the moment the switch is turned on. A link is a bearer credential that replaces both factors, so honouring one for an account that asked for two would be the setting lying again in a different way.</p>
+
+<h4>Verification</h4>
+<pre>admin password alone            -> 200 {requiresOtp: true}, no session  (was full session)
+admin reply vs client reply     -> identical key sets                   (was different)
+emailed code completes sign-in  -> 200, full session
+one-tap link for a 2FA account  -> 409, refused                         (was 200)</pre>
+</div>
+
+<!-- backup codes -->
+<div class="item">
+<div class="rank">Follow-up to finding 4 · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">The lockout that requiring a code would otherwise have created</div>
+
+<h4>The problem this solves</h4>
+<p>Requiring an emailed code to finish an admin sign-in put the mail transport on the critical path of getting into the building. If mail broke while every administrator happened to be signed out, nobody could get in — and the Login Codes page was no help, because reaching it means already being signed in. Worse, that page deliberately hides administrator codes now (finding 5), so even a colleague could not read one out.</p>
+<p>This was not a theoretical concern. It was raised before it could bite, and it is a genuine availability risk created by a security fix.</p>
+
+<h4>After</h4>
+<p>Every administrator holds eight one-time backup codes, in the shape <code>XXXXX-XXXXX</code>, from an alphabet with no look-alike characters because these get read down a phone line.</p>
+<ul>
+<li><strong>They replace the second factor, not the first.</strong> The password step still has to be completed — a backup code is only accepted against a session that has already proved the password. A code on its own is refused.</li>
+<li><strong>Only the bcrypt hash is stored</strong>, so the table is not a list of working credentials, and the server genuinely cannot re-display them. They are shown once: on the Security page when generated, and alongside the temporary password when a new administrator is created.</li>
+<li><strong>One use each</strong>, and generating a new set immediately invalidates every earlier code.</li>
+<li><strong>Using one is announced</strong> to every other administrator and written to the audit log. A break-glass event that happened quietly would be worse than no record at all.</li>
+<li><strong>They are for administrators only.</strong> Everyone else has an admin who can read their code off the Login Codes page; an admin has nobody, which is the entire reason these exist.</li>
+<li><strong>They follow the role.</strong> A demoted administrator's codes are deleted with the demotion.</li>
+</ul>
+
+<h4>Verification</h4>
+<p>24 automated checks, plus the whole scenario driven by hand through the real built UI: the mail transport was killed outright, the administrator signed out, and the way back in was a backup code and nothing else.</p>
+<pre>mail transport killed
+admin signs in with password    -> "We could not email your code"
+enters a backup code            -> signed in, full admin session
+codes remaining afterwards      -> 7 of 8, 1 used
+the other admins are notified; the audit log records via: recovery_code
+
+EXPLOIT BLOCKED  a spent code, reused                -> 403
+EXPLOIT BLOCKED  a code after the set was replaced   -> 403
+EXPLOIT BLOCKED  one admin using another's code      -> 403
+EXPLOIT BLOCKED  a code with no password step first  -> 401
+UNAUTHORIZED     a non-admin asking for codes        -> 403</pre>
+
+<div class="box">
+<p><span class="lbl">One thing to do.</span> Backup codes protect an administrator who has generated a set, and the existing administrators start with none. The Security page says so in the strongest terms it can, but it cannot make anyone click. Tell your admins to generate theirs today rather than on the day they need them — or issue the first set for them with the tool below.</p>
+</div>
+</div>
+
+<!-- break-glass CLI -->
+<div class="item">
+<div class="rank">Follow-up · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">The first administrator, on a deployment where mail has never worked</div>
+
+<h4>The problem this solves</h4>
+<p>Backup codes cover an administrator who has generated a set, which requires having signed in at least once. That leaves one case uncovered: a deployment where mail has never worked and no administrator has ever completed a sign-in. Nobody holds a code, and nobody can generate one, because generating one means being signed in. The front door is shut with everybody outside it.</p>
+
+<h4>After</h4>
+<p>A command-line tool, run on the server, issues a fresh set of backup codes for one named administrator:</p>
+<pre>npm run admin:recovery -- list
+npm run admin:recovery -- issue admin@example.com --reason "mail transport down" --yes</pre>
+
+<p>The design question worth answering plainly is whether this hands anyone new power. It does not. Anyone who can run this can already reach the database and rewrite a password hash by hand. What the tool adds is a <em>supported</em> way to do it that leaves a record — the hand-edited database row leaves none.</p>
+<ul>
+<li><strong>It refuses anything that is not an administrator.</strong> A locked-out client or staff member has an admin to help them; that is a different and much smaller problem, and not a reason to build a second way into their account.</li>
+<li><strong>It never touches a password</strong> and never prints one.</li>
+<li><strong>Nothing happens without <code>--yes</code>.</strong> The bare command is a dry run that names the account, says how many codes it holds, and states exactly what would change.</li>
+<li><strong>It is on the record twice</strong> — an audit entry marked <code>issued_from_server</code>, carrying whatever reason was given, and an in-app alert to every other administrator saying a set was issued from the console and to treat it as a security event if unexpected.</li>
+<li><strong>The codes it issues are ordinary ones.</strong> Same shape, same one-time use, same replacement rules, verified through the normal sign-in path.</li>
+</ul>
+
+<h4>Verification</h4>
+<p>20 automated checks, plus the tool run as a command against a throwaway database.</p>
+<pre>list                                  -> both admins, with how many codes each holds
+list output scanned for secrets       -> no hash, no code, no password
+issue &lt;admin&gt;   (no --yes)            -> dry run, nothing changed
+issue &lt;admin&gt; --yes                   -> 8 codes, printed once
+issue &lt;a client&gt; --yes                -> refused, exit 1
+unknown command                       -> usage, exit 1
+
+the issued code, through the ordinary login  -> password step still required,
+                                                then signs in as super admin
+re-issuing                                   -> replaces the set; old codes 403
+audit entry                                  -> issued_from_server, with the reason
+other admins                                 -> alerted in-app</pre>
+</div>
+
+<!-- 005 -->
+<div class="item">
+<div class="rank">Finding 5 · HIGH · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">Any admin can read anyone's live login code, and see everyone's IP address</div>
+
+<h4>Before</h4>
+<p>Both endpoints checked only that the caller had the <code>admin</code> role. A five-minute-old, untrusted admin could list every recent sign-in attempt with name, email and IP address, and decrypt anybody's six-digit code — enough to finish someone else's sign-in.</p>
+
+<h4>Root cause</h4>
+<p>A role check where an authority check was needed, and no notion at all of <em>whose</em> code was being read.</p>
+
+<h4>After</h4>
+<p>Three separate constraints, because the page has a legitimate purpose worth keeping:</p>
+<ul>
+<li><strong>Administrator codes never appear on the page and can never be revealed</strong>, by anyone, including a super admin and including the code's owner. Admins now sign in with a code, so revealing one would undo the second factor rather than support it.</li>
+<li><strong>Revealing any other code requires a trusted admin</strong> — someone the workspace has actually vouched for.</li>
+<li><strong>IP addresses are shown to a super admin only.</strong> Everyone else sees <code>hidden</code>. A person's rough location and movements are not part of "help this client sign in".</li>
+</ul>
+<p>Every reveal is written to the audit log with the target and their role, the account whose code was read is notified in-app, and the endpoint has its own rate limit.</p>
+
+<h4>Verification</h4>
+<pre>untrusted admin lists codes        -> 200, but every ipAddress is "hidden"
+any admin row in the list          -> absent
+untrusted admin reveals a code     -> 403                    (was 200 + code)
+super admin reveals an admin code  -> 403                    (was 200 + code)
+
+AUTHORIZED  trusted admin reveals a client's code -> 200 + code
+rate limit                                        -> 429 within 25 attempts</pre>
+</div>
+
+<!-- 006 -->
+<div class="item">
+<div class="rank">Finding 6 · HIGH · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">The app learns its own web address from whoever talks to it first</div>
+
+<h4>Before</h4>
+<p>With <code>APP_BASE_URL</code> unset, the app took its own origin from the first request after a restart and kept it for the life of the process. That address was glued onto the one-tap sign-in links in client welcome emails. An attacker reaching a freshly restarted server first, with an <code>Origin</code> naming their own site, had every subsequent welcome email carrying a working login link pointed at them.</p>
+
+<h4>Root cause</h4>
+<p>A convenience fallback that treated an attacker-controllable header as configuration.</p>
+
+<h4>After</h4>
+<p>A learned origin now has to be one the operator already named — <code>APP_BASE_URL</code> itself, or an entry in <code>CORS_ORIGINS</code>. A header cannot nominate a new one. Outside production a loopback or private-LAN origin is also accepted, because that is the Vite dev-proxy case this behaviour existed for; a publicly reachable address is never learned from a header in any environment.</p>
+<p>When nothing is configured and nothing is learnable, <code>baseUrl()</code> is empty and the callers that build links already treat that as "send the credentials without a one-tap link" — a degraded outcome, but a safe one, and the server now says so at boot instead of leaving it to be discovered.</p>
+
+<h4>Verification</h4>
+<pre>Origin:  https://evil.example.net  -> baseUrl() unchanged   (was poisoned)
+Referer: https://evil.example.net  -> baseUrl() unchanged   (was poisoned)
+Host:    evil.example.net          -> baseUrl() unchanged   (was poisoned)</pre>
+</div>
+
+<!-- mail -->
+<div class="item">
+<div class="rank">Mail page · HIGH · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">Every email is stored in full, and every admin can read it</div>
+
+<h4>Before</h4>
+<p>The Mail page kept each outbound message with its complete HTML body. A client welcome email contained the plaintext temporary password <em>and</em> a working one-tap sign-in link. A brand-new untrusted admin could open it and read both. In practice the page was a permanent, browsable store of live credentials.</p>
+
+<h4>Root cause</h4>
+<p>A good idea applied without exception. Storing the body is right for a ticket update and wrong for a credential, and the logger did not distinguish.</p>
+
+<h4>After</h4>
+<p>The bodies of the two credential-bearing templates — <code>credentials</code> and <code>login_code</code> — are no longer stored at all. The row itself remains, because who it went to, when, and whether it was delivered is what the Mail page is for; the page already renders "logged without a stored body" for such rows. As a second measure, any sign-in token that finds its way into any other template's body is redacted before storage, so a future email cannot reintroduce the problem.</p>
+
+<h4>Verification</h4>
+<pre>stored credentials email contains the temporary password -> no  (was yes)
+stored email contains a usable magic-link token          -> no  (was yes)
+stored login-code email contains a six-digit code        -> no  (was yes)
+
+AUTHORIZED  the link is still minted, still works, still single-use
+AUTHORIZED  only the SHA-256 of the link secret is ever stored</pre>
+</div>
+
+<!-- 007 -->
+<div class="item">
+<div class="rank">Finding 7 · MEDIUM · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">Any staff member can read every client's payment history</div>
+
+<h4>Before</h4>
+<p>The Billing page was hidden from everyone except admins and clients — in the browser. The two endpoints behind it checked only that you were signed in. An employee asking directly received every payment, amount, currency, card brand, last four digits, invoice and receipt link in the workspace.</p>
+
+<h4>Root cause</h4>
+<p>Exactly the mistake the audit named: a navigation rule mistaken for an access control.</p>
+
+<h4>After</h4>
+<p>One guard, mounted on both read endpoints: a client reads their own, an admin reads the workspace, everyone else gets 403. The company's own design is now what the server enforces.</p>
+
+<h4>Verification</h4>
+<pre>employee GET /billing/status             -> 403  (was 200, all clients)
+employee GET /billing/payments           -> 403  (was 200, full table)
+employee GET /billing/payments?clientId= -> 403  (was 200, that client)
+employee POST /billing/sync              -> 403  (sibling write endpoint)
+
+AUTHORIZED  admin reads status and payments -> 200
+AUTHORIZED  client reads their own          -> 200</pre>
+</div>
+
+<!-- 008 -->
+<div class="item">
+<div class="rank">Finding 8 · MEDIUM · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">Any employee can edit or reassign any ticket, including moving it to a different client</div>
+
+<h4>Before</h4>
+<p>Admins, project managers and employees were one bucket called "staff", and the whole request body was copied onto the ticket. An employee with no connection to a ticket could alter it, close it, or move it into another client's portal.</p>
+
+<h4>Root cause</h4>
+<p>Two things: a role grouping that flattened three different levels of authority, and a wholesale body copy that included the field deciding which portal shows the record.</p>
+
+<h4>After</h4>
+<p>An employee may edit only the tickets that are theirs — assigned to them, or one they were brought onto as a collaborator. Admins and project managers still see the whole queue, which is their job. Moving a ticket between clients is an administrator's decision, and the destination has to be a real client account. <code>createdAt</code> joins the ClickUp fields as immutable.</p>
+<p>The same class was swept for and fixed on projects and domains, which copied their bodies the same way. Ticket edits now also record which fields moved, and a change of owner notifies both portals rather than only the old one — which was defect B5.</p>
+
+<h4>Verification</h4>
+<pre>employee moves a ticket to another client -> clientId unchanged  (was moved)
+employee edits a ticket that is not theirs -> 403                (was 200)
+
+AUTHORIZED  the assigned employee edits their own ticket -> 200
+AUTHORIZED  an admin edits any ticket                    -> 200</pre>
+</div>
+
+<!-- 009 -->
+<div class="item">
+<div class="rank">Finding 9 · MEDIUM · <span class="tag t-partial">PARTIALLY FIXED</span></div>
+<div class="name">An admin can create a sign-in link for a client and use it themselves</div>
+
+<h4>Before</h4>
+<p>Any admin, including a brand-new untrusted one, could mint a link and simply open it. It worked for up to seven days. The only trace was a single line saying a link had been issued; everything done afterwards was recorded as the client's own activity.</p>
+
+<h4>Root cause</h4>
+<p>This is a real, wanted feature, and a link is a bearer credential by construction — whoever holds it is the client. The exposure was not the link but the absence of any constraint on who could mint one and any signal that one had been used.</p>
+
+<h4>After — and what remains</h4>
+<p>Three things changed, and one thing did not.</p>
+<ul>
+<li>Minting a link now requires a <strong>trusted</strong> admin, so a fresh account cannot do it at all.</li>
+<li>The client is <strong>notified in their own portal</strong> the moment a link is issued for their account, with an invitation to say so if they did not ask. A silent tool becomes a visible one.</li>
+<li>The resulting sign-in is <strong>attributed</strong>: the audit row for the login names the admin who minted the link, so the trail no longer reads as the client signing themselves in.</li>
+<li>The endpoint has its own rate limit, and an account with two-step sign in switched on cannot have a link minted at all.</li>
+</ul>
+<p><strong>What remains:</strong> a trusted admin who mints a link can still open it themselves and act as that client for the life of the link. Removing that would mean removing the feature, which the audit explicitly warns against and which support genuinely uses. The risk is now bounded to vouched-for accounts, visible to the client, and attributable after the fact — but it is not eliminated, and it is marked partially fixed for that reason.</p>
+
+<h4>Verification</h4>
+<pre>untrusted admin mints a link  -> 403                    (was 200 + working link)
+2FA-enabled account           -> 409                    (was 200)
+
+AUTHORIZED  trusted admin mints a link  -> 200 + path
+the client receives a security notification
+the audit row names the issuing admin</pre>
+</div>
+
+<!-- 010 -->
+<div class="item">
+<div class="rank">Finding 10 · MEDIUM · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">The audit log does not record that a promotion happened</div>
+
+<h4>Before</h4>
+<p>A self-promotion produced one row reading <code>{"action":"update","entity":"user","meta":null}</code>. A super admin reading the log later could not tell a corrected typo from a seizure of the workspace.</p>
+
+<h4>Root cause</h4>
+<p>The audit call on the most sensitive route in the application passed no detail.</p>
+
+<h4>After</h4>
+<p>A user change records the list of fields that moved, the role transition when there is one, whether a password was regenerated, and the target's role at the time. Field <em>names</em> only — never a password, never a hash, never the value of a secret. The same treatment was given to account creation, ticket edits, project and domain edits, and code reveals.</p>
+
+<h4>Verification</h4>
+<pre>newest entry after a name change:
+  {"action":"update","entity":"user","meta":{"changed":["name"],"targetRole":"client"}}
+                                             (was meta: null)
+
+the whole log, scanned for a password field or a bcrypt hash -> none
+UNAUTHORIZED  a non-super admin reads the log -> 403</pre>
+</div>
+
+<!-- 011 -->
+<div class="item">
+<div class="rank">Finding 11 · LOW · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">The session identifier is not replaced after the login code is entered</div>
+
+<h4>Before</h4>
+<p>Entering the code upgraded the session that already existed. The identifier held while the person was still unauthenticated carried on afterwards.</p>
+
+<h4>Root cause</h4>
+<p><code>promoteSession()</code> flipped a flag in place instead of issuing a new session.</p>
+
+<h4>After</h4>
+<p>A fresh session is created at the moment access is granted and the pending one is destroyed, so anything that knew the old value — including whoever might have planted it — holds a dead cookie. The now-unused <code>promoteSession</code> path was removed rather than left as a second way to do the wrong thing.</p>
+
+<h4>Verification</h4>
+<pre>session id before the code: 642ddce3...
+session id after the code:  a new value       (was identical)
+the old identifier, reused: 401               (was 200)</pre>
+</div>
+
+<!-- 012 -->
+<div class="item">
+<div class="rank">Finding 12 · LOW · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">Uploaded files are not checked, and SVG images are displayed from the app's own address</div>
+
+<h4>Before</h4>
+<p>There was no list of allowed types. Whatever the uploader claimed was stored and handed back under that label. SVG was on the inline-render list, so an uploaded SVG was displayed <em>inside</em> the app. The content-security-policy header was the only thing preventing the script inside it from running.</p>
+
+<h4>Root cause</h4>
+<p>No validation at the boundary, and a rendering decision that trusted a caller-supplied label. One header away from code execution is not a boundary.</p>
+
+<h4>After</h4>
+<p>An explicit allowlist of thirteen document and image types, each with the extensions it is permitted to wear. Both halves must agree, so a <code>.js</code> file announced as a PDF fails on the second test after passing the first. SVG is off the inline list entirely. Rows uploaded before the allowlist existed are served as neutral downloads rather than under their own label, so nothing already in storage can be coaxed into rendering. The upload also verifies the named client is a real client account.</p>
+
+<h4>Verification</h4>
+<pre>SVG containing script          -> 415  (was 201, then rendered inline)
+HTML file                      -> 415  (was 201)
+.js named file sent as a PDF   -> 415  (was 201)
+
+AUTHORIZED  a genuine PDF uploads               -> 201
+AUTHORIZED  a PDF still opens inline            -> 200, Content-Disposition: inline
+UNAUTHORIZED another client downloads it        -> 404
+UNAUTHORIZED an employee uploads or downloads   -> 403 / 404</pre>
+</div>
+
+<!-- 013 -->
+<div class="item">
+<div class="rank">Finding 13 · LOW · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">Clients can see the full list of your staff, including who the admins are</div>
+
+<h4>Before</h4>
+<p>Other clients were correctly hidden, but every staff member and administrator was returned with name, role and internal id — handing an outside customer the internal team roster and pointing at the two administrators.</p>
+
+<h4>Root cause</h4>
+<p>The directory had two branches where it needed three. "Not an admin" was treated as one audience.</p>
+
+<h4>After</h4>
+<p>Three widths. An admin gets full records. Staff get the internal directory, because assigning work needs names. A client gets themselves, plus only the colleagues already working on their account — the manager on their projects and the assignee on their tickets — with the role reported as a flat <code>staff</code> so the roster stays shut. The portal can still say who replied to a ticket, which is what it needed the list for.</p>
+
+<h4>Verification</h4>
+<pre>client GET /users -> no entry with role "admin"   (was two, named)
+                     the client's own account present
+
+AUTHORIZED  staff still receive the internal directory -> multiple entries</pre>
+</div>
+
+<!-- 014-016 -->
+<div class="item">
+<div class="rank">Findings 14, 15, 16 · INFORMATIONAL · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">Role oracle, rate limits, and error codes</div>
+
+<h4>14 — the login reply revealed which accounts were admins</h4>
+<p>Fixed as a consequence of finding 4. Both replies are now <code>{requiresOtp, csrfToken, otpExpiresAt, codeEmailed, codeDestination}</code>; the test asserts the key sets are identical rather than merely similar.</p>
+
+<h4>15 — sensitive admin actions shared the general limit</h4>
+<p>Two new budgets in <code>utils/rateLimits.js</code>. Revealing a code, minting a sign-in link and changing admin standing get 20 per fifteen minutes; creating an account or resetting a password gets 40. Both are far below the general 600 and far above what the job requires. Login and code entry keep their existing, working limits.</p>
+<p><span class="tag t-unver">UNVERIFIED</span> — the audit's caveat stands. All limits count per IP address, which behind a proxy is only as honest as <code>trust proxy</code>. The application sets it in production, but whether the production proxy chain matches cannot be established from a test harness.</p>
+
+<h4>16 — malformed bodies answered 500</h4>
+<p>A dedicated error handler sits immediately after the JSON parser: an unreadable body is 400, an oversized one is 413, and anything else falls through to the existing catch-all. Both codes carry a plain sentence and nothing else. The audit's finding that errors leak no internals was re-tested and still holds.</p>
+
+<h4>Verification</h4>
+<pre>malformed JSON                  -> 400   (was 500)
+the body, scanned for a stack frame, a file path,
+a module name, or "SyntaxError" -> nothing</pre>
+</div>
+
+<!-- bugs -->
+<div class="item">
+<div class="rank">Defects B1, B2, B3, B5 · <span class="tag t-fixed">FIXED</span></div>
+<div class="name">The approved path now does what the direct path does</div>
+
+<h4>Before</h4>
+<p>An account created through the approval queue lost its Slack channel and never received its credentials — the password existed only in a hash, so nobody on earth knew it and the account was unusable. An approved password reset had the same problem. A duplicate email address crashed with a 500 instead of the clear message the profile screen gives.</p>
+
+<h4>Root cause</h4>
+<p>Two implementations of "create an account": the real one in the route, and a shorter copy inside the queue that had drifted. The credentials email was only ever wired into the first.</p>
+
+<h4>After</h4>
+<p>One implementation, in <code>utils/userProvisioning.js</code>, used by both callers. The queue now writes every field the proposal carried, adds the bot to the Slack channel, and sends the credentials.</p>
+<p>A generated password on the approval path is minted <em>at execution time</em> and emailed to the account it belongs to, rather than being parked in the queue as plaintext until somebody signs it off. An explicitly chosen password is hashed immediately, since the admin already knows it. That fixes the delivery defect and closes N2 in the same move: nothing secret waits in the queue.</p>
+<p>The duplicate-email check the profile screen always had is now on the admin editor too, answering 409 with the same sentence.</p>
+
+<h4>Verification</h4>
+<pre>approved account keeps its Slack channel and company  -> yes  (was dropped)
+approved account receives a credentials email         -> yes  (was none)
+approved password reset delivers the new password     -> yes  (was none)
+a decided proposal still holding a plaintext password -> none (was kept forever)
+duplicate email on the admin editor                   -> 409  (was 500)</pre>
+</div>
+
+<hr>
+
+<h2>4. Regression results</h2>
+
+<p>The security suite (<code>scripts/security-regression.js</code>, run with <code>npm run test:security</code>) was written <em>before</em> any fix was made. Every check asserts the secure behaviour, so the first run against the unremediated code was a reproduction of the audit: <strong>40 of its 98 checks failed</strong>, matching the audit's findings one for one. The suite has since grown to 181 as bypass variants, the backup-code path, and the break-glass tool were added.</p>
+
+<p>Two boundaries were additionally driven by hand through the real built application in a browser, because a passing API test does not prove a person can actually use the thing: an administrator completing a sign-in with the emailed code, and an administrator getting back in on a backup code with the mail transport killed outright.</p>
+
+<div class="scroll">
+<table>
+<tr><th>Suite</th><th>Checks</th><th>Result</th><th>What it covers</th></tr>
+<tr><td><code>npm run test:security</code></td><td>181</td><td>181 passed, 0 failed</td><td>Every finding, plus bypass variants, plus the legitimate workflows each fix could have broken</td></tr>
+<tr><td><code>npm run test:app</code></td><td>201</td><td>201 passed, 0 failed</td><td>The pre-existing end-to-end suite — unchanged in intent, updated where the login flow legitimately changed</td></tr>
+<tr><td><code>npm run test:mail</code></td><td>36</td><td>36 passed, 0 failed</td><td>Email rendering and transport selection</td></tr>
+<tr><td><strong>npm test</strong></td><td><strong>418</strong></td><td><strong>all passing</strong></td><td>The security suite is now part of the default test command, so these boundaries cannot silently regress</td></tr>
+</table>
+</div>
+
+<h3>Roles exercised</h3>
+<p>Every authorization fix was tested against the full ladder, not only the role that found it:</p>
+<div class="scroll">
+<table>
+<tr><th>Actor</th><th>Tested against</th></tr>
+<tr><td>Unauthenticated</td><td>11 admin endpoints across users, auth, approvals, billing, mail and reports — all refused</td></tr>
+<tr><td>Client</td><td>The directory, billing, reports, another client's document — own data only</td></tr>
+<tr><td>Employee</td><td>Billing read and write, tickets, reports, the OTP log, the approval queue, sign-in links — all refused except their own tickets</td></tr>
+<tr><td>Untrusted admin</td><td>Escalation at five spellings, code reveal, sign-in links, admin password reset, self-approval — all refused; proposing still works</td></tr>
+<tr><td>Trusted admin</td><td>Escalation, standing endpoint, another admin's account — refused; client management, code reveal, sign-in links, approvals — all still work</td></tr>
+<tr><td>Super admin</td><td>Every legitimate power confirmed still working: appoint, vouch, reset an admin's password, read the audit log, read IP addresses</td></tr>
+</table>
+</div>
+
+<h3>Tenant boundaries</h3>
+<p>Two isolated client accounts were used throughout. A ticket cannot be moved between them by anyone below admin; a document belonging to one returns 404 to the other; projects and domains reject an owner that is not a client account. The audit's finding that clients cannot reach each other's progress, billing or messages was re-tested and still holds.</p>
+
+<h3>Data-layer coverage</h3>
+<p>The gate that fixes finding 1 is unit-checked directly on twelve field/collection pairs, and the Firestore driver is asserted to route through the same shared function — the only way that deployment gets the fix without a live Firestore to test against.</p>
+
+<hr>
+
+<h2>5. Remaining findings</h2>
+
+<p>Nothing here is hidden or downgraded. These are the things that are not fully closed.</p>
+
+<h3><span class="tag t-partial">PARTIALLY FIXED</span> — Finding 9, admin-issued sign-in links</h3>
+<p>A trusted admin who mints a client sign-in link can still open it themselves and act as that client until it expires. This is inherent to a bearer credential and cannot be removed without removing the feature. It is now restricted to vouched-for admins, announced to the client in their portal, attributed in the audit log, rate limited, and refused outright for accounts with two-step sign in switched on. Consider whether the feature should require the client to confirm before the link becomes usable — that would close it fully, at the cost of the thing that makes it useful.</p>
+
+<h3><span class="tag t-open">OPEN</span> — Five moderate dependency advisories</h3>
+<p>The <code>uuid</code> package and its dependants under <code>firebase-admin</code> carry a moderate advisory. Fixing it requires a breaking major upgrade of <code>uuid</code> and, transitively, of <code>firebase-admin</code> — which Phase 19's own rule says not to do as part of a security fix unless it materially affects the vulnerability.</p>
+<p><strong>Reachability:</strong> the advisory concerns a missing buffer bounds check in the v3, v5 and v6 generators <em>when the caller supplies a buffer</em>. This codebase imports <code>{ v4 }</code> and nothing else, in all eight places it uses the package, and never passes a buffer. The advisory is not reachable from application code. The high-severity <code>brace-expansion</code> advisory, which was reachable, has been fixed. Schedule the <code>firebase-admin</code> major as ordinary maintenance.</p>
+
+<h3><span class="tag t-fixed">FIXED</span> — Defect B4, two generations of frontend JavaScript</h3>
+<p>Resolved as a side effect of the work this change required. The backup-codes feature needed a new screen, so the frontend was rebuilt, and <code>npm run build</code> wipes <code>public/</code> before copying fresh output. The folder went from 111 asset files to 85, with one copy of each component instead of three; the untracked <code>Billing-DCOkWAIH.js</code> went with it. The stale Settings bundle the audit named is no longer served.</p>
+<p>Two consequences of that rebuild worth knowing about. <code>sw.js</code> is now present in <code>public/</code> for the first time — the application has always tried to register a service worker and the file was simply missing, so this is the intended behaviour arriving rather than something new. And returning visitors will fetch new asset filenames on their next load, which is normal for a deploy.</p>
+
+<h3><span class="tag t-unver">UNVERIFIED</span> — Rate limiting behind the production proxy</h3>
+<p>All limits count per IP address. <code>app.set('trust proxy', 1)</code> is set in production, which is correct for a single trusted proxy in front of the app. Whether the production chain is in fact one hop cannot be established from a test harness. Confirm it against the live deployment; if there is more than one proxy, the value needs to match.</p>
+
+<h3><span class="tag t-unver">UNVERIFIED</span> — The Firestore deployment</h3>
+<p>All live testing ran against Postgres, as the audit's did. The escalation hole the audit flagged as unknown for Firestore <em>was</em> present, and is fixed by routing both drivers through one shared field gate — which is unit-checked, and the driver is asserted to call it. That is fixed by construction, not by live exploitation. If Firestore is or will be used in production, re-run the security suite against it once credentials are available.</p>
+
+<h3><span class="tag t-unver">UNVERIFIED</span> — ClickUp path handling</h3>
+<p>Identifiers taken from the browser's URL are now percent-encoded before being interpolated into ClickUp request paths, and any path containing <code>..</code> is refused. No ClickUp credentials were available, so this is fixed by inspection and not proven against the live API. Re-test when a token is available.</p>
+
+<h3>Accepted residual risks</h3>
+<ul>
+<li><strong>An admin can still reset a client's or staff member's password and read it on screen.</strong> This is the design — the admin hands the credentials over — and the audit did not ask for it to change. It is now bounded: never against another administrator, rate limited, audited with the field list, and it ends every existing session of the target.</li>
+<li><strong>The Mail page still shows every non-credential email to every admin.</strong> That is what the page is for, and the two templates that carried secrets no longer store their bodies.</li>
+<li><strong>Administrator sign-in depends on a working mail transport, or a saved backup code.</strong> Mail is configured on this deployment and the server warns loudly at boot if it ever is not. Every administrator should generate their backup codes from the Security page now rather than at the moment they are needed — the page says so, but it cannot make anyone do it.</li>
+<li><strong>Server access can still mint entry to any administrator account</strong>, through the break-glass tool. That was already true of anyone with database access, and the tool makes it recorded rather than silent — but it is worth being clear that shell access to this server is equivalent to administrator access to the workspace, and should be treated that way.</li>
+</ul>
+
+<hr>
+
+<h2>Files changed</h2>
+
+<div class="scroll">
+<table>
+<tr><th>File</th><th>What changed</th></tr>
+<tr><td><code>db/schemas.js</code></td><td>New <code>isWritableField()</code> — one column, one accepted spelling</td></tr>
+<tr><td><code>db/setup.js</code>, <code>db/firestore.js</code></td><td>Both drivers route field writes through that gate</td></tr>
+<tr><td><code>utils/userFields.js</code> <em>(new)</em></td><td>What the admin user editor may write, and the filter the queue reapplies</td></tr>
+<tr><td><code>utils/userProvisioning.js</code> <em>(new)</em></td><td>One account-creation path for the direct and approved routes</td></tr>
+<tr><td><code>utils/rateLimits.js</code> <em>(new)</em></td><td>Budgets for sensitive admin actions, credential issuance, and backup codes</td></tr>
+<tr><td><code>utils/recoveryCodes.js</code> <em>(new)</em></td><td>Administrator backup sign-in codes: generation, hashing, one-time use</td></tr>
+<tr><td><code>scripts/admin-recovery.js</code> <em>(new)</em></td><td>Break-glass: issue backup codes from the server, recorded and announced</td></tr>
+<tr><td><code>routes/users.js</code></td><td>Field allowlist, admin-target guard, three-width directory, richer audit detail</td></tr>
+<tr><td><code>routes/auth.js</code></td><td>One login path for every role, session rotation, OTP-log restrictions, link hardening</td></tr>
+<tr><td><code>utils/approvals.js</code></td><td>Executors re-check authority and fields; secrets forgotten on decision</td></tr>
+<tr><td><code>utils/appUrl.js</code></td><td>Origins must be named by the operator, never nominated by a header</td></tr>
+<tr><td><code>utils/mailer.js</code></td><td>Credential-bearing bodies are not stored; tokens redacted elsewhere</td></tr>
+<tr><td><code>routes/billing.js</code></td><td>Read access restricted to clients and admins</td></tr>
+<tr><td><code>routes/tickets.js</code></td><td>Employees scoped to their own tickets; client moves are admin-only</td></tr>
+<tr><td><code>routes/reports.js</code></td><td>Upload allowlist; SVG no longer rendered inline</td></tr>
+<tr><td><code>routes/projects.js</code>, <code>routes/domains.js</code></td><td>Owner must be a real client account; both audiences notified</td></tr>
+<tr><td><code>utils/clickup.js</code></td><td>Path segments encoded; traversal refused</td></tr>
+<tr><td><code>server.js</code></td><td>Parser errors answer 400/413; wildcard CORS refused; boot warnings</td></tr>
+<tr><td><code>frontend/src/pages/Security.tsx</code> <em>(new)</em></td><td>Where an administrator generates, saves and replaces their backup codes</td></tr>
+<tr><td><code>frontend/src/pages/Login.tsx</code></td><td>A backup code can be entered in place of the emailed one</td></tr>
+<tr><td><code>frontend/src/pages/Team.tsx</code></td><td>A new administrator's codes are handed over with their password</td></tr>
+<tr><td><code>db/schemas.js</code>, <code>db/setup.js</code></td><td>The <code>recovery_codes</code> table</td></tr>
+<tr><td><code>public/</code></td><td>Rebuilt — one copy of each bundle, stale generations gone (defect B4)</td></tr>
+<tr><td><code>scripts/security-regression.js</code> <em>(new)</em></td><td>181 checks — one per finding, plus bypass variants and legitimate workflows</td></tr>
+<tr><td><code>scripts/test-app.js</code></td><td>Updated where the login flow legitimately changed</td></tr>
+<tr><td><code>package.json</code></td><td><code>npm test</code> now includes the security suite; <code>npm run admin:recovery</code> added</td></tr>
+</table>
+</div>
+
+<footer>
+Admin security remediation of EthixWeb CRM · 23 August 2026 · Fixes made at the server enforcement layer, each reproduced before being fixed and re-tested after. Nothing in production was touched, nothing was deleted, no real billing or accounts were changed. No passwords, keys, or tokens appear in this document. Where something could not be verified it is marked UNVERIFIED rather than assumed.
+</footer>
+
+</div>

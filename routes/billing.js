@@ -29,6 +29,21 @@ function getStripe() {
 router.use(requireAuth);
 router.use(requirePage('billing'));
 
+/**
+ * Who is allowed to read money at all.
+ *
+ * A client reads their own. An admin reads the workspace. Nobody else reads
+ * anything -- the navigation has always hidden Billing from sales, project
+ * managers and employees, but hiding a link is a courtesy to the person, not a
+ * control on the request. The two read endpoints below used to check only that
+ * you were signed in, so any employee could ask directly and receive every
+ * client's payment history, card brand, last four digits and receipt links.
+ */
+function requireBillingReader(req, res, next) {
+  if (req.user.role === 'client' || req.user.role === 'admin') return next();
+  return res.status(403).json({ error: 'Billing is not part of your role.' });
+}
+
 /** Clients see themselves; staff see everyone, or one named account. */
 async function scopeFor(req) {
   if (req.user.role === 'client') return req.user;
@@ -38,7 +53,7 @@ async function scopeFor(req) {
   return client && client.role === 'client' ? client : null;
 }
 
-router.get('/status', async (req, res, next) => {
+router.get('/status', requireBillingReader, async (req, res, next) => {
   try {
     const enabled = stripeSync.isEnabled();
 
@@ -65,7 +80,7 @@ router.get('/status', async (req, res, next) => {
  * Same shape for both audiences; only the scope differs. Staff without a
  * `clientId` get the whole workspace, which is what the finance view wants.
  */
-router.get('/payments', async (req, res, next) => {
+router.get('/payments', requireBillingReader, async (req, res, next) => {
   try {
     if (req.user.role === 'client') {
       const summary = await stripeSync.summariseForClient(req.user.id);

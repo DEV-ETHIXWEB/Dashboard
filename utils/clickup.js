@@ -72,9 +72,28 @@ function releaseSlot() {
   pump();
 }
 
+/**
+ * One path segment, safe to interpolate.
+ *
+ * The list and task ids in these paths arrive from the browser's own URL. Glued
+ * in raw, an id carrying `?`, `#`, or `../` rewrites the request: it can add
+ * query parameters ClickUp will honour, truncate the path, or climb out of the
+ * endpoint that was meant and land on a different one under the same token.
+ * Encoding turns every one of those back into an ordinary character in an id
+ * that simply does not exist.
+ */
+function seg(value) {
+  return encodeURIComponent(String(value ?? ''));
+}
+
 async function request(path, params, options = {}) {
   const token = process.env.CLICKUP_API_TOKEN;
   if (!token) throw new ClickUpError('ClickUp is not connected. Set CLICKUP_API_TOKEN.', 503);
+
+  // Second lock on the same door, for any caller that builds a path by hand.
+  if (String(path).includes('..')) {
+    throw new ClickUpError('Refusing to build a ClickUp request from that identifier.', 400);
+  }
 
   const url = new URL(BASE + path);
   for (const [key, value] of Object.entries(params || {})) {
@@ -226,7 +245,7 @@ async function fetchOpenTasks({ spaceId } = {}) {
     const MAX_PAGES = 20; // 2000 tasks -- a hard stop so a huge workspace can't hang the request
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
-      const data = await request(`/team/${team.id}/task`, {
+      const data = await request(`/team/${seg(team.id)}/task`, {
         page,
         subtasks: true,
         include_closed: false,
@@ -291,13 +310,13 @@ async function fetchOverview({ spaceId } = {}) {
 async function fetchTree() {
   return cached('clickup:tree', async () => {
     const team = await getTeam();
-    const spacesData = await request(`/team/${team.id}/space`, { archived: false });
+    const spacesData = await request(`/team/${seg(team.id)}/space`, { archived: false });
     const spaces = spacesData.spaces || [];
 
     const result = await Promise.all(spaces.map(async (space) => {
       const [foldersData, looseListsData] = await Promise.all([
-        request(`/space/${space.id}/folder`, { archived: false }),
-        request(`/space/${space.id}/list`, { archived: false }),
+        request(`/space/${seg(space.id)}/folder`, { archived: false }),
+        request(`/space/${seg(space.id)}/list`, { archived: false }),
       ]);
 
       const folders = (foldersData.folders || []).map((folder) => ({
@@ -330,7 +349,7 @@ async function fetchTree() {
 /** Open tasks in one list, for drill-down from the browser panel. */
 async function fetchListTasks(listId) {
   return cached(`clickup:list:${listId}`, async () => {
-    const data = await request(`/list/${listId}/task`, {
+    const data = await request(`/list/${seg(listId)}/task`, {
       subtasks: true,
       include_closed: false,
       order_by: 'due_date',
@@ -343,7 +362,7 @@ async function fetchListTasks(listId) {
 
 /** One task by id -- how a mirrored ticket reads its live state back. */
 async function fetchTask(taskId) {
-  return cached(`clickup:task:${taskId}`, async () => normaliseTask(await request(`/task/${taskId}`)), TTL_TASKS);
+  return cached(`clickup:task:${taskId}`, async () => normaliseTask(await request(`/task/${seg(taskId)}`)), TTL_TASKS);
 }
 
 /** Everyone in the workspace, for assignee pickers. */
@@ -368,7 +387,7 @@ async function fetchMembers() {
 /** The status options a list accepts -- ClickUp rejects any status not in this set. */
 async function fetchListStatuses(listId) {
   return cached(`clickup:list-statuses:${listId}`, async () => {
-    const list = await request(`/list/${listId}`);
+    const list = await request(`/list/${seg(listId)}`);
     return (list.statuses || []).map((s) => ({
       status: s.status,
       type: s.type,
@@ -416,13 +435,13 @@ function toTaskBody(input, { forUpdate = false } = {}) {
 
 async function createTask(listId, input) {
   if (!input?.name) throw new ClickUpError('A task name is required.', 400);
-  const raw = await request(`/list/${listId}/task`, null, { method: 'POST', body: toTaskBody(input) });
+  const raw = await request(`/list/${seg(listId)}/task`, null, { method: 'POST', body: toTaskBody(input) });
   invalidateClickUp();
   return normaliseTask(raw);
 }
 
 async function updateTask(taskId, input) {
-  const raw = await request(`/task/${taskId}`, null, {
+  const raw = await request(`/task/${seg(taskId)}`, null, {
     method: 'PUT',
     body: toTaskBody(input, { forUpdate: true }),
   });
@@ -431,14 +450,14 @@ async function updateTask(taskId, input) {
 }
 
 async function deleteTask(taskId) {
-  await request(`/task/${taskId}`, null, { method: 'DELETE' });
+  await request(`/task/${seg(taskId)}`, null, { method: 'DELETE' });
   invalidateClickUp();
   return true;
 }
 
 async function fetchComments(taskId) {
   return cached(`clickup:comments:${taskId}`, async () => {
-    const data = await request(`/task/${taskId}/comment`);
+    const data = await request(`/task/${seg(taskId)}/comment`);
     return (data.comments || []).map((c) => ({
       id: String(c.id),
       text: c.comment_text || '',
@@ -452,7 +471,7 @@ async function fetchComments(taskId) {
 
 async function addComment(taskId, text) {
   if (!text?.trim()) throw new ClickUpError('A comment cannot be empty.', 400);
-  await request(`/task/${taskId}/comment`, null, {
+  await request(`/task/${seg(taskId)}/comment`, null, {
     method: 'POST',
     body: { comment_text: text.trim(), notify_all: false },
   });

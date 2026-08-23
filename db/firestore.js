@@ -1,11 +1,7 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
-const { SCHEMAS, toSnake, toCamel } = require('./schemas');
-
-const FIELDS = Object.fromEntries(
-  Object.entries(SCHEMAS).map(([collection, cols]) => [collection, new Set(cols.map(toCamel))]),
-);
+const { toSnake, toCamel, isWritableField } = require('./schemas');
 
 let db = null;
 
@@ -40,13 +36,15 @@ function getDb() {
 }
 
 function sanitize(collection, obj) {
-  const allowed = FIELDS[collection];
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
-    const key = toCamel(toSnake(k));
-    if (!allowed || !allowed.has(key)) continue;
+    // Same rule as the Postgres driver: the canonical camelCase name of a real
+    // column, and nothing that merely normalises onto one. Folding
+    // `is_super_admin` into `isSuperAdmin` here gave the Firestore deployment
+    // the identical privilege-escalation path the Postgres one had.
+    if (!isWritableField(collection, k)) continue;
     if (v === undefined) continue;
-    out[key] = v;
+    out[k] = v;
   }
   return out;
 }
