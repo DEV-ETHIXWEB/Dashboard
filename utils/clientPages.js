@@ -35,11 +35,22 @@ const CLIENT_PAGE_KEYS = CLIENT_PAGES.map((p) => p.key);
 /** Pages every signed-in user keeps regardless of the toggles. */
 const ALWAYS_ON = ['dashboard', 'notifications', 'settings'];
 
-/** Normalise whatever the admin sent into a clean key list, or null for "all". */
+/**
+ * Normalise whatever the admin sent into a clean key list, or null for "all".
+ *
+ * A value that is neither undefined, null, nor an array used to fall through to
+ * null -- which reads as "no restriction". So a malformed field (a bare string
+ * from a hand-written request, a stray object) quietly granted a client every
+ * section instead of none. Access control that widens when it cannot parse its
+ * input is the wrong way round; an unreadable value is now refused outright and
+ * the caller told, rather than guessed at.
+ */
 function normalizeAllowedPages(value) {
   if (value === undefined) return undefined; // caller did not touch the field
   if (value === null) return null; // explicit "no restriction"
-  if (!Array.isArray(value)) return null;
+  if (!Array.isArray(value)) {
+    throw new TypeError('allowedPages must be an array of page keys, or null for no restriction.');
+  }
   const keys = value.filter((k) => CLIENT_PAGE_KEYS.includes(k));
   return Array.from(new Set(keys));
 }
@@ -52,19 +63,27 @@ function allowedPagesFor(user) {
   return raw == null ? CLIENT_PAGE_KEYS : raw;
 }
 
-/** Postgres stores the list as JSON text; Firestore stores a real array. */
+/**
+ * Postgres stores the list as JSON text; Firestore stores a real array.
+ *
+ * Null and undefined mean "no restriction" -- that is the documented shape for
+ * a login created before the toggles existed, and it stays. Anything else that
+ * cannot be read as a list is corruption rather than a legacy row, and is
+ * treated as "no sections": a value nobody can parse should not be the reason
+ * an account sees more than it was granted.
+ */
 function parseAllowedPages(value) {
   if (value == null) return null;
   if (Array.isArray(value)) return value.filter((k) => CLIENT_PAGE_KEYS.includes(k));
   if (typeof value === 'string') {
     try {
       const parsed = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed.filter((k) => CLIENT_PAGE_KEYS.includes(k)) : null;
+      return Array.isArray(parsed) ? parsed.filter((k) => CLIENT_PAGE_KEYS.includes(k)) : [];
     } catch {
-      return null;
+      return [];
     }
   }
-  return null;
+  return [];
 }
 
 function canSeePage(user, pageKey) {

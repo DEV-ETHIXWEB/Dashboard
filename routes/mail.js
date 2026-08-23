@@ -56,6 +56,26 @@ function previewable(html) {
     .replace(/cid:ethixweb-logo/g, '/ethixweb.png');
 }
 
+/**
+ * The policy the two HTML preview routes serve themselves under.
+ *
+ * Setting this header replaces helmet's entirely rather than adding to it, so
+ * every directive these documents need has to be named here -- `frame-ancestors`
+ * included. Leaving it out dropped the clickjacking guard from the only two
+ * pages in the app that render stored, third-party-influenced markup.
+ *
+ * `img-src 'self'` matters in development: the preview loads the emblem from
+ * this same origin over plain http, which an https-only img-src silently blocks.
+ */
+const PREVIEW_CSP = [
+  "default-src 'none'",
+  "style-src 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "frame-ancestors 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
+
 router.get('/templates/:key/preview', (req, res) => {
   const preview = messages.renderPreview(req.params.key);
   if (!preview) return res.status(404).json({ error: 'Unknown email template' });
@@ -73,9 +93,7 @@ router.get('/templates/:key/preview.html', (req, res) => {
   const preview = messages.renderPreview(req.params.key);
   if (!preview) return res.status(404).send('Unknown email template');
   res.set('Content-Type', 'text/html; charset=utf-8');
-  // 'self' matters in development: the preview loads the emblem from this same
-    // origin over plain http, which an https-only img-src silently blocks.
-    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:;");
+  res.set('Content-Security-Policy', PREVIEW_CSP);
   res.send(previewable(preview.html));
 });
 
@@ -109,9 +127,7 @@ router.get('/log/:id/body.html', async (req, res, next) => {
     const entry = await db.find('email_log', req.params.id);
     if (!entry) return res.status(404).send('No such message');
     res.set('Content-Type', 'text/html; charset=utf-8');
-    // 'self' matters in development: the preview loads the emblem from this same
-    // origin over plain http, which an https-only img-src silently blocks.
-    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:;");
+    res.set('Content-Security-Policy', PREVIEW_CSP);
     res.send(entry.html || '<p style="font-family:sans-serif;padding:24px;">This message was logged without a stored body.</p>');
   } catch (err) {
     next(err);

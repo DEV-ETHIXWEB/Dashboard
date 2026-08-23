@@ -6,24 +6,16 @@ import type { ApprovalRequest, AuditEntry, Capabilities } from "@/lib/types";
 /**
  * A 202 from a write means "held for a second signature", not "done".
  *
- * `api()` resolves on 202 the same as on 200, so without this every gated
- * mutation would report success and the person would walk away believing a
- * change happened that has not. Every caller that can be gated runs its result
- * through here.
+ * This used to be opt-in: a helper each call site had to remember to run its
+ * result through, which four pages did not, so they announced deletions and
+ * revocations that had not happened. `api()` now raises `HeldForApproval`
+ * instead, which makes the safe reading the default -- see `isHeldForApproval`
+ * in lib/api.ts.
  */
 export interface HeldResponse {
   pendingApproval?: boolean;
   request?: ApprovalRequest;
   message?: string;
-}
-
-export function wasHeld(result: unknown): result is Required<HeldResponse> {
-  return Boolean(result && typeof result === "object" && (result as HeldResponse).pendingApproval);
-}
-
-/** "Sent for approval" or whatever the caller wants to say on a real success. */
-export function heldMessage(result: unknown, done: string): string {
-  return wasHeld(result) ? result.message || "Sent to the other admins for approval." : done;
 }
 
 function useIsAdmin() {
