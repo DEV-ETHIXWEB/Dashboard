@@ -369,6 +369,28 @@ async function bootstrapSuperAdmin() {
     adminTrustedBy: 'system',
   });
   console.log(`[seed] Created the first super admin: ${email}. Change this password on first sign-in, then remove SUPER_ADMIN_PASSWORD from the environment.`);
+
+  // Every other administrator is handed backup codes at the moment they are
+  // created, because POST /api/users issues them. This account is made here
+  // instead, so it was skipping that and starting with none -- which is the
+  // worst account in the workspace to have no way back into, since it is the
+  // only one that exists when mail has never been tested on a fresh
+  // deployment. Best-effort: a workspace with an administrator and no codes is
+  // recoverable from the server console; one with no administrator is not.
+  try {
+    const recoveryCodes = require('../utils/recoveryCodes');
+    const codes = await recoveryCodes.issueFor(user.id);
+    console.log(
+      `[seed] Backup sign-in codes for ${email} -- save these now, they are not shown again:\n`
+        + codes.map((c) => `         ${c}`).join('\n'),
+    );
+  } catch (err) {
+    console.warn(
+      `[seed] Could not issue backup codes for ${email}: ${err.message}. `
+        + 'Run `npm run admin:recovery -- issue <email> --yes` on the server to get a set.',
+    );
+  }
+
   return Boolean(user);
 }
 

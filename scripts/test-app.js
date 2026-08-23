@@ -977,6 +977,29 @@ async function main() {
   r = await client.req('GET', '/api/users/me/recovery-codes');
   check('a client has no backup codes to read', r.status === 403 || r.data.status?.remaining === 0, `${r.status} ${r.text.slice(0, 120)}`);
 
+  // --- the two page lists agree --------------------------------------------
+  // The browser keeps its own copy of the client page keys, because it also
+  // needs the route each one maps to and the server does not carry those. That
+  // copy is the thing most likely to drift: a key added on one side and not the
+  // other means an admin ticks a section the server refuses, or a section
+  // silently stays open. GET /users/client-pages is the server's own answer, so
+  // compare the two rather than trusting them to be edited together.
+  {
+    const fs = require('fs');
+    const mirror = fs.readFileSync('frontend/src/lib/permissions.ts', 'utf8');
+    const clientKeys = [...mirror.matchAll(/key:\s*"([a-z_]+)"/g)].map((m) => m[1]).sort();
+
+    r = await admin.req('GET', '/api/users/client-pages');
+    const serverKeys = (r.data.pages || []).map((p) => p.key).sort();
+
+    check('the server publishes its client page list', r.status === 200 && serverKeys.length > 0, `${r.status}`);
+    check(
+      'the browser mirror lists exactly the same page keys',
+      JSON.stringify(serverKeys) === JSON.stringify(clientKeys),
+      `server ${serverKeys.join(',')} | browser ${clientKeys.join(',')}`,
+    );
+  }
+
   // --- access control ------------------------------------------------------
   r = await client.req('GET', '/api/mail/log');
   check('a client cannot read the mail log', r.status === 403, `${r.status}`);
