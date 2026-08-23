@@ -331,11 +331,69 @@ function daysFromNow(n) {
   return d.toISOString();
 }
 
+/**
+ * Whether the demo workspace may be created.
+ *
+ * The demo accounts carry passwords that are published in this file, so a
+ * deployment that seeds them is readable by anyone who has read the repo. That
+ * is fine for a laptop and never fine for a server, so it takes an explicit
+ * opt-in AND a non-production environment -- either one alone is too easy to
+ * set by accident.
+ */
+function demoDataEnabled() {
+  return process.env.SEED_DEMO_DATA === 'true' && process.env.NODE_ENV !== 'production';
+}
+
+/**
+ * Create the workspace's first super admin from the environment.
+ *
+ * A real deployment needs exactly one account to start with: someone who can
+ * appoint everyone else. Naming it here rather than seeding a known one means
+ * the first credential never exists in source control. Runs only on a genuinely
+ * empty workspace, so it cannot resurrect or overwrite an account later.
+ */
+async function bootstrapSuperAdmin() {
+  const email = String(process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+  const password = process.env.SUPER_ADMIN_PASSWORD;
+  if (!email || !password) return false;
+
+  const user = await db.insert('users', {
+    id: uuidv4(),
+    name: process.env.SUPER_ADMIN_NAME || 'Super Admin',
+    email,
+    role: 'admin',
+    password: bcrypt.hashSync(password, 10),
+    isSuperAdmin: true,
+    adminTrusted: true,
+    adminTrustedAt: new Date().toISOString(),
+    adminTrustedBy: 'system',
+  });
+  console.log(`[seed] Created the first super admin: ${email}. Change this password on first sign-in, then remove SUPER_ADMIN_PASSWORD from the environment.`);
+  return Boolean(user);
+}
+
 async function seed() {
   await initSchema();
 
   const hash = (pw) => bcrypt.hashSync(pw, 10);
   const usersEmpty = (await db.all('users')).length === 0;
+
+  // An empty workspace gets its first account from the environment, never from
+  // the demo set below.
+  if (usersEmpty) {
+    const bootstrapped = await bootstrapSuperAdmin();
+    if (bootstrapped) return;
+  }
+
+  if (!demoDataEnabled()) {
+    if (usersEmpty) {
+      console.warn(
+        '[seed] No users, and no SUPER_ADMIN_EMAIL/SUPER_ADMIN_PASSWORD set. Nobody can sign in. ' +
+          'Set both and restart, or set SEED_DEMO_DATA=true outside production for the demo workspace.',
+      );
+    }
+    return;
+  }
 
   if (usersEmpty) {
     await Promise.all([
