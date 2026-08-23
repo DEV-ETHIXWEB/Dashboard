@@ -19,7 +19,11 @@ if (!fs.existsSync(FRONTEND_DIR)) {
 }
 
 console.log(`Building frontend from ${FRONTEND_DIR} ...`);
-execSync('npm install', { cwd: FRONTEND_DIR, stdio: 'inherit' });
+// --include=dev because the host sets NODE_ENV=production for the build, and
+// npm then omits devDependencies -- which is where vite, the react plugin and
+// typescript live. Without them `tsc -b` cannot resolve its own config and the
+// build dies on "Cannot find module 'vite'".
+execSync('npm install --include=dev', { cwd: FRONTEND_DIR, stdio: 'inherit' });
 execSync('npm run build', { cwd: FRONTEND_DIR, stdio: 'inherit' });
 
 if (!fs.existsSync(DIST_DIR)) {
