@@ -38,7 +38,19 @@ export function TopBar({
         raised ? "app-chrome border-b border-border/70" : "border-b border-transparent bg-background",
       )}
     >
-      <h2 className="min-w-0 truncate text-[17px] leading-tight font-semibold tracking-tight">{title}</h2>
+      {/* The emblem and the brand ride along with the page name, so the phone
+          header says whose product this is the way the sidebar does on a desk.
+          The greyscale mark sits on its own dark plate rather than bare: the
+          flat wordmark is white on transparency and would vanish in the light
+          theme. */}
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950/40 p-1 ring-1 ring-primary/20">
+          <img src="/emblem-mark.png" alt="EthixWeb" className="size-full object-contain" />
+        </span>
+        <h2 className="min-w-0 truncate text-[15px] leading-tight font-semibold tracking-tight">
+          EthixWeb <span className="font-medium text-muted-foreground">{title}</span>
+        </h2>
+      </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
         <LiveIndicator compact />

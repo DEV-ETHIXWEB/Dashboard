@@ -12,6 +12,7 @@ import { BottomTabs } from "@/components/mobile/BottomTabs";
 import { MoreSheet } from "@/components/mobile/MoreSheet";
 import { PullToRefresh } from "@/components/mobile/PullToRefresh";
 import { TopBar } from "@/components/mobile/TopBar";
+import { NotificationBell } from "@/components/NotificationBell";
 import { InstallCard } from "@/components/mobile/InstallCard";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -93,13 +94,21 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="relative flex min-w-0 flex-1 flex-col">
         <TopBar title={title} unread={unread} scrollRef={mainRef} />
 
+        {/* The desk equivalent of the phone's top bar. A phone has always had
+            the bell up here; a desk only had a badge in the sidebar, which
+            meant reading an alert cost a page change. Sits above the scroll
+            container rather than over it, so nothing slides underneath. */}
+        <header className="hidden shrink-0 items-center justify-end gap-2 px-6 pt-4 md:flex">
+          <NotificationBell />
+        </header>
+
         <main
           id="main"
           ref={mainRef}
           // overflow-x-hidden is the guard the body used to provide: one
           // stray wide element must never turn the whole app into a
           // sideways-scrolling page.
-          className="relative flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain p-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+          className="relative flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain p-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:p-6 md:pt-3 md:pb-6"
         >
           <PullToRefresh onRefresh={refresh} scrollRef={mainRef}>
             <motion.div

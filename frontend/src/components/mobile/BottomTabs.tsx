@@ -64,7 +64,11 @@ export function BottomTabs({
                     className="absolute inset-x-2 inset-y-1.5 -z-10 rounded-2xl bg-primary/10"
                   />
                 )}
-                <item.icon aria-hidden className="size-[22px] shrink-0" strokeWidth={active ? 2.3 : 1.8} />
+                <item.icon
+                  aria-hidden
+                  className={cn("size-[22px] shrink-0", active && "nav-glow")}
+                  strokeWidth={active ? 1.7 : 1.5}
+                />
                 <span className={cn("max-w-full truncate text-[10.5px] leading-none tracking-tight", active ? "font-semibold" : "font-medium")}>
                   {item.short ?? item.label}
                 </span>
@@ -98,7 +102,11 @@ export function BottomTabs({
                   className="absolute inset-x-2 inset-y-1.5 -z-10 rounded-2xl bg-primary/10"
                 />
               )}
-              <MoreHorizontal aria-hidden className="size-[22px] shrink-0" strokeWidth={moreOpen ? 2.3 : 1.8} />
+              <MoreHorizontal
+                aria-hidden
+                className={cn("size-[22px] shrink-0", moreOpen && "nav-glow")}
+                strokeWidth={moreOpen ? 1.7 : 1.5}
+              />
               <span className={cn("text-[10.5px] leading-none tracking-tight", moreOpen ? "font-semibold" : "font-medium")}>
                 More
               </span>

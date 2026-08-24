@@ -318,6 +318,24 @@
 }
 
 @layer utilities {
+  /* The lit state for a bottom-tab glyph: the mark picks up the same halo the
+     brand emblem carries, rather than just changing colour. */
+  .nav-glow {
+    filter: drop-shadow(0 0 6px oklch(0.50 0.22 29 / 0.45));
+  }
+
+  .dark .nav-glow {
+    filter: drop-shadow(0 0 7px oklch(0.62 0.22 29 / 0.55));
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .nav-glow {
+      filter: none;
+    }
+  }
+}
+
+@layer utilities {
   .glass-card {
     backdrop-filter: blur(6px) saturate(1.2);
     -webkit-backdrop-filter: blur(6px) saturate(1.2);
@@ -360,6 +378,82 @@
     box-shadow:
       inset 0 1px 0 0 oklch(1 0 0 / 0.05),
       0 1px 2px 0 oklch(0 0 0 / 0.15);
+  }
+
+  /* Skeuomorphic stat card: a physically raised tile. The top-to-bottom
+     gradient plus the 1px light top edge reads as a lit surface, and the
+     outer shadow lifts it off the page. Sits a step lighter than --card so
+     the row of stats reads as hardware laid on the dashboard. */
+  .skeu-stat {
+    background-image: linear-gradient(
+      180deg,
+      oklch(1 0 0) 0%,
+      oklch(0.97 0.004 275) 100%
+    );
+    /* Directional edges, not one flat ring: a uniformly light border draws a
+       pale hairline along the bottom, which reads as a seam rather than as an
+       edge catching the light. Lit on top, shaded underneath. */
+    border: 1px solid oklch(0.91 0.006 275);
+    border-bottom-color: oklch(0.85 0.008 275);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.9),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.05),
+      0 1px 1px 0 oklch(0 0 0 / 0.04),
+      0 6px 14px -6px oklch(0 0 0 / 0.16);
+  }
+
+  .skeu-stat:hover {
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.95),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.05),
+      0 2px 3px 0 oklch(0 0 0 / 0.05),
+      0 12px 22px -8px oklch(0 0 0 / 0.2);
+  }
+
+  .dark .skeu-stat {
+    background-image: linear-gradient(
+      180deg,
+      oklch(0.3 0.014 275) 0%,
+      oklch(0.235 0.012 275) 100%
+    );
+    border: 1px solid oklch(1 0 0 / 0.07);
+    border-top-color: oklch(1 0 0 / 0.13);
+    border-bottom-color: oklch(0 0 0 / 0.45);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.12),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.35),
+      0 1px 2px 0 oklch(0 0 0 / 0.35),
+      0 10px 20px -10px oklch(0 0 0 / 0.55);
+  }
+
+  .dark .skeu-stat:hover {
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.16),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.35),
+      0 2px 4px 0 oklch(0 0 0 / 0.4),
+      0 16px 28px -12px oklch(0 0 0 / 0.6);
+  }
+
+  /* The icon well inside a skeu card. Colours come from currentColor, so one
+     rule covers every tone the card can take. */
+  .skeu-tile {
+    background-image: linear-gradient(
+      180deg,
+      color-mix(in oklch, currentColor 24%, transparent) 0%,
+      color-mix(in oklch, currentColor 9%, transparent) 100%
+    );
+    border: 1px solid color-mix(in oklch, currentColor 24%, transparent);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.4),
+      inset 0 -1px 1px 0 oklch(0 0 0 / 0.08),
+      0 2px 4px -1px oklch(0 0 0 / 0.18);
+  }
+
+  .dark .skeu-tile {
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.14),
+      inset 0 -1px 1px 0 oklch(0 0 0 / 0.25),
+      0 2px 5px -1px oklch(0 0 0 / 0.45);
   }
 
   /* Hide scrollbars for sleek UI while preserving scrollability */
