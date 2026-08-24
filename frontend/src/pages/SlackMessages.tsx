@@ -507,7 +507,7 @@ function MessageCard({
               >
                 {att.authorName && <p className="font-semibold text-foreground/80 mb-0.5">{att.authorName}</p>}
                 {att.title && (
-                  <p className="font-medium text-foreground mb-1">
+                  <p className="wrap-anywhere font-medium text-foreground mb-1">
                     {att.titleUrl ? (
                       <a href={att.titleUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                         {att.title}
@@ -1007,13 +1007,17 @@ function FormattedSlackText({ text }: { text: string }) {
   const lines = processedText.split("\n");
 
   return (
-    <div className="mt-1 space-y-1">
+    // min-w-0 on the block as well as wrap-anywhere on the line: a Slack post
+    // is very often one pasted Figma or Drive link with no space in it, and a
+    // flex parent will size itself to that unbroken token and push the whole
+    // message card past the edge of the phone unless both are set.
+    <div className="mt-1 min-w-0 space-y-1">
       {lines.map((line, lineIdx) => {
         if (!line.trim()) return <div key={lineIdx} className="h-1.5" />;
         const parts = line.split(/(\*[^*]+\*|_[^_]+_|`[^`]+`)/g);
 
         return (
-          <p key={lineIdx} className="text-sm leading-relaxed text-foreground/90">
+          <p key={lineIdx} className="wrap-anywhere text-sm leading-relaxed text-foreground/90">
             {parts.map((part, partIdx) => {
               if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
                 return (
@@ -1031,7 +1035,7 @@ function FormattedSlackText({ text }: { text: string }) {
               }
               if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
                 return (
-                  <code key={partIdx} className="rounded bg-secondary px-1.5 py-0.5 font-mono text-xs text-primary">
+                  <code key={partIdx} className="wrap-anywhere rounded bg-secondary px-1.5 py-0.5 font-mono text-xs text-primary">
                     {part.slice(1, -1)}
                   </code>
                 );

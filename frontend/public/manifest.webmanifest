@@ -7,14 +7,15 @@
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#ffffff",
   "theme_color": "#c20000",
   "categories": ["business", "productivity"],
   "icons": [
     { "src": "/favicon.png", "sizes": "128x128", "type": "image/png", "purpose": "any" },
     { "src": "/emblem-mark.png", "sizes": "397x406", "type": "image/png", "purpose": "any" },
-    { "src": "/emblem-mark.png", "sizes": "397x406", "type": "image/png", "purpose": "maskable" }
+    { "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
   ],
   "shortcuts": [
     {

@@ -15,6 +15,7 @@ import {
   LayoutGrid,
   Crown,
   ShieldQuestion,
+  ShieldCheck,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
@@ -443,20 +444,29 @@ export default function Team() {
           {filteredUsers.map((u) => (
             <div
               key={u.id}
-              className="p-4 rounded-2xl border border-border/60 bg-card/80 shadow-xs hover:border-border transition-all duration-150 flex items-center justify-between gap-4 group"
+              // One row at every width. The control cluster is four uniform
+              // icon buttons at its widest, so it stays narrow enough to sit
+              // beside the identity instead of on top of it -- and every card
+              // in the grid ends up the same height, which the old mix of text
+              // buttons and icons did not.
+              className="group flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/80 p-4 shadow-xs transition-all duration-150 hover:border-border"
             >
-              <div className="flex items-center gap-3 min-w-0">
+              <div className="flex min-w-0 items-center gap-3">
                 <Avatar className="size-11 shrink-0 ring-1 ring-border/80 shadow-xs">
                   <AvatarFallback className="bg-muted text-xs font-semibold text-foreground border border-border/40">
                     {initials(u.name)}
                   </AvatarFallback>
                 </Avatar>
 
-                <div className="min-w-0 space-y-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-foreground truncate">{u.name}</span>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    {/* max-w-full, not just truncate: inside a wrapping flex
+                        line the name sizes itself to its content first, so a
+                        long one pushes the badges out of the card before the
+                        ellipsis ever gets a chance to appear. */}
+                    <span className="max-w-full truncate text-sm font-semibold text-foreground">{u.name}</span>
                     <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] border ${roleBadgeStyle(
+                      className={`inline-flex shrink-0 items-center whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] border ${roleBadgeStyle(
                         u.role
                       )}`}
                     >
@@ -466,14 +476,14 @@ export default function Team() {
                     {/* Standing, at a glance. An admin whose changes are held is
                         the thing another admin most needs to know about them. */}
                     {u.isSuperAdmin && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                      <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
                         <Crown aria-hidden className="size-3" />
                         Super admin
                       </span>
                     )}
                     {u.role === "admin" && !u.isSuperAdmin && !u.adminTrusted && (
                       <span
-                        className="inline-flex items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning"
+                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning"
                         title="Their sensitive changes wait for a second signature"
                       >
                         <ShieldQuestion aria-hidden className="size-3" />
@@ -482,21 +492,27 @@ export default function Team() {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-                    <span className="flex items-center gap-1 truncate">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    {/* One line, truncated. Breaking an address at any character
+                        (wrap-anywhere) split the domain mid-word -- "ethixweb.l"
+                        then "ocal" -- which reads as a bug. A directory row wants
+                        the address on one line; the full value is on hover and in
+                        the edit dialog. min-w-0 lets the truncation actually fire
+                        inside the flex row. */}
+                    <span className="flex min-w-0 items-center gap-1" title={u.email}>
                       <Mail className="size-3 shrink-0 text-muted-foreground/70" />
-                      {u.email}
+                      <span className="truncate">{u.email}</span>
                     </span>
                     {u.company && (
-                      <span className="flex items-center gap-1 truncate text-foreground/80 font-medium">
+                      <span className="flex min-w-0 items-center gap-1 text-foreground/80 font-medium" title={u.company}>
                         <Building2 className="size-3 shrink-0 text-primary" />
-                        {u.company}
+                        <span className="truncate">{u.company}</span>
                       </span>
                     )}
                     {u.role === "client" && (
                       <Link
                         to="/portal/client-access"
-                        className="focus-clear -mx-2 flex items-center gap-1 truncate rounded-lg px-2 hover:text-foreground coarse:min-h-11"
+                        className="focus-clear -mx-2 flex max-w-full items-center gap-1 truncate rounded-lg px-2 hover:text-foreground coarse:min-h-11"
                         title="Change what this client can see"
                       >
                         <LayoutGrid className="size-3 shrink-0 text-muted-foreground/70" />
@@ -507,31 +523,54 @@ export default function Team() {
                 </div>
               </div>
 
-              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+              <div className="flex shrink-0 items-center gap-0.5">
                 {/* Only a super admin can change standing, and only for another
                     admin. The server refuses everyone else regardless. */}
                 {can.canManageAdmins && u.role === "admin" && u.id !== currentUser?.id && (
                   <>
+                    {/* Icons, not words. "Untrust" and "Make super" set side
+                        by side were wider than the name they sat next to, and
+                        every card carried a different number of them, so no
+                        two rows in the grid lined up. The sentence each one
+                        used to spell out now lives in its label, where a
+                        screen reader and a hover both still reach it. */}
                     <Button
                       variant="ghost"
-                      size="sm"
-                      className="h-8 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                      size="icon-xs"
                       disabled={setStanding.isPending}
+                      aria-label={
+                        u.adminTrusted
+                          ? `Send ${u.name}'s changes for approval again`
+                          : `Let ${u.name} act without approval`
+                      }
                       title={u.adminTrusted ? "Send their changes for approval again" : "Let them act without approval"}
+                      className="text-muted-foreground transition-colors hover:bg-warning/10 hover:text-warning"
                       onClick={() => changeStanding(u, { trusted: !u.adminTrusted })}
                     >
-                      {u.adminTrusted ? "Untrust" : "Trust"}
+                      {u.adminTrusted ? (
+                        <ShieldQuestion aria-hidden className="size-3.5" />
+                      ) : (
+                        <ShieldCheck aria-hidden className="size-3.5" />
+                      )}
                     </Button>
                     <Button
                       variant="ghost"
-                      size="sm"
-                      className="h-8 gap-1 px-2 text-[11px] text-muted-foreground hover:text-primary"
+                      size="icon-xs"
                       disabled={setStanding.isPending}
+                      aria-label={
+                        u.isSuperAdmin
+                          ? `Step ${u.name} down to an ordinary admin`
+                          : `Give ${u.name} full control`
+                      }
                       title={u.isSuperAdmin ? "Step them down to an ordinary admin" : "Give them full control"}
+                      className={
+                        u.isSuperAdmin
+                          ? "text-primary transition-colors hover:bg-primary/10"
+                          : "text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                      }
                       onClick={() => changeStanding(u, { superAdmin: !u.isSuperAdmin })}
                     >
-                      <Crown aria-hidden className="size-3" />
-                      {u.isSuperAdmin ? "Step down" : "Make super"}
+                      <Crown aria-hidden className="size-3.5" />
                     </Button>
                   </>
                 )}

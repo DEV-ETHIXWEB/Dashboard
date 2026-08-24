@@ -1,6 +1,39 @@
 import { useTheme } from "next-themes"
-import { Toaster as Sonner, type ToasterProps } from "sonner"
+import { Toaster as Sonner, toast, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
+import { successFeedback, errorFeedback } from "@/lib/haptics"
+
+/**
+ * The toast is the app's universal "here is what just happened" channel, so it
+ * is also the right place to give the thumb the matching confirmation. Wrapping
+ * the singleton once, here, buzzes every success and every failure across all
+ * ~two dozen call sites without any of them having to know -- and without a
+ * plain tap on a mouse-driven desktop, where navigator.vibrate is a no-op.
+ *
+ * Guarded so React's double-invoke in development, or a hot reload, cannot wrap
+ * the wrapper.
+ */
+type Wrappable = Record<string, ((...args: unknown[]) => unknown) | undefined> & { __haptics?: boolean }
+const t = toast as unknown as Wrappable
+if (!t.__haptics) {
+  t.__haptics = true
+  const wrap = (name: string, buzz: () => void) => {
+    const original = t[name]
+    if (typeof original !== "function") return
+    try {
+      t[name] = (...args: unknown[]) => {
+        buzz()
+        return original.apply(toast, args)
+      }
+    } catch {
+      // A non-writable method just means no haptic on that variant; the toast
+      // itself is untouched. Never let feedback wiring break the notification.
+    }
+  }
+  wrap("success", successFeedback)
+  wrap("error", errorFeedback)
+  wrap("warning", errorFeedback)
+}
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()

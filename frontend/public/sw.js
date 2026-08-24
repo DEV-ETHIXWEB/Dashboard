@@ -11,7 +11,12 @@
  * the interface instead of a browser error page.
  */
 
-const VERSION = "v1";
+// Bump this whenever the shell or the icons change. The browser only installs a
+// worker whose bytes differ from the one it has, and everything else in this
+// file is stable -- so without a bump here a phone that installed the app once
+// keeps serving its original cached shell offline forever, script tags and all,
+// pointing at hashed bundles that no longer exist on the server.
+const VERSION = "v2";
 const SHELL_CACHE = `ethixweb-shell-${VERSION}`;
 const ASSET_CACHE = `ethixweb-assets-${VERSION}`;
 const KEEP = [SHELL_CACHE, ASSET_CACHE];
@@ -38,6 +43,17 @@ self.addEventListener("activate", (event) => {
     caches
       .keys()
       .then((keys) => Promise.all(keys.filter((k) => !KEEP.includes(k)).map((k) => caches.delete(k))))
+      // Take a fresh copy of the shell as this version comes up. The install
+      // step already did, but only for a first install; a returning phone that
+      // is upgrading has an old document sitting under the same key, and the
+      // navigation handler is the only thing that reads it -- which happens
+      // exactly when there is no network to correct it with.
+      .then(() =>
+        caches
+          .open(SHELL_CACHE)
+          .then((cache) => cache.add(SHELL_URL))
+          .catch(() => undefined),
+      )
       .then(() => self.clients.claim()),
   );
 });

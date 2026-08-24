@@ -259,6 +259,26 @@
     @apply bg-background text-foreground antialiased;
   }
 
+  /* No native scrollbars anywhere.
+     Every scrolling surface in this app is a card, a sheet, or a panel with
+     its own rounded edge, and the platform bar is drawn square, in the OS
+     palette, straight through that edge -- on Windows it still paints the
+     stepper arrows. Rather than dressing it per-panel and missing some, the
+     default is now "no bar" and the panels that genuinely need the affordance
+     opt back in with .scrollbar-slim. Scrolling itself is untouched: wheel,
+     trackpad, thumb, keyboard, and scrollIntoView all behave exactly as
+     before, and no scroll container becomes unreachable because every one of
+     them is reachable by gesture or by the focus ring. */
+  * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  ::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
   /* The grey flash Android paints over a tapped control is the loudest tell
      that something is a web page. Our own :active styles replace it. */
   a,
@@ -305,6 +325,17 @@
   .tap-target {
     min-height: 44px;
     min-width: 44px;
+  }
+
+  /* Anything that can contain a pasted URL, a file name, or an ID.
+     `break-words` alone does nothing to a 90-character link, because there is
+     no word boundary in it to break on -- only `anywhere` will cut mid-token,
+     and it has to be paired with min-width:0 or a flex parent still sizes
+     itself to the unbroken string. */
+  .wrap-anywhere {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
   }
 
   .focus-clear {
@@ -456,6 +487,116 @@
       0 2px 5px -1px oklch(0 0 0 / 0.45);
   }
 
+  /* A recessed well: the counterpart to .skeu-stat. Where a raised tile is lit
+     along its top edge and drops a shadow below itself, a well is shadowed
+     along its top edge and catches light along its bottom -- the same lighting
+     model read the other way up. Used for the track a segmented control sits
+     in, so the selected key can rise out of it. */
+  .skeu-well {
+    background-image: linear-gradient(
+      180deg,
+      oklch(0.93 0.005 275) 0%,
+      oklch(0.965 0.004 275) 100%
+    );
+    border: 1px solid oklch(0.88 0.006 275);
+    border-bottom-color: oklch(0.95 0.004 275);
+    box-shadow:
+      inset 0 2px 3px -1px oklch(0 0 0 / 0.13),
+      inset 0 -1px 0 0 oklch(1 0 0 / 0.75);
+  }
+
+  .dark .skeu-well {
+    background-image: linear-gradient(
+      180deg,
+      oklch(0.155 0.011 275) 0%,
+      oklch(0.205 0.012 275) 100%
+    );
+    border: 1px solid oklch(0 0 0 / 0.5);
+    border-bottom-color: oklch(1 0 0 / 0.08);
+    box-shadow:
+      inset 0 2px 4px -1px oklch(0 0 0 / 0.6),
+      inset 0 -1px 0 0 oklch(1 0 0 / 0.06);
+  }
+
+  /* The key that has been pressed in and stayed there: raised out of the well,
+     lit on top, with its own contact shadow underneath. */
+  .skeu-key {
+    background-image: linear-gradient(
+      180deg,
+      oklch(1 0 0) 0%,
+      oklch(0.975 0.004 275) 100%
+    );
+    border: 1px solid oklch(0.9 0.006 275);
+    border-top-color: oklch(0.96 0.004 275);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.95),
+      0 1px 2px 0 oklch(0 0 0 / 0.12),
+      0 3px 6px -2px oklch(0 0 0 / 0.14);
+  }
+
+  .dark .skeu-key {
+    background-image: linear-gradient(
+      180deg,
+      oklch(0.32 0.015 275) 0%,
+      oklch(0.255 0.013 275) 100%
+    );
+    border: 1px solid oklch(0 0 0 / 0.5);
+    border-top-color: oklch(1 0 0 / 0.16);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.14),
+      0 1px 2px 0 oklch(0 0 0 / 0.45),
+      0 4px 8px -3px oklch(0 0 0 / 0.55);
+  }
+
+  /* An unpressed key: flush with the well, and only travels on touch. */
+  .skeu-key-idle:active {
+    transform: translateY(0.5px);
+  }
+
+  /* The account plate at the foot of the sidebar. Same raised treatment as
+     .skeu-stat, one notch quieter -- it is furniture, not a headline. */
+  .skeu-plate {
+    background-image: linear-gradient(
+      180deg,
+      oklch(1 0 0) 0%,
+      oklch(0.975 0.004 275) 100%
+    );
+    border: 1px solid oklch(0.91 0.006 275);
+    border-top-color: oklch(0.965 0.004 275);
+    border-bottom-color: oklch(0.86 0.008 275);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.9),
+      0 1px 1px 0 oklch(0 0 0 / 0.05),
+      0 5px 12px -6px oklch(0 0 0 / 0.18);
+  }
+
+  .dark .skeu-plate {
+    background-image: linear-gradient(
+      180deg,
+      oklch(0.285 0.014 275) 0%,
+      oklch(0.225 0.012 275) 100%
+    );
+    border: 1px solid oklch(0 0 0 / 0.45);
+    border-top-color: oklch(1 0 0 / 0.13);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.11),
+      0 1px 2px 0 oklch(0 0 0 / 0.4),
+      0 8px 16px -8px oklch(0 0 0 / 0.55);
+  }
+
+  /* A hairline groove: one dark pixel with one light pixel under it, which is
+     how a physical seam between two panels catches the light. Replaces a flat
+     1px border where the surfaces around it are meant to read as material. */
+  .skeu-seam {
+    border-top: 1px solid oklch(0.88 0.006 275);
+    box-shadow: inset 0 1px 0 0 oklch(1 0 0 / 0.9);
+  }
+
+  .dark .skeu-seam {
+    border-top: 1px solid oklch(0 0 0 / 0.5);
+    box-shadow: inset 0 1px 0 0 oklch(1 0 0 / 0.055);
+  }
+
   /* Hide scrollbars for sleek UI while preserving scrollability */
   .no-scrollbar::-webkit-scrollbar {
     display: none;
@@ -465,13 +606,16 @@
     scrollbar-width: none;
   }
 
-  /* Slim themed scrollbar for panels that scroll inside the page (sidebars,
-     long lists). The native bar is too wide and ignores the theme. */
+  /* The one deliberate exception to the no-scrollbar default: a long form
+     inside a modal has no surrounding page to hint that it scrolls, so those
+     panels ask for a bar back. `display: block` is what re-enables it after
+     the base layer switched it off. */
   .scrollbar-slim {
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }
   .scrollbar-slim::-webkit-scrollbar {
+    display: block;
     width: 6px;
     height: 6px;
   }

@@ -1,5 +1,6 @@
 import { Sun, Moon, Monitor } from "lucide-react";
 import { useTheme, type ThemeMode } from "@/hooks/useTheme";
+import { selectionFeedback } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 
 const OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
@@ -15,7 +16,7 @@ export function ThemeSwitch({ className }: { className?: string }) {
     <div
       role="radiogroup"
       aria-label="Colour theme"
-      className={cn("grid grid-cols-3 gap-1 rounded-lg bg-secondary p-1", className)}
+      className={cn("skeu-well grid grid-cols-3 gap-1 rounded-xl p-1", className)}
     >
       {OPTIONS.map((opt) => {
         const active = theme === opt.value;
@@ -25,16 +26,21 @@ export function ThemeSwitch({ className }: { className?: string }) {
             type="button"
             role="radio"
             aria-checked={active}
-            onClick={() => setTheme(opt.value)}
+            onClick={() => {
+              if (!active) selectionFeedback();
+              setTheme(opt.value);
+            }}
             className={cn(
-              "focus-clear flex h-8 items-center justify-center gap-1.5 rounded-md text-xs",
+              // min-w-0 so a long label shortens the key rather than widening
+              // the track past the sidebar.
+              "focus-clear flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg text-xs transition-[box-shadow,transform,color] duration-150",
               active
-                ? "bg-card font-medium text-foreground ring-1 ring-foreground/10"
-                : "font-normal text-muted-foreground hover:text-foreground",
+                ? "skeu-key font-medium text-foreground"
+                : "skeu-key-idle font-normal text-muted-foreground hover:text-foreground",
             )}
           >
             <opt.icon aria-hidden className="size-3.5 shrink-0" />
-            {opt.label}
+            <span className="truncate">{opt.label}</span>
           </button>
         );
       })}

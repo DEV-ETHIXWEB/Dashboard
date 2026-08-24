@@ -34,7 +34,12 @@ export function TopBar({
   return (
     <header
       className={cn(
-        "sticky top-0 z-30 flex h-13 shrink-0 items-center justify-between gap-2 px-4 pt-[env(safe-area-inset-top)] transition-[background-color,border-color,backdrop-filter] duration-200 md:hidden",
+        // min-h, not h. `height` is border-box here, so a fixed 3.25rem with
+        // a safe-area top pad meant the inset ate the bar rather than sitting
+        // above it -- on a notched phone in standalone the inset is larger
+        // than the bar itself, and the emblem and the bell were pushed clean
+        // out of their own header.
+        "sticky top-0 z-30 flex min-h-13 shrink-0 items-center justify-between gap-2 px-4 pt-[env(safe-area-inset-top)] transition-[background-color,border-color,backdrop-filter] duration-200 md:hidden",
         raised ? "app-chrome border-b border-border/70" : "border-b border-transparent bg-background",
       )}
     >

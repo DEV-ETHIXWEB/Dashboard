@@ -66,7 +66,7 @@ export function LiveIndicator({ className, compact = false }: { className?: stri
       role="status"
       title={look.title}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full bg-secondary/70 px-2 py-1 text-[11px] font-medium",
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full bg-secondary/70 px-2 py-1 text-[11px] font-medium whitespace-nowrap",
         look.tone,
         className,
       )}

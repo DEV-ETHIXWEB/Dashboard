@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { useReducedMotion } from "framer-motion";
-import { successFeedback } from "@/lib/haptics";
+import { selectionFeedback, successFeedback } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 
 /** How far the thumb has to travel before the release counts. */
@@ -33,6 +33,9 @@ export function PullToRefresh({
   const [refreshing, setRefreshing] = useState(false);
   const startY = useRef<number | null>(null);
   const armed = useRef(false);
+  // Whether the pull has passed the release threshold, so the detent tick fires
+  // once on the way over rather than every frame it stays there.
+  const crossed = useRef(false);
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
@@ -60,6 +63,14 @@ export function PullToRefresh({
       }
       // Resistance: the further you go, the less you get.
       const eased = Math.min(MAX_PULL, delta ** 0.85);
+      // The signature native detent: a single tick the instant the pull is far
+      // enough to count, and re-armed only after easing back below it.
+      if (eased >= THRESHOLD && !crossed.current) {
+        crossed.current = true;
+        selectionFeedback();
+      } else if (eased < THRESHOLD && crossed.current) {
+        crossed.current = false;
+      }
       setPull(eased);
     };
 
@@ -67,6 +78,7 @@ export function PullToRefresh({
       if (!armed.current) return;
       armed.current = false;
       startY.current = null;
+      crossed.current = false;
 
       if (pull < THRESHOLD) {
         setPull(0);

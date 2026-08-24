@@ -9,11 +9,21 @@
          own window: one tap from the home screen to project status. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/emblem-mark.png" />
-    <meta name="theme-color" content="#c20000" />
+    <!-- The installed window's chrome follows the theme the app is actually
+         wearing. One fixed colour meant a dark-mode phone drew a brand-red
+         status bar above a near-black app, with a hard seam between them. -->
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="EthixWeb" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- `default`, not `black-translucent`. Translucent hands the status-bar
+         strip to the page and paints the clock white on top of it, which is
+         invisible over this app in light mode; it also puts the clock on top of
+         the header rather than above it on any device with a notch. `default`
+         keeps the strip outside the layout and lets it take the page's own
+         colour, so the time is readable in both themes. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   </head>
   <body>
     <div id="root"></div>

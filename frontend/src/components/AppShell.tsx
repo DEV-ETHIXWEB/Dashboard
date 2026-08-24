@@ -146,42 +146,20 @@ function titleFor(pathname: string, items: NavItem[]): string {
 }
 
 /**
- * The emblem on its plate, with the product name set beside it.
+ * The flat EthixWeb wordmark, standing alone.
  *
- * The mark ships in two files -- greyscale and brand red -- and the plate holds
- * both so hovering cross-fades between them at identical size. `ethixweb.png`,
- * the flat wordmark, is deliberately not used here: it is a white mark on
- * transparency and disappears against the light sidebar.
+ * `ethixweb.png` is a white mark on transparency, so it is inverted to black in
+ * the light theme and left white in the dark one -- that is the whole reason for
+ * the invert filter. The emblem plate and every text line beside it are gone;
+ * the wordmark is the whole brand block.
  */
 function Brand() {
   return (
-    <div className="flex min-w-0 items-center gap-2.5">
-      <div
-        className="group flex size-[2.1rem] shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950/40 p-1 shadow-sm ring-1 ring-primary/20 transition-colors duration-200 hover:border-primary/40 hover:ring-primary/40"
-      >
-        {/* Both marks share one box, so the greyscale and red versions render
-            at exactly the same size; hovering cross-fades between them. */}
-        <div className="relative size-full">
-          <img
-            src="/emblem-mark.png"
-            alt="EthixWeb Emblem"
-            className="absolute inset-0 size-full object-contain transition-opacity duration-200 group-hover:opacity-0"
-          />
-          <img
-            src="/emblem-mark-red.png"
-            alt=""
-            aria-hidden="true"
-            className="absolute inset-0 size-full object-contain opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-          />
-        </div>
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-sm leading-tight font-semibold tracking-tight text-sidebar-foreground">
-          EthixWeb
-        </div>
-        <div className="truncate text-xs text-muted-foreground">Client portal</div>
-      </div>
-    </div>
+    <img
+      src="/ethixweb.png"
+      alt="EthixWeb"
+      className="h-5 w-auto max-w-full object-contain object-left invert dark:invert-0"
+    />
   );
 }
 
@@ -331,16 +309,16 @@ function SidebarContent({
         )}
       </nav>
 
-      <div className="relative z-10 shrink-0 border-t border-sidebar-border/60 px-4 py-3">
-        <div className="flex items-center justify-between pb-1.5">
-          <span className="t-label text-muted-foreground">Appearance</span>
+      <div className="skeu-seam relative z-10 shrink-0 px-4 py-3">
+        <div className="flex items-center justify-between gap-2 pb-2">
+          <span className="t-label shrink-0 text-muted-foreground">Appearance</span>
           <LiveIndicator />
         </div>
         <ThemeSwitch />
       </div>
 
-      <div className="relative z-10 shrink-0 border-t border-sidebar-border/60 p-3">
-        <div className="flex items-center gap-2.5 rounded-lg bg-card px-2.5 py-2 ring-1 ring-foreground/10">
+      <div className="skeu-seam relative z-10 shrink-0 p-3">
+        <div className="skeu-plate flex items-center gap-2.5 rounded-xl px-2.5 py-2">
           <Avatar className="size-8 shrink-0">
             <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
               {user ? initials(user.name) : "?"}

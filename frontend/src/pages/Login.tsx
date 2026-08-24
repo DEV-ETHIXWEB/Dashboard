@@ -234,7 +234,12 @@ export default function Login() {
   const themeLabel = theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System";
 
   return (
-    <div className="relative flex min-h-svh items-center justify-center overflow-hidden bg-gradient-to-b from-secondary/50 via-background to-background px-0 py-0 text-foreground sm:px-6 sm:py-10 lg:px-10">
+    // items-stretch below `sm`. Centring the card on a phone left a strip of
+    // page above it and another below, and those strips are where the blurred
+    // primary and rose blobs sit -- so the top of every handset showed a pink
+    // band with a hard seam under it, which reads as something leaking rather
+    // than as a background. Full-bleed, there is no strip to tint.
+    <div className="relative flex min-h-svh items-stretch justify-center overflow-hidden bg-gradient-to-b from-secondary/50 via-background to-background px-0 py-0 text-foreground sm:items-center sm:px-6 sm:py-10 lg:px-10">
       <div ref={themeMenuRef} className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50">
         {themeMenuOpen && (
           <div className="absolute bottom-12 right-0 w-44 rounded-xl border border-border/80 bg-card/95 p-2 shadow-2xl backdrop-blur-md animate-in fade-in-0 zoom-in-95 duration-150 z-50">
@@ -318,8 +323,8 @@ export default function Login() {
         </Button>
       </div>
 
-      <div className="pointer-events-none absolute inset-0 -z-30 bg-[radial-gradient(circle_at_15%_20%,hsl(var(--primary)/0.16),transparent_45%),radial-gradient(circle_at_85%_15%,rgba(59,130,246,0.14),transparent_45%),radial-gradient(circle_at_50%_100%,rgba(168,85,247,0.12),transparent_50%)]" />
-      <div className="absolute inset-0 -z-20 opacity-[0.07] pointer-events-none bg-[linear-gradient(to_right,hsl(var(--foreground)/0.09)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--foreground)/0.09)_1px,transparent_1px)] bg-[size:36px_36px] [mask-image:radial-gradient(ellipse_75%_65%_at_50%_40%,black,transparent)]" />
+      <div className="pointer-events-none absolute inset-0 -z-30 bg-[radial-gradient(circle_at_15%_20%,color-mix(in_oklch,var(--primary)_16%,transparent),transparent_45%),radial-gradient(circle_at_85%_15%,rgba(59,130,246,0.14),transparent_45%),radial-gradient(circle_at_50%_100%,rgba(168,85,247,0.12),transparent_50%)]" />
+      <div className="absolute inset-0 -z-20 opacity-[0.07] pointer-events-none bg-[linear-gradient(to_right,color-mix(in_oklch,var(--foreground)_9%,transparent)_1px,transparent_1px),linear-gradient(to_bottom,color-mix(in_oklch,var(--foreground)_9%,transparent)_1px,transparent_1px)] bg-[size:36px_36px] [mask-image:radial-gradient(ellipse_75%_65%_at_50%_40%,black,transparent)]" />
 
       <div className="absolute -top-28 -left-20 w-[480px] h-[480px] bg-primary/25 rounded-full blur-[140px] pointer-events-none -z-10 animate-[pulse_10s_ease-in-out_infinite]" />
       <div className="absolute top-12 -right-16 w-[440px] h-[440px] bg-rose-600/20 rounded-full blur-[130px] pointer-events-none -z-10 animate-[pulse_12s_ease-in-out_infinite]" />
@@ -344,36 +349,18 @@ export default function Login() {
       />
 
       {/* Outlined wordmarks at 12vw are wallpaper on a desktop and clutter on a
-          phone, where every pixel is competing with the form. */}
-      <div className="pointer-events-none absolute inset-0 -z-20 hidden select-none overflow-hidden sm:block">
-        <div
-          className="absolute top-2 left-3 sm:top-4 sm:left-6 text-[12vw] sm:text-[9.5vw] lg:text-[8vw] font-semibold uppercase tracking-tighter leading-none"
-          style={{
-            WebkitTextFillColor: "transparent",
-            WebkitTextStroke: "2.5px hsl(var(--primary) / 0.45)",
-            filter: "drop-shadow(0 0 20px hsl(var(--primary) / 0.2))",
-          }}
-        >
-          POWERING CLIENT
-        </div>
-        <div
-          className="absolute bottom-2 right-3 sm:bottom-4 sm:right-6 text-[12vw] sm:text-[9.5vw] lg:text-[8vw] font-semibold uppercase tracking-tighter leading-none text-right"
-          style={{
-            WebkitTextFillColor: "transparent",
-            WebkitTextStroke: "2.5px hsl(var(--foreground) / 0.25)",
-            filter: "drop-shadow(0 0 20px hsl(var(--foreground) / 0.1))",
-          }}
-        >
-          COLLABORATION
-        </div>
-      </div>
+          phone, where every pixel is competing with the form. `md`, not `sm`:
+          between 640 and 768 the split panel is hidden and the card runs the
+          full width, so a 9.5vw wordmark had nowhere to sit except across the
+          top of the form. It appears with the panel it belongs to. */}
 
-      <div className="w-full max-w-4xl lg:max-w-[980px]">
-        <Card className="overflow-hidden rounded-none border-0 bg-card p-0 py-0 text-card-foreground backdrop-blur-md sm:rounded-xl sm:border sm:border-border/70 sm:shadow-2xl sm:shadow-primary/10">
-          <CardContent className="p-0">
+
+      <div className="flex w-full max-w-4xl flex-col lg:max-w-[980px]">
+        <Card className="flex-1 overflow-hidden rounded-none border-0 bg-card p-0 py-0 text-card-foreground backdrop-blur-md sm:flex-none sm:rounded-xl sm:border sm:border-border/70 sm:shadow-2xl sm:shadow-primary/10">
+          <CardContent className="flex-1 p-0">
             {/* No fixed minimum on a phone: the panel beside it is hidden
                 there, so the card should be exactly as tall as the form. */}
-            <div className="grid md:min-h-[560px] md:grid-cols-12">
+            <div className="grid h-full md:min-h-[560px] md:grid-cols-12">
               {/* A phone lands on the form, not on the pitch. This panel is the
                   half of the split that has to go: 500px of marketing pushed
                   the email field below the fold on every handset. Its brand and
