@@ -47,13 +47,22 @@ function Node({ cx, cy, r = 1.15 }: { cx: number; cy: number; r?: number }) {
 
 /* -- Workspace ---------------------------------------------------------- */
 
-/** The emblem itself: spine plus stacked bars. Home is where the brand sits. */
+/**
+ * The emblem itself: a full-height spine with three bars laid across it,
+ * which together read as the E.
+ *
+ * Traced off the mark rather than approximated -- the bars run *over* the
+ * spine instead of sitting beside it, so the seam shows through exactly where
+ * it does on the logo, and each plane carries the frosted fill that keeps the
+ * whole thing legible as one solid shape at tab size instead of dissolving
+ * into four thin outlines.
+ */
 export const IconDashboard: EthixIcon = (p) => (
-  <Icon {...p}>
-    <rect x="3.2" y="4" width="5.4" height="16" rx="1.8" />
-    <rect x="11.4" y="4" width="9.4" height="4.4" rx="1.5" />
-    <rect x="11.4" y="9.8" width="9.4" height="4.4" rx="1.5" />
-    <rect x="11.4" y="15.6" width="9.4" height="4.4" rx="1.5" />
+  <Icon strokeWidth={1.5} {...p}>
+    <rect x="3.6" y="3.8" width="3.6" height="16.4" rx="1.1" fill="currentColor" fillOpacity="0.13" />
+    <rect x="6.6" y="3.8" width="13.8" height="4.2" rx="1.2" fill="currentColor" fillOpacity="0.13" />
+    <rect x="6.6" y="9.9" width="13.8" height="4.2" rx="1.2" fill="currentColor" fillOpacity="0.13" />
+    <rect x="6.6" y="16" width="13.8" height="4.2" rx="1.2" fill="currentColor" fillOpacity="0.13" />
   </Icon>
 );
 

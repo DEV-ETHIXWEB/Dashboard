@@ -181,7 +181,6 @@ export default function AdminHome() {
           value={String(awaitingFirstReply.length)}
           icon={Inbox}
           trend={awaitingFirstReply.length > 0 ? "No first response yet" : "All answered"}
-          tone={awaitingFirstReply.length > 0 ? "warning" : "success"}
         />
         <StatCard
           label="SLA breached"
@@ -193,7 +192,6 @@ export default function AdminHome() {
           label="Unassigned"
           value={String(unassigned.length)}
           icon={UserX}
-          tone={unassigned.length > 0 ? "warning" : "default"}
         />
         <StatCard label="Active projects" value={String(projects?.length ?? 0)} icon={FolderKanban} />
       </div>
