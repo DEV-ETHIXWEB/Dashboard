@@ -43,17 +43,20 @@ export function TopBar({
         raised ? "app-chrome border-b border-border/70" : "border-b border-transparent bg-background",
       )}
     >
-      {/* The emblem and the brand ride along with the page name, so the phone
-          header says whose product this is the way the sidebar does on a desk.
-          The greyscale mark sits on its own dark plate rather than bare: the
-          flat wordmark is white on transparency and would vanish in the light
-          theme. */}
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950/40 p-1 ring-1 ring-primary/20">
-          <img src="/emblem-mark.png" alt="EthixWeb" className="size-full object-contain" />
-        </span>
-        <h2 className="min-w-0 truncate text-[15px] leading-tight font-semibold tracking-tight">
-          EthixWeb <span className="font-medium text-muted-foreground">{title}</span>
+      {/* The full wordmark, not the emblem in a plate: a phone header is the one
+          place the brand gets to be read rather than inferred from a glyph.
+          The artwork is white on transparency, so the light theme drives it to
+          black instead of standing it on a dark tile -- the mark reads as
+          itself either way, with nothing boxed around it. */}
+      <div className="flex min-w-0 items-center gap-2.5">
+        <img
+          src="/ethixweb.png"
+          alt="EthixWeb"
+          className="h-[15px] w-auto shrink-0 brightness-0 dark:brightness-100"
+        />
+        <span aria-hidden className="h-3.5 w-px shrink-0 bg-border" />
+        <h2 className="min-w-0 truncate text-[15px] leading-tight font-medium tracking-tight text-muted-foreground">
+          {title}
         </h2>
       </div>
 
