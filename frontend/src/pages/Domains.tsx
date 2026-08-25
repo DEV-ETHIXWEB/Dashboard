@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { plainDate } from "@/lib/money";
 import type { Domain } from "@/lib/entities";
+import { impactFeedback } from "@/lib/haptics";
 
 const RENEWAL_WARNING_DAYS = 45;
 
@@ -128,6 +129,12 @@ export default function Domains() {
 
   function remove(d: Domain) {
     if (!window.confirm(`Remove "${d.domainName}"? This cannot be undone.`)) return;
+
+    // Confirmed, and this one does not come back. The heavy tap marks the
+
+    // moment the decision was actually taken.
+
+    impactFeedback();
     deleteDomain.mutate(d.id, {
       onSuccess: () => toast.success("Domain removed"),
       onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to remove domain"),

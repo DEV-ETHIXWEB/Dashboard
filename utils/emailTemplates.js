@@ -93,7 +93,11 @@ const TOKENS = {
   // email dropped into a white Gmail is the thing that looks broken -- so the
   // body is paper, and the brand shows up in the masthead and the accents.
   page: '#eef0f4',
-  ink: '#ffffff',
+  // The masthead black, reused by codeValue() for the one block on the page
+  // that is meant to be lifted out rather than read. It is genuinely dark: a
+  // white value here puts white text on a white block and the password
+  // disappears, which is exactly what it did.
+  ink: '#141013',
   card: '#ffffff',
   border: '#e2e5ea',
   panel: '#f7f8fa',
@@ -483,10 +487,18 @@ function panel({ tone = 'info', title, html = '' }) {
 function codeValue(label, value, { hint = null } = {}) {
   return [
     `<div style="margin:0 0 4px;font-family:${TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:${TOKENS.muted};">${escapeHtml(label)}</div>`,
-    `<div style="margin:0 0 6px;padding:11px 13px;border-radius:8px;background:${TOKENS.ink};`,
+    // A table with a bgcolor attribute, not a styled div. Outlook's Word engine
+    // drops `background` on a div outright, and a dark block that loses its
+    // background leaves white text on white paper -- an empty box where the
+    // password should be. The attribute is the layer that cannot be dropped,
+    // the inline style is the one that gets the radius, and `.ew-code` pins
+    // both back under Outlook.com's dark theme rewrite.
+    '<table role="presentation" class="ew-code" width="100%" cellpadding="0" cellspacing="0" border="0" ',
+    `bgcolor="${TOKENS.ink}" style="margin:0 0 6px;border-radius:8px;background:${TOKENS.ink};">`,
+    `<tr><td class="ew-code-v" style="padding:11px 13px;`,
     "font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;font-size:16px;",
-    `letter-spacing:.06em;color:#ffffff;word-break:break-all;`,
-    `-webkit-user-select:all;-moz-user-select:all;user-select:all;">${escapeHtml(value)}</div>`,
+    'letter-spacing:.06em;color:#ffffff;word-break:break-all;',
+    `-webkit-user-select:all;-moz-user-select:all;user-select:all;">${escapeHtml(value)}</td></tr></table>`,
     hint
       ? `<div style="margin:0 0 14px;font-family:${TOKENS.font};font-size:11px;color:${TOKENS.muted};">${escapeHtml(hint)}</div>`
       : '<div style="height:10px;line-height:10px;font-size:0;">&nbsp;</div>',
@@ -649,9 +661,9 @@ function header() {
   const word = escapeHtml(String(b.name).toUpperCase());
 
   const mark = logo
-    ? `<img src="${logo}" alt="${word}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}" `
+    ? `<img class="ew-mark" src="${logo}" alt="${word}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}" `
       + `style="display:block;border:0;width:${LOGO_WIDTH}px;height:${LOGO_HEIGHT}px;max-width:100%;" />`
-    : `<div style="font-family:${TOKENS.font};font-size:32px;line-height:1;font-weight:600;`
+    : `<div class="ew-mark" style="font-family:${TOKENS.font};font-size:32px;line-height:1;font-weight:600;`
       + `letter-spacing:.02em;color:#ffffff;">${word}</div>`;
 
   // Near-black carrying a maroon wash, not a bright band: the wordmark and the
@@ -661,14 +673,21 @@ function header() {
   // The padding lives on the logo cell, not on the band, so the web can sit
   // hard against the top and right edges. Inset by the band's own padding it
   // read as floating in the middle of the header rather than anchored to it.
+  //
+  // The two cells want 481px between them (30 + 211 + 20 for the wordmark, 220
+  // for the web) and a phone hands the band about 360. Something has to give,
+  // and left alone the client gives up the wordmark -- the brand vanishes and
+  // the header renders as a bare strip of web. So both cells carry classes and
+  // the stylesheet in renderEmail() shrinks them together below 620px, where
+  // they add up to 296 and the wordmark survives on a 320px screen.
   return [
     `<tr><td class="ew-band" bgcolor="#141013" style="background-color:#141013;`
       + `background-image:${wash};padding:0;border-radius:14px 14px 0 0;">`,
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>',
-    `<td valign="middle" align="left" style="padding:34px 20px 34px 30px;">${mark}</td>`,
+    `<td class="ew-logo" valign="middle" align="left" style="padding:34px 20px 34px 30px;">${mark}</td>`,
     // font-size/line-height 0 kills the descender gap that would otherwise
     // leave a hairline of background under the image.
-    `<td valign="top" align="right" width="220" `
+    `<td class="ew-corner" valign="top" align="right" width="220" `
       + `style="width:220px;padding:0;font-size:0;line-height:0;">`
       + `<img src="cid:${ICON_CID_PREFIX}web-corner" alt="" width="220" height="132" `
       + `style="display:block;border:0;width:220px;height:132px;max-width:100%;`
@@ -813,13 +832,17 @@ function renderEmail({
     '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />',
     '<style>',
     ':root{color-scheme:light;supported-color-schemes:light;}',
-    "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');",
     // Outlook.com rewrites colours under its own dark theme; these put them
     // back. Everything else already ships the dark values inline.
     `[data-ogsc] .ew-page{background:${TOKENS.page} !important;}`,
     `[data-ogsc] .ew-card{background:${TOKENS.card} !important;}`,
     `[data-ogsc] .ew-text{color:${TOKENS.text} !important;}`,
     `[data-ogsc] .ew-foot{background:${FOOT.bg} !important;}`,
+    // The code block is the one thing on the page that must never lose its
+    // contrast: it is dark on purpose, and a theme that repaints the block
+    // without repainting the text hides the password entirely.
+    `[data-ogsc] .ew-code{background:${TOKENS.ink} !important;}`,
+    '[data-ogsc] .ew-code-v{color:#ffffff !important;}',
     '@media only screen and (max-width:720px){',
     '.ew-card{width:100% !important;border-radius:0 !important;}',
     '.ew-foot{border-radius:0 !important;}',
@@ -829,6 +852,20 @@ function renderEmail({
     // Side-by-side halves become full-width rows: below this width there is
     // not enough room for two columns of readable text.
     '.ew-col{display:block !important;width:100% !important;padding:0 0 14px !important;}',
+    '}',
+    // The masthead has its own breakpoint, lower than the card's. Between 620
+    // and 720 the band is still wide enough for the wordmark and the web side
+    // by side; below 620 it is not, and the wordmark is the half that must
+    // survive -- so the web gives up most of its width rather than the brand
+    // giving up all of its own.
+    '@media only screen and (max-width:620px){',
+    '.ew-logo{padding:24px 14px 24px 18px !important;}',
+    // Scoped by tag: `.ew-mark` is the wordmark image when there is one and a
+    // line of text when the image is blocked, and the two resize differently.
+    'img.ew-mark{width:160px !important;height:24px !important;}',
+    'div.ew-mark{font-size:24px !important;}',
+    '.ew-corner{width:100px !important;}',
+    '.ew-corner img{width:100px !important;height:60px !important;}',
     '}',
     '</style>',
     '</head>',

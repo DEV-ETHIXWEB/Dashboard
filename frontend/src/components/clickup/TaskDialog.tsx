@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { formatRelativeTime, initials, parseLocalISO, toLocalISO } from "@/lib/format";
+import { impactFeedback } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 import { PRIORITY_OPTIONS, type ClickUpTask, type ClickUpTaskInput } from "@/lib/integrations";
 
@@ -297,6 +298,9 @@ export function TaskEditorDialog({
 
   function remove() {
     if (!task) return;
+    // The second press of a two-press delete: the point of no return, and the
+    // only tap in this dialog that earns the heavy one.
+    impactFeedback();
     deleteTask.mutate(task.id, {
       onSuccess: () => {
         toast.success("Task deleted in ClickUp");

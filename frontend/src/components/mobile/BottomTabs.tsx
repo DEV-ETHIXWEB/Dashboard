@@ -40,6 +40,10 @@ export function BottomTabs({
       <ul className="mx-auto flex max-w-lg items-stretch">
         {items.map((item) => {
           const active = isActive(item.to) && !moreOpen;
+          // A tab slot is 22px. Anything that needs a different drawing at
+          // that size says so on the nav entry; everything else reuses the one
+          // glyph the sidebar shows.
+          const Glyph = item.mobileIcon ?? item.icon;
           return (
             <li key={item.to} className="flex-1">
               <NavLink
@@ -64,7 +68,7 @@ export function BottomTabs({
                     className="absolute inset-x-2 inset-y-1.5 -z-10 rounded-2xl bg-primary/10"
                   />
                 )}
-                <item.icon
+                <Glyph
                   aria-hidden
                   className={cn("size-[22px] shrink-0", active && "nav-glow")}
                   strokeWidth={active ? 1.7 : 1.5}

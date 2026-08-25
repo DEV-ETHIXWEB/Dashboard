@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { plainDate } from "@/lib/money";
 import type { Project } from "@/lib/entities";
+import { impactFeedback } from "@/lib/haptics";
 
 const STATUSES = ["On Track", "At Risk", "Delayed", "Complete"];
 
@@ -102,6 +103,12 @@ export default function Projects() {
 
   function remove(p: Project) {
     if (!window.confirm(`Delete "${p.name}"? This also removes its tasks and cannot be undone.`)) return;
+
+    // Confirmed, and this one does not come back. The heavy tap marks the
+
+    // moment the decision was actually taken.
+
+    impactFeedback();
     deleteProject.mutate(p.id, {
       onSuccess: () => toast.success("Project deleted"),
       onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to delete project"),

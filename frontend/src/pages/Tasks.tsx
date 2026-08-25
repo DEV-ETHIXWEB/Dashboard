@@ -34,6 +34,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { formatDate, initials } from "@/lib/format";
 import type { Task } from "@/lib/entities";
+import { impactFeedback } from "@/lib/haptics";
 
 const PRIORITIES = ["Low", "Medium", "High"];
 const STATUSES = ["To Do", "In Progress", "In Review", "Complete"];
@@ -133,6 +134,12 @@ export default function Tasks() {
 
   function remove(t: Task) {
     if (!window.confirm(`Delete "${t.name}"? This action cannot be undone.`)) return;
+
+    // Confirmed, and this one does not come back. The heavy tap marks the
+
+    // moment the decision was actually taken.
+
+    impactFeedback();
     deleteTask.mutate(t.id, {
       onSuccess: () => toast.success("Task deleted"),
       onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to delete task"),

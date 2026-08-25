@@ -1,7 +1,7 @@
 import {
   IconApprovals, IconAuditLog, IconBilling, IconBudget, IconClickUp, IconClientAccess, IconDashboard,
-  IconDomains, IconHome, IconLoginCodes, IconMail, IconMessages, IconNotifications, IconProgress,
-  IconProjects, IconReports, IconSlack, IconTasks, IconTeam, IconTickets, type EthixIcon,
+  IconDomains, IconEmblem, IconHome, IconLoginCodes, IconMail, IconMessages, IconNotifications,
+  IconProgress, IconProjects, IconReports, IconSlack, IconTasks, IconTeam, IconTickets, type EthixIcon,
 } from "@/components/icons/ethix";
 import { canSeePage, pageKeyForPath } from "@/lib/permissions";
 import type { Role, User } from "@/lib/types";
@@ -14,6 +14,12 @@ export interface NavItem {
   /** Shorter wording for the phone's tab bar, where a slot is 75px wide. */
   short?: string;
   icon: EthixIcon;
+  /**
+   * Swapped in for `icon` in the phone's tab bar only. A glyph that holds at
+   * 28px on a sidebar row can dissolve at 22px in a tab slot; where it does,
+   * this carries the version drawn for the smaller size.
+   */
+  mobileIcon?: EthixIcon;
   roles?: Role[];
   badge?: number;
 }
@@ -29,7 +35,10 @@ export interface NavGroup {
  * the team does daily, and hiding them behind a menu costs more than it saves.
  */
 const STAFF_NAV: NavItem[] = [
-  { to: "/portal", label: "Dashboard", short: "Home", icon: IconDashboard },
+  // Home carries the emblem rather than a generic house or grid, and on a
+  // phone it carries the solid cut of it -- the tab bar is where the mark has
+  // to survive at its smallest.
+  { to: "/portal", label: "Dashboard", short: "Home", icon: IconDashboard, mobileIcon: IconEmblem },
   { to: "/portal/projects", label: "Projects", icon: IconProjects, roles: ["admin", "sales", "project_manager"] },
   { to: "/portal/tasks", label: "Tasks", icon: IconTasks, roles: ["admin", "project_manager", "employee"] },
   { to: "/portal/domains", label: "Domains", icon: IconDomains, roles: ["admin", "sales", "project_manager"] },

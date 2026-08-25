@@ -43,6 +43,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SummaryCard } from "@/components/SummaryCard";
 import { initials, toLocalISO, parseLocalISO } from "@/lib/format";
+import { impactFeedback } from "@/lib/haptics";
 import { CLIENT_PAGES, CLIENT_PAGE_KEYS, describeAccess } from "@/lib/permissions";
 import { LINK_LIFETIMES } from "@/lib/types";
 import { useSlackChannels } from "@/hooks/useIntegrations";
@@ -281,6 +282,9 @@ export default function ClientAccess() {
       )
     )
       return;
+    // Confirmed, and this one does not come back. The heavy tap marks the
+    // moment the decision was actually taken.
+    impactFeedback();
     setBusyId(u.id);
     updateUser.mutate(
       { id: u.id, patch: { regeneratePassword: true } },
@@ -383,6 +387,12 @@ export default function ClientAccess() {
 
   function revoke(u: UserRecord) {
     if (!window.confirm(`Revoke access for ${u.name}?\n\nTheir account is deleted permanently.`)) return;
+
+    // Confirmed, and this one does not come back. The heavy tap marks the
+
+    // moment the decision was actually taken.
+
+    impactFeedback();
     setBusyId(u.id);
     deleteUser.mutate(u.id, {
       onSuccess: () => toast.success("Access revoked"),

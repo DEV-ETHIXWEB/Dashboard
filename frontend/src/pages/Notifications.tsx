@@ -12,7 +12,7 @@ import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
-import { tapFeedback } from "@/lib/haptics";
+import { impactFeedback, tapFeedback } from "@/lib/haptics";
 import { groupByDay, kindOf, kindsPresent, lookFor, type NotificationKind } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import type { Notification } from "@/lib/entities";
@@ -72,6 +72,12 @@ export default function Notifications() {
 
   function clear() {
     if (!window.confirm("Clear everything here? This cannot be undone.")) return;
+
+    // Confirmed, and this one does not come back. The heavy tap marks the
+
+    // moment the decision was actually taken.
+
+    impactFeedback();
     clearAll.mutate(undefined, {
       onSuccess: () => toast.success("Cleared"),
       onError: (err) => toast.error(err instanceof Error ? err.message : "Could not clear these"),

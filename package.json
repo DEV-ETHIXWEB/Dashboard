@@ -12,6 +12,7 @@
     "admin:recovery": "node --env-file-if-exists=.env scripts/admin-recovery.js",
     "migrate": "node --env-file-if-exists=.env scripts/migrate-local-data.js",
     "build": "node scripts/build-frontend.js",
+    "mail:optimize": "node scripts/optimize-mail-images.js",
     "test": "npm run test:app && npm run test:mail && npm run test:security",
     "test:app": "node --env-file-if-exists=.env.test -r ./scripts/dev-with-pgmem.js scripts/test-app.js",
     "test:mail": "node -r ./scripts/dev-with-pgmem.js scripts/test-mail.js",

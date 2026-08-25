@@ -43,6 +43,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SummaryCard } from "@/components/SummaryCard";
 import { initials } from "@/lib/format";
 import { describeAccess } from "@/lib/permissions";
+import { impactFeedback } from "@/lib/haptics";
 import type { UserRecord } from "@/lib/entities";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -170,6 +171,12 @@ export default function Team() {
           : `Send ${u.name}'s sensitive changes for approval again?`;
     if (!window.confirm(what)) return;
 
+    // Confirmed, and this one does not come back. The heavy tap marks the
+
+    // moment the decision was actually taken.
+
+    impactFeedback();
+
     setStanding.mutate(
       { id: u.id, ...patch },
       {
@@ -181,6 +188,12 @@ export default function Team() {
 
   function remove(u: UserRecord) {
     if (!window.confirm(`Remove ${u.name}? Their assigned tasks/tickets will show as unassigned.`)) return;
+
+    // Confirmed, and this one does not come back. The heavy tap marks the
+
+    // moment the decision was actually taken.
+
+    impactFeedback();
     deleteUser.mutate(u.id, {
       onSuccess: () => toast.success("User removed"),
       onError: (err) =>

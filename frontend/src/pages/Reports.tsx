@@ -20,6 +20,7 @@ import {
 import { formatBytes } from "@/lib/format";
 import { plainDate } from "@/lib/money";
 import { apiUrl } from "@/lib/api";
+import { impactFeedback } from "@/lib/haptics";
 
 export default function Reports() {
   const { user } = useAuth();
@@ -73,6 +74,12 @@ export default function Reports() {
 
   function remove(id: string, reportName: string) {
     if (!window.confirm(`Delete "${reportName}"? This cannot be undone.`)) return;
+
+    // Confirmed, and this one does not come back. The heavy tap marks the
+
+    // moment the decision was actually taken.
+
+    impactFeedback();
     deleteReport.mutate(id, {
       onSuccess: () => toast.success("Report deleted"),
       onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to delete report"),

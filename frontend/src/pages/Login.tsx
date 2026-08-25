@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/hooks/useTheme";
+import { errorFeedback } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { LoginResponse } from "@/lib/types";
@@ -79,6 +80,10 @@ export default function Login() {
     const reason = searchParams.get("linkError");
     if (!reason) return;
     setError(LINK_ERRORS[reason] ?? LINK_ERRORS.invalid);
+    // A dead sign-in link lands here from the user's mail app, so the refusal
+    // arrives with the page rather than after a tap. The buzz is what says
+    // something went wrong before the text is read.
+    errorFeedback();
     searchParams.delete("linkError");
     setSearchParams(searchParams, { replace: true });
   }, [searchParams, setSearchParams]);
@@ -130,6 +135,7 @@ export default function Login() {
         setError("Google sign-in requires Firebase or Google OAuth configuration in .env.");
       }
       setError(err instanceof Error ? err.message : "Google sign-in failed");
+      errorFeedback();
     } finally {
       setBusy(false);
     }
@@ -156,6 +162,7 @@ export default function Login() {
       await handleLoginResponse(d);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Google sign-in failed");
+      errorFeedback();
     }
   }
 
@@ -166,6 +173,7 @@ export default function Login() {
     const creds = override ?? { email, password };
     if (!creds.email || !creds.password) {
       setError("Please enter email and password.");
+      errorFeedback();
       return;
     }
     setBusy(true);
@@ -175,6 +183,10 @@ export default function Login() {
     } catch (err) {
       setExpiredAccess(err instanceof ApiError && err.status === 403);
       setError(err instanceof ApiError ? err.message : "Cannot connect to the server. Is it running?");
+      // The wrong address or the wrong password: the one refusal on this page
+      // people hit most, and the one they are most likely to be reading at
+      // arm's length.
+      errorFeedback();
     } finally {
       setBusy(false);
     }
@@ -195,10 +207,12 @@ export default function Login() {
     if (useBackupCode) {
       if (submitted.replace(/[^A-Za-z0-9]/g, "").length !== 10) {
         setOtpError("A backup code looks like XXXXX-XXXXX");
+        errorFeedback();
         return;
       }
     } else if (submitted.length !== 6) {
       setOtpError("Enter the full 6-digit code");
+      errorFeedback();
       return;
     }
 
@@ -219,6 +233,10 @@ export default function Login() {
       navigate("/portal");
     } catch (err) {
       setOtpError(err instanceof ApiError ? err.message : "Verification failed");
+      // The boxes clear themselves and the caret jumps back to the first one,
+      // so without this the thumb gets no signal that anything was rejected --
+      // only that the code it just typed is gone.
+      errorFeedback();
       setCode(["", "", "", "", "", ""]);
       setBackupCode("");
       if (!useBackupCode) codeRefs.current[0]?.focus();

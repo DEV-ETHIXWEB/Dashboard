@@ -66,6 +66,39 @@ export const IconDashboard: EthixIcon = (p) => (
   </Icon>
 );
 
+/**
+ * The same emblem, struck solid: the mark as it appears in the logo rather
+ * than as a member of this outlined set.
+ *
+ * `IconDashboard` is the correct trace, and on a 28px sidebar row it reads.
+ * In a 22px tab slot it does not -- four hairline outlines at that size stop
+ * being a spine and three bars and become a rectangle with lines in it, which
+ * is a document, not our E. So this one drops the stroke entirely and fills:
+ * at tab size a silhouette survives where an outline dissolves.
+ *
+ * The proportions come off the artwork rather than the old icon. In
+ * `public/emblem-mark.png` the three bars measure ~100 units tall against
+ * ~33 of gap -- three to one -- where the outlined version ran closer to two
+ * to one and read as too airy once filled.
+ *
+ * The 0.7 gutter between the spine and the bars is the seam that shows on the
+ * real mark where the bars cross the spine. It is the one detail that stops
+ * this reading as a plain block E, so it stays even though it is sub-pixel at
+ * 22px -- it survives as a soft notch rather than a hard line, which is
+ * exactly how it looks on the logo.
+ */
+export const IconEmblem: EthixIcon = ({ strokeWidth: _strokeWidth, ...p }) => (
+  // strokeWidth is pulled off and dropped rather than passed through: callers
+  // set it to mark an active tab, and on a filled glyph a stroke on top is
+  // just a heavier, blurrier E.
+  <Icon strokeWidth={0} {...p}>
+    <rect x="3.4" y="3.8" width="3.6" height="16.4" rx="1.2" fill="currentColor" stroke="none" />
+    <rect x="7.7" y="3.8" width="12.9" height="4.5" rx="1.5" fill="currentColor" stroke="none" />
+    <rect x="7.7" y="9.75" width="12.9" height="4.5" rx="1.5" fill="currentColor" stroke="none" />
+    <rect x="7.7" y="15.7" width="12.9" height="4.5" rx="1.5" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
 /** A slot with a raised tab -- a tray of work, not a paper folder. */
 export const IconProjects: EthixIcon = (p) => (
   <Icon {...p}>

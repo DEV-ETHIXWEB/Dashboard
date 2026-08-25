@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 import { motion, useReducedMotion } from "framer-motion";
-import { LogOut } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { LiveIndicator } from "@/components/LiveIndicator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { initials } from "@/lib/format";
 import { successFeedback, tapFeedback } from "@/lib/haptics";
-import { clearOfflineCaches } from "@/lib/pwa";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/lib/nav";
 
@@ -38,8 +36,7 @@ export function MoreSheet({
   items: NavItem[];
   unread: number;
 }) {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
+  const { user } = useAuth();
   const reduceMotion = useReducedMotion();
 
   const [mounted, setMounted] = useState(open);
@@ -168,24 +165,16 @@ export function MoreSheet({
             </ul>
           </nav>
 
-          <div className="border-t border-border px-5 py-3">
+          {/* Sign out used to close the sheet. It lives in the top bar now, one
+              tap from anywhere instead of two from here, so the theme switch is
+              the last row.
+              Even padding, not the lopsided 12/20 it inherited when the button
+              below it went away: this is the only thing in its own band, so any
+              difference between the space above and below it reads as a
+              mistake. The device's own bottom inset is added by the sheet, so
+              16 here is 16 of actual air on every phone. */}
+          <div className="border-t border-border px-5 py-4">
             <ThemeSwitch />
-          </div>
-
-          <div className="px-3 pb-3">
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                clearOfflineCaches();
-                logout();
-                navigate("/login");
-              }}
-              className="focus-clear flex h-12 w-full touch-manipulation items-center justify-center gap-2 rounded-2xl bg-secondary text-sm font-medium text-foreground active:scale-[0.99]"
-            >
-              <LogOut aria-hidden className="size-4" />
-              Sign out
-            </button>
           </div>
         </motion.div>
       </div>

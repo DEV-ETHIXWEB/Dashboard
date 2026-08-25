@@ -1,7 +1,7 @@
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, toast, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
-import { successFeedback, errorFeedback } from "@/lib/haptics"
+import { successFeedback, errorFeedback, warningFeedback } from "@/lib/haptics"
 
 /**
  * The toast is the app's universal "here is what just happened" channel, so it
@@ -32,7 +32,7 @@ if (!t.__haptics) {
   }
   wrap("success", successFeedback)
   wrap("error", errorFeedback)
-  wrap("warning", errorFeedback)
+  wrap("warning", warningFeedback)
 }
 
 const Toaster = ({ ...props }: ToasterProps) => {
