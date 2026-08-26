@@ -36,7 +36,7 @@ export function BottomTabs({
   return (
     <nav
       aria-label="Main"
-      className="app-chrome fixed inset-x-0 bottom-0 z-40 border-t border-border/70 pb-[env(safe-area-inset-bottom)] md:hidden"
+      className="app-chrome-solid fixed inset-x-0 bottom-0 z-40 border-t border-border/70 pb-[env(safe-area-inset-bottom)] md:hidden"
     >
       <ul className="mx-auto flex max-w-lg items-stretch">
         {items.map((item) => {

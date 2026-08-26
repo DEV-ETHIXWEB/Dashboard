@@ -649,6 +649,25 @@
     }
   }
 
+  /**
+   * The same chrome, for the one bar that has to read as ground rather than
+   * glass. A thumb rests on the tab bar for the whole session and content
+   * scrolls under it continuously; at 80% the labels sat on whatever happened
+   * to be passing beneath them. Nearly opaque, blur kept so the edge still
+   * separates from the page.
+   */
+  .app-chrome-solid {
+    background-color: var(--background);
+  }
+
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .app-chrome-solid {
+      background-color: color-mix(in oklch, var(--background) 97%, transparent);
+      backdrop-filter: blur(24px) saturate(1.4);
+      -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    }
+  }
+
   /* Anything the thumb drives: no text selection, no long-press callout, no
      double-tap zoom delay. */
   .touch-control {

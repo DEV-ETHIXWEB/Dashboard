@@ -282,11 +282,19 @@ export const IconNotifications: EthixIcon = (p) => (
   </Icon>
 );
 
-/** A roof over bars -- the client's own place. */
+/**
+ * The mark itself, rather than a house.
+ *
+ * Home is where the brand belongs, and every other glyph in this set is built
+ * from the emblem's bars anyway -- so the tab that means "start here" is the E
+ * of the wordmark: three bars, the middle one short, with the accent node
+ * closing the row it leaves open.
+ */
 export const IconHome: EthixIcon = (p) => (
   <Icon {...p}>
-    <path d="M3.6 10.6 12 3.6l8.4 7" />
-    <path d="M5.8 10.2v8a2 2 0 0 0 2 2h8.4a2 2 0 0 0 2-2v-8" />
-    <Node cx={12} cy={15} r={1.5} />
+    <path d="M4.4 6.6h15.2" />
+    <path d="M4.4 12h9.6" />
+    <path d="M4.4 17.4h15.2" />
+    <Node cx={18.3} cy={12} r={1.5} />
   </Icon>
 );

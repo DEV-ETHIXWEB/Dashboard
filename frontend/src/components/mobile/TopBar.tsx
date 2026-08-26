@@ -66,6 +66,7 @@ export function TopBar({
         raised ? "app-chrome border-b border-border/70" : "border-b border-transparent bg-background",
       )}
     >
+<<<<<<< HEAD
       {/* The wordmark itself, the same asset the sidebar uses on a desk, so the
           phone and the desk open with the identical mark instead of the phone
           getting a cropped stand-in. `ethixweb.png` is white on transparency:
@@ -73,10 +74,18 @@ export function TopBar({
 
           The page name sits beside it in muted weight -- the brand is the
           constant, the title is the part that changes. */}
+=======
+      {/* The full wordmark, not the emblem in a plate: a phone header is the one
+          place the brand gets to be read rather than inferred from a glyph.
+          The artwork is white on transparency, so the light theme drives it to
+          black instead of standing it on a dark tile -- the mark reads as
+          itself either way, with nothing boxed around it. */}
+>>>>>>> origin/updates-yash
       <div className="flex min-w-0 items-center gap-2.5">
         <img
           src="/ethixweb.png"
           alt="EthixWeb"
+<<<<<<< HEAD
           width={422}
           height={63}
           // Decoded off the main thread and never lazily: it is the first thing
@@ -85,6 +94,11 @@ export function TopBar({
           className="h-[18px] w-auto shrink-0 object-contain invert dark:invert-0"
         />
         <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
+=======
+          className="h-[15px] w-auto shrink-0 brightness-0 dark:brightness-100"
+        />
+        <span aria-hidden className="h-3.5 w-px shrink-0 bg-border" />
+>>>>>>> origin/updates-yash
         <h2 className="min-w-0 truncate text-[15px] leading-tight font-medium tracking-tight text-muted-foreground">
           {title}
         </h2>
