@@ -21,11 +21,6 @@ export function useProgressBoard(clientId?: string | null) {
     queryFn: () =>
       api<ProgressBoard>("GET", clientId ? `/client/progress?clientId=${encodeURIComponent(clientId)}` : "/client/progress"),
     enabled: allowed,
-    // App-side changes arrive on the `progress` topic. The interval remains
-    // because the board also mirrors ClickUp, and nothing tells this app when
-    // somebody drags a card over there.
-    staleTime: 30_000,
-    refetchInterval: 60_000,
   });
 }
 
@@ -35,7 +30,6 @@ export function useTicketActivity(ticketId: string | null) {
     queryKey: ["client-progress", "activity", ticketId],
     queryFn: () => api<TicketActivity>("GET", `/client/tickets/${ticketId}/activity`),
     enabled: allowed && Boolean(ticketId),
-    staleTime: 15_000,
   });
 }
 

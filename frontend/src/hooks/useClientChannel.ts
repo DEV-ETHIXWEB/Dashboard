@@ -38,10 +38,6 @@ export function useClientChannel(clientId?: string | null) {
     queryFn: () =>
       api<ChannelBoard>("GET", clientId ? `/client/channel?clientId=${encodeURIComponent(clientId)}` : "/client/channel"),
     enabled: allowed,
-    // utils/slackWatch.js watches the channel server-side and pushes a
-    // `messages` event, so this no longer polls. The long interval is a safety
-    // net for a tab whose stream died without noticing.
-    refetchInterval: 120_000,
     refetchOnWindowFocus: true,
   });
 }

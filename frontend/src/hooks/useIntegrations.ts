@@ -13,14 +13,40 @@ function useIsAdmin() {
   return user?.role === "admin";
 }
 
+const STATUS_KEY = ["integrations", "status"];
+const fetchStatus = () => api<IntegrationStatus>("GET", "/integrations/status");
+
 export function useIntegrationStatus() {
   const isAdmin = useIsAdmin();
   return useQuery({
-    queryKey: ["integrations", "status"],
-    queryFn: () => api<IntegrationStatus>("GET", "/integrations/status"),
+    queryKey: STATUS_KEY,
+    queryFn: fetchStatus,
     enabled: isAdmin,
-    staleTime: 5 * 60_000,
   });
+}
+
+/**
+ * Fetch the connection status before anybody asks for it.
+ *
+ * Every ClickUp and Slack read waits on this answer, because firing a request
+ * at an integration nobody has configured only produces an error state for a
+ * page that should say "not connected" instead. That gate is right, but it also
+ * means opening either screen is two round trips end to end: one to learn
+ * ClickUp is connected, and only then one to ask it anything.
+ *
+ * The status itself is read from the server's own environment -- no upstream
+ * call, a handful of booleans -- so it is worth having in hand early. Pointing
+ * at the nav row is enough: by the time the page mounts the gate is already
+ * open and the real request goes out on the first render rather than the
+ * second. On a reload it is already there, having been kept in session storage.
+ */
+export function usePrefetchIntegrationStatus() {
+  const isAdmin = useIsAdmin();
+  const qc = useQueryClient();
+  return () => {
+    if (!isAdmin) return;
+    void qc.prefetchQuery({ queryKey: STATUS_KEY, queryFn: fetchStatus });
+  };
 }
 
 // --- ClickUp ---------------------------------------------------------------
@@ -33,7 +59,6 @@ export function useClickUpOverview(spaceId?: string) {
     queryFn: () =>
       api<ClickUpOverview>("GET", spaceId ? `/integrations/clickup/overview?spaceId=${spaceId}` : "/integrations/clickup/overview"),
     enabled: isAdmin && status?.clickup.connected === true,
-    staleTime: 60_000,
     retry: false,
   });
 }
@@ -45,7 +70,6 @@ export function useClickUpTree() {
     queryKey: ["integrations", "clickup", "tree"],
     queryFn: () => api<ClickUpTree>("GET", "/integrations/clickup/tree"),
     enabled: isAdmin && status?.clickup.connected === true,
-    staleTime: 10 * 60_000,
     retry: false,
   });
 }
@@ -56,7 +80,6 @@ export function useClickUpListTasks(listId: string | null) {
     queryKey: ["integrations", "clickup", "list", listId],
     queryFn: () => api<{ tasks: ClickUpTask[] }>("GET", `/integrations/clickup/lists/${listId}/tasks`).then((d) => d.tasks),
     enabled: isAdmin && Boolean(listId),
-    staleTime: 60_000,
     retry: false,
   });
 }
@@ -68,7 +91,6 @@ export function useClickUpMembers() {
     queryKey: ["integrations", "clickup", "members"],
     queryFn: () => api<{ members: ClickUpMember[] }>("GET", "/integrations/clickup/members").then((d) => d.members),
     enabled: isAdmin && status?.clickup.connected === true,
-    staleTime: 10 * 60_000,
     retry: false,
   });
 }
@@ -88,7 +110,6 @@ export function useClickUpListStatuses(listId: string | null, enabled = true) {
     queryFn: () =>
       api<{ statuses: ClickUpStatus[] }>("GET", `/integrations/clickup/lists/${listId}/statuses`).then((d) => d.statuses),
     enabled: isAdmin && enabled && Boolean(listId),
-    staleTime: 60 * 60_000,
     gcTime: 60 * 60_000,
     retry: false,
   });
@@ -101,7 +122,6 @@ export function useClickUpComments(taskId: string | null) {
     queryFn: () =>
       api<{ comments: ClickUpComment[] }>("GET", `/integrations/clickup/tasks/${taskId}/comments`).then((d) => d.comments),
     enabled: isAdmin && Boolean(taskId),
-    staleTime: 60_000,
     retry: false,
   });
 }
@@ -154,7 +174,6 @@ export function useSlackChannels() {
     queryKey: ["integrations", "slack", "channels"],
     queryFn: () => api<{ channels: SlackChannel[] }>("GET", "/integrations/slack/channels").then((d) => d.channels),
     enabled: isAdmin && status?.slack.connected === true,
-    staleTime: 10 * 60_000,
     retry: false,
   });
 }
@@ -168,7 +187,6 @@ export function useSlackFeed(channelIds: string[], perChannel = 30) {
     queryFn: () =>
       api<SlackFeed>("GET", `/integrations/slack/feed?channels=${encodeURIComponent(key)}&perChannel=${perChannel}`),
     enabled: isAdmin && status?.slack.connected === true,
-    staleTime: 2 * 60_000,
     retry: false,
   });
 }
@@ -181,7 +199,6 @@ export function useSlackChannelMessages(channelId: string | null, limit = 50) {
       api<{ messages: SlackMessage[] }>("GET", `/integrations/slack/channels/${channelId}/messages?limit=${limit}`)
         .then((d) => d.messages),
     enabled: isAdmin && Boolean(channelId),
-    staleTime: 2 * 60_000,
     retry: false,
   });
 }
@@ -194,7 +211,6 @@ export function useSlackThread(channelId: string | null, messageTs: string | nul
       api<{ replies: SlackMessage[] }>("GET", `/integrations/slack/channels/${channelId}/messages/${messageTs}/replies`)
         .then((d) => d.replies),
     enabled: isAdmin && Boolean(channelId) && Boolean(messageTs),
-    staleTime: 60_000,
     retry: false,
   });
 }

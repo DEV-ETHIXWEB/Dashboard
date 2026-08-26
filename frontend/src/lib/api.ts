@@ -39,11 +39,104 @@ export function isHeldForApproval(err: unknown): err is HeldForApproval {
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
+/**
+ * Reads that are already on the wire.
+ *
+ * React Query dedupes by query key, which covers the screens; it does not cover
+ * the calls made outside it. `/auth/me` in particular is read on mount, again
+ * when a sign-in completes, and again whenever the live stream reports the
+ * session changed -- three requests that can overlap inside a second and can
+ * only agree with each other. Anything arriving while an identical GET is still
+ * in flight waits for that one instead of opening its own.
+ *
+ * Only GETs, and only until the response lands. Nothing is held afterwards:
+ * deciding how long an answer stays good is `queryCache.ts`'s job, and a second
+ * opinion about it here is how caches start disagreeing with themselves.
+ */
+const inFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * What the app asked the server for, in order, with how long each took.
+ *
+ * Development only -- `import.meta.env.DEV` is a compile-time constant, so the
+ * whole thing including this array is dropped from a production build. Read it
+ * from the console as `__apiLog`, or `__apiLog.slowest()` when a screen feels
+ * heavy and you want to know which read to blame.
+ */
+interface ApiLogEntry {
+  method: string;
+  path: string;
+  status: number;
+  ms: number;
+  /** True when this call rode along on a request that was already open. */
+  shared: boolean;
+  at: number;
+}
+
+const apiLog: ApiLogEntry[] = [];
+const API_LOG_LIMIT = 500;
+
+function record(entry: ApiLogEntry) {
+  if (!import.meta.env.DEV) return;
+  apiLog.push(entry);
+  if (apiLog.length > API_LOG_LIMIT) apiLog.shift();
+}
+
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__apiLog = {
+    get entries() {
+      return [...apiLog];
+    },
+    /** Which endpoints were asked for most, and what they cost in total. */
+    summary() {
+      const byPath = new Map<string, { calls: number; shared: number; totalMs: number }>();
+      for (const e of apiLog) {
+        const id = `${e.method} ${e.path.split("?")[0]}`;
+        const row = byPath.get(id) ?? { calls: 0, shared: 0, totalMs: 0 };
+        row.calls += 1;
+        // A shared call cost nothing; averaging its zero in would make a slow
+        // endpoint look fast for having been asked for twice at once.
+        if (e.shared) row.shared += 1;
+        else row.totalMs += e.ms;
+        byPath.set(id, row);
+      }
+      return [...byPath.entries()]
+        .map(([id, row]) => ({
+          ...row,
+          id,
+          avgMs: row.calls > row.shared ? Math.round(row.totalMs / (row.calls - row.shared)) : 0,
+        }))
+        .sort((a, b) => b.totalMs - a.totalMs);
+    },
+    slowest(n = 10) {
+      return [...apiLog].sort((a, b) => b.ms - a.ms).slice(0, n);
+    },
+    clear() {
+      apiLog.length = 0;
+    },
+  };
+}
+
 export function apiUrl(path: string): string {
   return `${BASE_URL}/api${path}`;
 }
 
 export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+  if (method !== "GET") return request<T>(method, path, body);
+
+  const open = inFlight.get(path);
+  if (open) {
+    record({ method, path, status: 0, ms: 0, shared: true, at: Date.now() });
+    return open as Promise<T>;
+  }
+
+  const pending = request<T>(method, path, body).finally(() => inFlight.delete(path));
+  inFlight.set(path, pending);
+  return pending;
+}
+
+async function request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+  const started = performance.now();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (csrfToken && method !== "GET") headers["X-CSRF-Token"] = csrfToken;
 
@@ -56,8 +149,11 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
+    record({ method, path, status: 0, ms: performance.now() - started, shared: false, at: Date.now() });
     throw new ApiError("Cannot reach the server. Check your connection and try again.", 0);
   }
+
+  record({ method, path, status: res.status, ms: performance.now() - started, shared: false, at: Date.now() });
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));

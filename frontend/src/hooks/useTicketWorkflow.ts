@@ -24,7 +24,6 @@ export function useTicketStages() {
   return useQuery({
     queryKey: ["ticket-stages"],
     queryFn: () => api<{ stages: TicketStage[] }>("GET", "/tickets/stages").then((d) => d.stages),
-    staleTime: Infinity,
   });
 }
 
@@ -43,8 +42,6 @@ export function useMyTicketRequests() {
     queryKey: ["ticket-requests", "mine"],
     queryFn: () => api<{ requests: TicketUpdate[] }>("GET", "/tickets/requests/mine").then((d) => d.requests),
     enabled: Boolean(user),
-    // Covered by the `tickets` topic; kept long as a fallback.
-    refetchInterval: 120_000,
   });
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiUrl } from "@/lib/api";
 import { isLiveTopic, keysForTopic, type LiveStatus, type LiveTopic } from "@/lib/live";
+import { staleTimeFor } from "@/lib/queryCache";
 
 /** Bursts of writes on the admin side collapse into one refetch. */
 const COALESCE_MS = 250;
@@ -57,9 +58,22 @@ export function useLiveUpdates(enabled: boolean, onSessionChange?: () => void) {
     [flush],
   );
 
-  /** Everything on screen is suspect after a gap in the connection. */
+  /**
+   * Everything on screen is suspect after a gap in the connection -- except the
+   * things that cannot have moved.
+   *
+   * This runs on every reconnect, every return to the tab, and every poll tick
+   * when the stream is down, so what it sweeps up matters. The public config
+   * and the ticket stage vocabulary are marked never-stale in `queryCache.ts`
+   * because they change on a deploy, not during a session; refetching them each
+   * time somebody alt-tabs back is a request that can only ever return the same
+   * answer. Everything a person can actually edit is still invalidated.
+   */
   const refetchEverything = useCallback(() => {
-    queryClient.invalidateQueries({ type: "active" });
+    queryClient.invalidateQueries({
+      type: "active",
+      predicate: (query) => staleTimeFor(query.queryKey) !== Infinity,
+    });
   }, [queryClient]);
 
   useEffect(() => {

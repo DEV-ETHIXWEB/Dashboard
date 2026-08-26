@@ -9,12 +9,36 @@
 //
 // The bot only sees history for channels it has been invited to.
 
-const { cached } = require('./integrationCache');
+const { cached, mapWithLimit } = require('./integrationCache');
 
 const BASE = 'https://slack.com/api';
 const TTL_CHANNELS = 10 * 60 * 1000;
 const TTL_USERS = 30 * 60 * 1000;
 const TTL_MESSAGES = 2 * 60 * 1000; // Slack throttles conversations.history hard
+
+/**
+ * How long an expired answer may still be served while its replacement is
+ * fetched behind it. See `integrationCache.cached`.
+ *
+ * Generous for the directory, which is a list of channel and people names and
+ * is wrong only when somebody has just been added; deliberately short for
+ * messages, where being a minute behind is the difference between a live feed
+ * and a stale one.
+ */
+const STALE_DIRECTORY = 30 * 60 * 1000;
+const STALE_MESSAGES = 60 * 1000;
+
+/** A throttled call is retried once if Slack asks for no longer than this. */
+const MAX_RETRY_WAIT_SECONDS = 3;
+
+/**
+ * How many channels of the feed are read at once.
+ *
+ * `conversations.history` is a per-workspace limit, so the whole burst counts
+ * against one budget; this is low enough to stay inside it and high enough that
+ * a twelve-channel feed is three waves rather than twelve round trips.
+ */
+const FEED_CONCURRENCY = 4;
 
 function isEnabled() {
   return Boolean(process.env.SLACK_BOT_TOKEN);
@@ -39,7 +63,7 @@ const FRIENDLY_ERRORS = {
   ratelimited: 'Slack rate limit reached. Try again in a minute.',
 };
 
-async function request(method, params, bodyData) {
+async function request(method, params, bodyData, options = {}) {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) throw new SlackError('Slack is not connected. Set SLACK_BOT_TOKEN.', 503);
 
@@ -66,6 +90,22 @@ async function request(method, params, bodyData) {
     res = await fetch(url, fetchOpts);
   } catch {
     throw new SlackError('Could not reach Slack. Check the server connection.', 502);
+  }
+
+  // Slack answers 429 with the exact number of seconds to wait, and the wait is
+  // usually one or two. Reading the feed asks for several channels at once, so
+  // one throttled channel used to drop out of the results entirely and the page
+  // showed a gap. Waiting the second out is both faster than making the admin
+  // press Refresh and the only way to come back with the channel's messages.
+  if (res.status === 429 && !options.isRetry) {
+    const waitSeconds = Number(res.headers.get('retry-after')) || 1;
+    if (waitSeconds <= MAX_RETRY_WAIT_SECONDS) {
+      // Not unref'd: something is awaiting this timer, and a timer that does
+      // not hold the event loop open can be skipped entirely when nothing else
+      // is pending -- leaving the retry's promise to never settle.
+      await new Promise((resolve) => { setTimeout(resolve, waitSeconds * 1000); });
+      return request(method, params, bodyData, { isRetry: true });
+    }
   }
 
   if (res.status === 429) {
@@ -103,7 +143,7 @@ async function fetchUserMap() {
       cursor = data.response_metadata?.next_cursor || undefined;
     } while (cursor);
     return map;
-  }, TTL_USERS);
+  }, TTL_USERS, STALE_DIRECTORY);
 }
 
 /** Channels the bot can read, member channels first. */
@@ -136,7 +176,7 @@ async function fetchChannels() {
         if (a.isMember !== b.isMember) return a.isMember ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
-  }, TTL_CHANNELS);
+  }, TTL_CHANNELS, STALE_DIRECTORY);
 }
 
 const EMOJI_MAP = {
@@ -415,7 +455,7 @@ async function fetchChannelMessages(channelId, { limit = 50 } = {}) {
     return (data.messages || [])
       .filter((m) => m.subtype !== 'channel_join' && m.subtype !== 'channel_leave')
       .map((m) => normaliseMessage(m, channel, userMap, channelMap));
-  }, TTL_MESSAGES);
+  }, TTL_MESSAGES, STALE_MESSAGES);
 }
 
 /** Fetch thread replies for a specific parent message. */
@@ -429,7 +469,7 @@ async function fetchMessageReplies(channelId, threadTs) {
     const data = await request('conversations.replies', { channel: channelId, ts: threadTs });
 
     return (data.messages || []).map((m) => normaliseMessage(m, channel, userMap, channelMap));
-  }, TTL_MESSAGES);
+  }, TTL_MESSAGES, STALE_MESSAGES);
 }
 
 /**
@@ -443,19 +483,33 @@ async function fetchCategorisedFeed({ channelIds, perChannel = 30 } = {}) {
     : channels.filter((c) => c.isMember)
   ).slice(0, 12); // keep the request bounded -- Slack throttles history aggressively
 
-  const skipped = [];
-  const messages = [];
+  // The directory both branches below need, fetched once before the fan-out.
+  // Without this the first wave of channel reads all miss the cache together
+  // and each starts its own copy of the users and channels lookups.
+  await Promise.all([fetchChannels(), fetchUserMap()]);
 
-  for (const channel of targets) {
+  // Read the channels at once rather than one after another. Twelve channels
+  // fetched in series is twelve round trips to Slack stacked end to end, and
+  // the admin waits for the sum of them -- several seconds on a normal
+  // workspace, for requests that have nothing to do with each other.
+  const perChannelResults = await mapWithLimit(targets, FEED_CONCURRENCY, async (channel) => {
     try {
-      messages.push(...await fetchChannelMessages(channel.id, { limit: perChannel }));
+      return { messages: await fetchChannelMessages(channel.id, { limit: perChannel }) };
     } catch (err) {
+      // A channel the bot cannot read is reported back as skipped; it must not
+      // take the other eleven down with it.
       if (err instanceof SlackError) {
-        skipped.push({ channelId: channel.id, channelName: channel.name, reason: err.message });
-        continue;
+        return { skipped: { channelId: channel.id, channelName: channel.name, reason: err.message } };
       }
       throw err;
     }
+  });
+
+  const skipped = [];
+  const messages = [];
+  for (const result of perChannelResults) {
+    if (result.skipped) skipped.push(result.skipped);
+    else messages.push(...result.messages);
   }
 
   messages.sort((a, b) => (b.at || 0) - (a.at || 0));

@@ -1,4 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
+import { prefetchRoute } from "@/lib/routeChunks";
 import { motion, useReducedMotion } from "framer-motion";
 import { MoreHorizontal } from "lucide-react";
 import { tapFeedback } from "@/lib/haptics";
@@ -48,6 +49,9 @@ export function BottomTabs({
             <li key={item.to} className="flex-1">
               <NavLink
                 to={item.to}
+                // A finger touching down is the phone's version of a hover; the
+                // chunk starts loading before the tap completes.
+                onPointerDown={() => prefetchRoute(item.to)}
                 end={item.to === "/portal"}
                 onClick={tapFeedback}
                 aria-current={active ? "page" : undefined}

@@ -23,9 +23,6 @@ export function useOtpLogs() {
   return useQuery({
     queryKey: ["otp-logs"],
     queryFn: () => api<{ logs: OtpLogEntry[] }>("GET", "/auth/otp-logs").then((d) => d.logs),
-    // A code now arrives on the `otp` topic the moment it is issued; five
-    // second polling was how this used to feel immediate.
-    refetchInterval: 60_000,
   });
 }
 
@@ -339,8 +336,6 @@ export function useNotifications() {
     // Every role now receives notifications -- staff get handover and
     // collaboration requests, not just clients.
     enabled: Boolean(user),
-    // Pushed on the `notifications` topic; this is only a safety net.
-    refetchInterval: 120_000,
   });
 }
 

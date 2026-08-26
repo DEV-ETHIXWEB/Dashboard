@@ -3,11 +3,23 @@
 // ClickUp API v2 client. Auth is a single workspace-level personal API token
 // (CLICKUP_API_TOKEN) shared by the whole dashboard -- there is no per-user OAuth.
 
-const { cached, invalidate: cacheInvalidate } = require('./integrationCache');
+const { cached, invalidate: cacheInvalidate, mapWithLimit } = require('./integrationCache');
 
 const BASE = 'https://api.clickup.com/api/v2';
 const TTL_TASKS = 60 * 1000;
 const TTL_TREE = 10 * 60 * 1000; // spaces/folders/lists change rarely
+
+/**
+ * How long an expired answer may still be served while its replacement is
+ * fetched behind it. See `integrationCache.cached`.
+ *
+ * The workspace structure barely moves, so it gets a long window. Tasks get a
+ * short one: it is enough to spare whoever opens the page at the wrong moment
+ * from paying for everybody's refresh, without letting the board drift far
+ * enough that somebody acts on a task that has already been closed.
+ */
+const STALE_TREE = 30 * 60 * 1000;
+const STALE_TASKS = 45 * 1000;
 
 function isEnabled() {
   return Boolean(process.env.CLICKUP_API_TOKEN);
@@ -167,7 +179,7 @@ async function getTeam() {
     const team = pinned ? teams.find((t) => String(t.id) === String(pinned)) : teams[0];
     if (!team) throw new ClickUpError(`ClickUp workspace ${pinned} not found for this token.`, 502);
     return team;
-  }, TTL_TREE);
+  }, TTL_TREE, STALE_TREE);
 }
 
 // --- normalisers -----------------------------------------------------------
@@ -241,10 +253,11 @@ async function fetchOpenTasks({ spaceId } = {}) {
   const key = `clickup:open-tasks:${spaceId || 'all'}`;
   return cached(key, async () => {
     const team = await getTeam();
-    const tasks = [];
     const MAX_PAGES = 20; // 2000 tasks -- a hard stop so a huge workspace can't hang the request
+    const PAGE_SIZE = 100; // ClickUp's cap on the filtered team view
+    const PAGE_BATCH = 4; // pages read at once once we know there are more
 
-    for (let page = 0; page < MAX_PAGES; page += 1) {
+    const readPage = async (page) => {
       const data = await request(`/team/${seg(team.id)}/task`, {
         page,
         subtasks: true,
@@ -252,15 +265,47 @@ async function fetchOpenTasks({ spaceId } = {}) {
         order_by: 'due_date',
         space_ids: spaceId ? [spaceId] : undefined,
       });
-      const batch = data.tasks || [];
-      tasks.push(...batch);
-      if (batch.length < 100) break;
+      return data.tasks || [];
+    };
+
+    // The first page on its own, because most workspaces only have one and
+    // speculatively asking for four would be three wasted requests against a
+    // token that is rate limited to ninety a minute. Only once ClickUp says
+    // there is more does it become worth reading ahead.
+    const tasks = [];
+    let page = 0;
+    let first = await readPage(page);
+    tasks.push(...first);
+
+    while (first.length === PAGE_SIZE && page + 1 < MAX_PAGES) {
+      const pages = [];
+      for (let p = page + 1; p < Math.min(page + 1 + PAGE_BATCH, MAX_PAGES); p += 1) pages.push(p);
+
+      // In one wave rather than one after another: a workspace deep enough to
+      // need twenty pages was twenty round trips of waiting, and the pages do
+      // not depend on each other.
+      const batches = await mapWithLimit(pages, PAGE_BATCH, readPage);
+
+      let ended = false;
+      for (const batch of batches) {
+        tasks.push(...batch);
+        // A short page is the last one. Anything this wave read past it is
+        // empty, and is dropped rather than appended.
+        if (batch.length < PAGE_SIZE) {
+          ended = true;
+          break;
+        }
+      }
+
+      if (ended) break;
+      page += pages.length;
+      first = batches[batches.length - 1];
     }
 
     return tasks
       .map(normaliseTask)
       .filter((t) => t.statusType !== 'closed' && t.statusType !== 'done');
-  }, TTL_TASKS);
+  }, TTL_TASKS, STALE_TASKS);
 }
 
 /** Open tasks plus the derived urgency buckets and per-assignee workload. */
@@ -343,7 +388,7 @@ async function fetchTree() {
     }));
 
     return { workspace: { id: String(team.id), name: team.name }, spaces: result };
-  }, TTL_TREE);
+  }, TTL_TREE, STALE_TREE);
 }
 
 /** Open tasks in one list, for drill-down from the browser panel. */
@@ -357,7 +402,7 @@ async function fetchListTasks(listId) {
     return (data.tasks || [])
       .map(normaliseTask)
       .filter((t) => t.statusType !== 'closed' && t.statusType !== 'done');
-  }, TTL_TASKS);
+  }, TTL_TASKS, STALE_TASKS);
 }
 
 /** One task by id -- how a mirrored ticket reads its live state back. */
@@ -381,7 +426,7 @@ async function fetchMembers() {
         avatar: u.profilePicture || null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, TTL_TREE);
+  }, TTL_TREE, STALE_TREE);
 }
 
 /** The status options a list accepts -- ClickUp rejects any status not in this set. */
@@ -394,7 +439,7 @@ async function fetchListStatuses(listId) {
       color: s.color || null,
       orderindex: s.orderindex ?? 0,
     })).sort((a, b) => a.orderindex - b.orderindex);
-  }, TTL_TREE);
+  }, TTL_TREE, STALE_TREE);
 }
 
 // --- writes ----------------------------------------------------------------

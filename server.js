@@ -86,8 +86,35 @@ app.use((err, req, res, next) => {
   }
   return next(err);
 });
+
+/**
+ * How long the browser may keep each kind of static file.
+ *
+ * Without this every asset carries no Cache-Control, so a returning visitor
+ * revalidates the whole bundle on every load -- a round trip per file to be
+ * told nothing changed. The build already names its output by content hash, so
+ * those files can be kept for a year and never asked about again; a deploy
+ * changes the name, not the contents of a name.
+ *
+ * The two files that must never be cached that way are the ones that point at
+ * the hashed names: index.html and the service worker. Cache either of them and
+ * a deploy is invisible to anyone who has been here before.
+ */
+function staticCacheControl(filePath) {
+  const name = path.basename(filePath);
+  if (name === 'index.html' || name === 'sw.js') return 'no-cache';
+  // Vite writes /assets/<name>-<hash>.<ext>; the hash is the version.
+  if (filePath.includes(`${path.sep}assets${path.sep}`)) return 'public, max-age=31536000, immutable';
+  if (name === 'manifest.webmanifest') return 'public, max-age=3600';
+  // Brand artwork and icons: named by hand, so they can be replaced in place.
+  // A day is long enough to stop the repeat requests and short enough that a
+  // new logo is not stuck on somebody's phone for a week.
+  return 'public, max-age=86400';
+}
+
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
+    res.setHeader('Cache-Control', staticCacheControl(filePath));
     // Helmet defaults every response to Cross-Origin-Resource-Policy:
     // same-origin, which is right for the app bundle but wrong for the brand
     // artwork: it is embedded by email clients and by the Mail page preview,
@@ -97,6 +124,19 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
   },
 }));
+
+// Signed-in answers are held in the tab's memory by React Query, which is
+// where the speed comes from -- see frontend/src/lib/queryCache.ts. None of it
+// belongs in the browser's own on-disk cache, where it would outlive the
+// session and be readable by the next person to pick the laptop up. Saying so
+// explicitly also stops a proxy in the middle from deciding for itself: without
+// a Cache-Control header, a shared cache is free to apply its own heuristic to
+// a 200 that has no expiry, and one client's invoices are not a page it should
+// ever be guessing about.
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
 app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -150,6 +190,9 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.get('/portal.html', (req, res) => res.redirect(301, '/portal'));
 
 app.get(/^\/(?!api\/).*/, (req, res) => {
+  // The document naming this deploy's hashed bundles. Revalidated every time,
+  // so a deploy reaches a returning visitor on their next load.
+  res.setHeader('Cache-Control', 'no-cache');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

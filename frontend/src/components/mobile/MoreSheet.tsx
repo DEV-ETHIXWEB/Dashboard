@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
+import { prefetchRoute } from "@/lib/routeChunks";
 import { motion, useReducedMotion } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
@@ -137,6 +138,7 @@ export function MoreSheet({
                 <li key={item.to}>
                   <NavLink
                     to={item.to}
+                    onPointerDown={() => prefetchRoute(item.to)}
                     onClick={() => {
                       tapFeedback();
                       onClose();

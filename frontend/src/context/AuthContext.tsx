@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, setCsrfToken } from "@/lib/api";
 import { clearOfflineCaches } from "@/lib/pwa";
+import { clearPersistedCache } from "@/lib/queryPersist";
+import { prefetchHome } from "@/lib/routeChunks";
 import { NO_CAPABILITIES, type Capabilities, type PublicConfig, type User } from "@/lib/types";
 
 interface AuthContextValue {
@@ -27,7 +29,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: config } = useQuery({
     queryKey: ["config"],
     queryFn: () => api<PublicConfig>("GET", "/config"),
-    staleTime: Infinity,
   });
 
   useEffect(() => {
@@ -58,6 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
         setCan(NO_CAPABILITIES);
         queryClient.clear();
+        clearPersistedCache();
       }
     }
   }
@@ -65,6 +67,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function setSession(nextUser: User, csrfToken?: string) {
     if (csrfToken) setCsrfToken(csrfToken);
     setUser(nextUser);
+    // The redirect to the portal is the next thing that happens, and the home
+    // screen's code is a separate chunk. Start it now rather than after the
+    // route swaps and finds it missing.
+    prefetchHome(nextUser.role === "admin");
     // Sign-in does not carry the capability set; read it straight after so the
     // navigation is right on the first paint rather than the second.
     void refreshUser();
@@ -78,6 +84,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setCan(NO_CAPABILITIES);
       queryClient.clear();
+      // `queryClient.clear()` empties this tab's memory; the session-storage
+      // copy of the cacheable-by-policy answers has to be told separately.
+      clearPersistedCache();
       // The offline shell outlives the session otherwise. Nothing private is in
       // it -- the worker never caches /api/ -- but the next person on a shared
       // phone should not inherit a warm app either, and sw.js has always had

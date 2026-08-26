@@ -1,5 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { prefetchRoute } from "@/lib/routeChunks";
+import { usePrefetchIntegrationStatus } from "@/hooks/useIntegrations";
 import { motion, useReducedMotion } from "framer-motion";
 import { LogOut } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
@@ -198,13 +200,27 @@ function NavIcon({ icon: Icon, active }: { icon: NavItem["icon"]; active: boolea
   );
 }
 
+/** Screens whose every read waits on the integration status answer first. */
+const INTEGRATION_ROUTES = new Set(["/portal/clickup", "/portal/slack"]);
+
 function NavRow({ item }: { item: NavItem }) {
   const reduceMotion = useReducedMotion();
+  const prefetchIntegrationStatus = usePrefetchIntegrationStatus();
+
+  /** Pointing at a row is enough notice to start fetching what it will need. */
+  const warm = () => {
+    prefetchRoute(item.to);
+    if (INTEGRATION_ROUTES.has(item.to)) prefetchIntegrationStatus();
+  };
 
   return (
     <NavLink
       to={item.to}
       end={item.to === "/portal"}
+      // By the time the click lands the chunk is usually already in the
+      // browser's cache, and the page appears instead of a spinner.
+      onPointerEnter={warm}
+      onFocus={warm}
       className={({ isActive }) =>
         cn(
           "focus-clear relative flex h-10 items-center rounded-full px-3 text-sm transition-colors",

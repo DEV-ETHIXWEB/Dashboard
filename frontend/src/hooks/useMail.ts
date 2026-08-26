@@ -15,7 +15,6 @@ export function useMailStatus() {
     queryKey: ["mail", "status"],
     queryFn: () => api<MailStatus>("GET", "/mail/status"),
     enabled: isAdmin,
-    staleTime: 60_000,
   });
 }
 
@@ -25,7 +24,6 @@ export function useMailTemplates() {
     queryKey: ["mail", "templates"],
     queryFn: () => api<{ templates: EmailTemplateInfo[] }>("GET", "/mail/templates").then((d) => d.templates),
     enabled: isAdmin,
-    staleTime: 10 * 60_000,
   });
 }
 
@@ -35,7 +33,6 @@ export function useMailPreview(key: string | null) {
     queryKey: ["mail", "preview", key],
     queryFn: () => api<EmailTemplatePreview>("GET", `/mail/templates/${key}/preview`),
     enabled: isAdmin && Boolean(key),
-    staleTime: 10 * 60_000,
   });
 }
 
@@ -46,8 +43,6 @@ export function useMailLog(limit = 100) {
     queryFn: () =>
       api<{ entries: EmailLogEntry[]; configured: boolean }>("GET", `/mail/log?limit=${limit}`),
     enabled: isAdmin,
-    // Every logged send publishes `mail`, so this is a safety net only.
-    refetchInterval: 120_000,
   });
 }
 
@@ -58,7 +53,6 @@ export function useMailLogEntry(id: string | null) {
     queryKey: ["mail", "log-entry", id],
     queryFn: () => api<{ entry: EmailLogEntry & { html: string | null } }>("GET", `/mail/log/${id}`).then((d) => d.entry),
     enabled: isAdmin && Boolean(id),
-    staleTime: 5 * 60_000,
   });
 }
 
