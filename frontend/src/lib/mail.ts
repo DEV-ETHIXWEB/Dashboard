@@ -40,7 +40,7 @@ export interface SmtpSummary {
 
 export interface MailStatus {
   configured: boolean;
-  transport: "smtp" | "resend" | "webhook" | "none" | string;
+  transport: "smtp2go" | "smtp" | "webhook" | "none" | string;
   from: string;
   adminInboxes: string[];
   adminCount: number;
@@ -49,8 +49,8 @@ export interface MailStatus {
 }
 
 export const TRANSPORT_LABEL: Record<string, string> = {
+  smtp2go: "SMTP2GO API",
   smtp: "SMTP",
-  resend: "Resend API",
   webhook: "Custom webhook",
   none: "Not configured",
 };
@@ -59,14 +59,12 @@ export const TRANSPORT_LABEL: Record<string, string> = {
  * What to put in the server environment to turn mail on. Shown verbatim when
  * no transport is configured, so an admin can self-serve without the README.
  */
-export const SMTP_SETUP = {
+export const MAIL_SETUP = {
   vars: [
-    { key: "SMTP_HOST", hint: "smtp.gmail.com, smtp.zoho.com, smtp.office365.com, email-smtp.<region>.amazonaws.com" },
-    { key: "SMTP_PORT", hint: "587 for STARTTLS (usual), or 465 for implicit TLS", optional: true },
-    { key: "SMTP_USER", hint: "The full mailbox address you are sending from" },
-    { key: "SMTP_PASSWORD", hint: "An app password, not your account password. Gmail and Outlook require 2FA to be on before you can create one." },
-    { key: "MAIL_FROM", hint: 'Display name and address, e.g. EthixWeb <support@yourdomain.com>. Must be an address the mailbox is allowed to send as.' },
+    { key: "SMTP2GO_API_KEY", hint: "From SMTP2GO -> Sending -> API Keys. Give it the /email/send permission." },
+    { key: "MAIL_FROM", hint: 'Display name and address, e.g. EthixWeb <noreply@ethixwebdashboard.com>. The domain must be verified under SMTP2GO -> Sending -> Verified Senders.' },
     { key: "APP_BASE_URL", hint: "Public URL of this dashboard. Email buttons and the emblem link back to it.", optional: true },
+    { key: "MAIL_TRANSPORT", hint: "Leave empty. Set to smtp2go, smtp, or webhook only to force one when several are configured.", optional: true },
   ],
   steps: [
     "Add the variables above to the server environment (.env locally, project settings on Vercel).",

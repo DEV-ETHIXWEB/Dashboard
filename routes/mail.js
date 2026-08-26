@@ -157,7 +157,7 @@ router.post('/test', requireCSRF, async (req, res, next) => {
     if (!mailer.isAddress(to)) return res.status(400).json({ error: 'Give a valid email address to send the test to.' });
     if (!mailer.isEnabled()) {
       return res.status(503).json({
-        error: 'No email transport is configured. Set SMTP_HOST (plus SMTP_USER and SMTP_PASSWORD), RESEND_API_KEY, or MAIL_WEBHOOK_URL, then restart the server.',
+        error: 'No email transport is configured. Set SMTP2GO_API_KEY, or SMTP_HOST (plus SMTP_USER and SMTP_PASSWORD), or MAIL_WEBHOOK_URL, then restart the server.',
       });
     }
 
