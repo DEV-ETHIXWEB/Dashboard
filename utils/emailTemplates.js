@@ -59,9 +59,21 @@ const HOSTED_CORNER_URL = `${HOSTED_ASSET_BASE}/web-corner.png`;
 
 /**
  * Fact icons, drawn in the product's own line and rasterised to PNG because
- * email cannot use SVG -- Gmail strips it outright. They ride along as inline
- * attachments exactly like the wordmark, so they render on localhost and on a
- * real domain alike. utils/mailer.js attaches only the ones a message names.
+ * email cannot use SVG -- Gmail strips it outright.
+ *
+ * These are hosted now rather than attached, so nothing but text leaves with
+ * a send. Two consequences worth holding in mind, because they are the price:
+ *
+ *   * Outlook and Gmail hold remote images back until the reader asks for
+ *     pictures, so on first open a message can arrive with the glyphs missing.
+ *     Every one of them is decorative -- the fact it labels is written beside
+ *     it in words -- so a blocked image costs polish, never meaning. The one
+ *     that carries information, the progress bar, keeps its percentage in
+ *     `alt` for exactly this reason.
+ *   * The bucket is now on the delivery path for how a message looks. If it
+ *     goes away, mail still sends and still reads correctly.
+ *
+ * MAIL_ICON_BASE_URL repoints them without a deploy.
  */
 const ICON_CID_PREFIX = 'ethixweb-icon-';
 const ICONS = [
@@ -70,6 +82,15 @@ const ICONS = [
   'check-badge', 'web-corner',
   'bar-000', 'bar-010', 'bar-020', 'bar-030', 'bar-040', 'bar-050', 'bar-060', 'bar-070', 'bar-080', 'bar-090', 'bar-100',
 ];
+
+/**
+ * Where one icon lives. Names are the bare file stem ('due-tile', 'bar-030');
+ * the bucket stores them all as .png at one flat level.
+ */
+function hostedIcon(name) {
+  const base = String(process.env.MAIL_ICON_BASE_URL || HOSTED_ASSET_BASE).replace(/\/+$/, '');
+  return `${base}/${name}.png`;
+}
 
 /** Map a fact's label onto a glyph. Unknown labels fall back to the kicker. */
 function iconFor(label) {
@@ -300,17 +321,17 @@ function heading(text) {
 /**
  * The icon slot used by the eyebrow and every fact cell.
  *
- * Email cannot rely on SVG -- Gmail strips it -- so the mark is drawn with
- * table cells instead: the node motif from the product's own icon set, which
- * renders in every client. When hosted or cid: icons exist, swap the inner
- * table for an <img> and every call site inherits it.
+ * Email cannot rely on SVG -- Gmail strips it -- so each mark is a PNG from
+ * the product's own icon set, served from the bucket. `alt` is empty on
+ * purpose: the glyph repeats the label written next to it, and a screen
+ * reader announcing "ticket icon, Ticket, EW-1042" is worse than silence.
  */
 function iconTile({ size = 46, icon = 'assignment-tile' } = {}) {
   const name = ICONS.includes(icon) ? icon : 'assignment-tile';
   // The art is 128px square with the body inset for its shadow, so the drawn
   // tile reads about 10% smaller than the box it sits in.
   const box = Math.round(size * 1.28);
-  return `<img src="cid:${ICON_CID_PREFIX}${name}" alt="" width="${box}" height="${box}" `
+  return `<img src="${hostedIcon(name)}" alt="" width="${box}" height="${box}" `
     + `style="display:block;border:0;width:${box}px;height:${box}px;" />`;
 }
 
@@ -318,7 +339,7 @@ function iconTile({ size = 46, icon = 'assignment-tile' } = {}) {
 function heroBadge(icon = 'check-badge', size = 96) {
   return [
     '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto 18px;">',
-    `<tr><td align="center"><img src="cid:${ICON_CID_PREFIX}${icon}" alt="" width="${size}" height="${size}" `
+    `<tr><td align="center"><img src="${hostedIcon(icon)}" alt="" width="${size}" height="${size}" `
       + `style="display:block;border:0;width:${size}px;height:${size}px;" /></td></tr>`,
     '</table>',
   ].join('');
@@ -436,7 +457,7 @@ function progressBar(pct) {
   // single step a message actually uses gets attached to it.
   const value = Math.max(0, Math.min(100, Number(pct) || 0));
   const step = String(Math.round(value / 10) * 10).padStart(3, '0');
-  return `<img src="cid:${ICON_CID_PREFIX}bar-${step}" alt="${value}% complete" width="300" height="32" `
+  return `<img src="${hostedIcon(`bar-${step}`)}" alt="${value}% complete" width="300" height="32" `
     + 'style="display:block;border:0;width:100%;max-width:300px;height:auto;" />';
 }
 

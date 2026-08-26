@@ -11,6 +11,7 @@ const net = require('net');
 
 /** The brand red the renderer actually ships, so a rebrand moves one file. */
 const BRAND_RED = require('../utils/emailTemplates').TOKENS.brand;
+const HOSTED_ASSETS = 'https://sjzhvegnywiftvmprnlf.supabase.co/storage/v1/object/public/EMAIL%20TEMPLATE%20IMAGES';
 
 let pass = 0;
 let fail = 0;
@@ -201,7 +202,14 @@ async function main() {
     const decoded = htmlPart(sent.data);
 
     check('the EthixWeb red survived transport', decoded.includes(BRAND_RED), decoded.slice(0, 120));
-    check('the logo is linked absolutely', decoded.includes('https://dashboard.example.com/ethixweb.png'));
+    // The artwork moved to object storage, so the masthead no longer points at
+    // this deployment. What matters now is that every image is an absolute
+    // https URL an inbox can actually fetch, and that nothing rides along as
+    // an attachment any more.
+    check('the logo is linked absolutely', decoded.includes(`${HOSTED_ASSETS}/ethixweb.png`), decoded.slice(0, 200));
+    const srcs = [...new Set((decoded.match(/src="[^"]+"/g) || []))];
+    check('every image is a hosted https URL', srcs.every((s) => s.startsWith('src="https://')), srcs.join(' '));
+    check('no artwork rides along as an attachment', !/Content-ID|cid:/i.test(sent.data), 'a cid: reference survived');
     check('the call to action links back to the portal', decoded.includes('https://dashboard.example.com/portal/tickets?ticket=ticket-2001'));
   }
 
