@@ -212,7 +212,7 @@ if (require.main === module) {
     if (!require('./utils/mailer').isEnabled()) {
       console.warn(
         '[mail] No mail transport is configured, so sign-in codes cannot be delivered. ' +
-          'Clients will be stuck waiting on an admin. Set SMTP_*, RESEND_API_KEY, or MAIL_WEBHOOK_URL in .env.',
+          'Clients will be stuck waiting on an admin. Set SMTP2GO_API_KEY (or SMTP_*, or MAIL_WEBHOOK_URL) in .env.',
       );
       console.warn(
         '[mail] Administrators now sign in with a password AND an emailed code, like everyone else. ' +

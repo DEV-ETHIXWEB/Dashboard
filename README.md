@@ -161,9 +161,12 @@ Turn delivery on with any ONE of:
 
 | Transport | Set | Notes |
 | --- | --- | --- |
-| SMTP | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | Any mailbox you own -- Gmail/Workspace, Zoho, Outlook 365, SES, cPanel. Gmail and Outlook need an **app password**, not the account password. |
-| Resend | `RESEND_API_KEY` | HTTPS API, verify your domain first. |
+| SMTP2GO (default) | `SMTP2GO_API_KEY` | HTTPS API. Create the key under **Sending → API Keys** with the `/email/send` permission, and verify the sending domain under **Sending → Verified Senders** first. Preferred on Vercel, where outbound SMTP ports are unreliable. |
+| SMTP | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | Any mailbox you own -- SMTP2GO's own relay (`mail.smtp2go.com:587`, with an **SMTP user**, not the API key), Gmail/Workspace, Zoho, Outlook 365, SES, cPanel. Gmail and Outlook need an **app password**. |
 | Webhook | `MAIL_WEBHOOK_URL` | Receives `POST {from, to, subject, text, html}`. |
+
+Detection order is SMTP2GO, SMTP, webhook; `MAIL_TRANSPORT=smtp2go|smtp|webhook`
+forces one when more than one is configured.
 
 Also set `MAIL_FROM` (an address the mailbox may send as) and `APP_BASE_URL`
 (the public URL of this dashboard -- the buttons and the emblem in every email
@@ -783,7 +786,8 @@ the sweep.
 ## Testing email before a domain is verified
 
 Most providers refuse to deliver anywhere except the account owner's inbox
-until you verify a sending domain. Resend answers with a 403:
+until you verify a sending domain. SMTP2GO answers with a 4xx and an
+`error_code` such as `E_ApiResponseCodes.SENDER_NOT_VERIFIED`:
 
 > You can only send testing emails to your own email address (...). To send
 > emails to other recipients, please verify a domain.

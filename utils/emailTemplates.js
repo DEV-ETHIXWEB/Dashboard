@@ -41,6 +41,23 @@ const LOGO_CID = 'ethixweb-logo';
 const LOGO_SRC = `cid:${LOGO_CID}`;
 
 /**
+ * Hosted copies of the two pieces of artwork that appear on every message.
+ *
+ * These two are served from object storage rather than attached, so the bytes
+ * stop riding along with each send. The trade is real and worth naming: an
+ * attachment always renders, while a remote image is held back by Outlook and
+ * Gmail until the reader asks for pictures. Everything else in this file --
+ * the fact icons, the progress bars -- stays inline for exactly that reason.
+ *
+ * MAIL_LOGO_URL still wins over the wordmark below, so the address can be
+ * moved without a deploy.
+ */
+const HOSTED_ASSET_BASE =
+  'https://sjzhvegnywiftvmprnlf.supabase.co/storage/v1/object/public/EMAIL%20TEMPLATE%20IMAGES';
+const HOSTED_LOGO_URL = `${HOSTED_ASSET_BASE}/ethixweb.png`;
+const HOSTED_CORNER_URL = `${HOSTED_ASSET_BASE}/web-corner.png`;
+
+/**
  * Fact icons, drawn in the product's own line and rasterised to PNG because
  * email cannot use SVG -- Gmail strips it outright. They ride along as inline
  * attachments exactly like the wordmark, so they render on localhost and on a
@@ -174,11 +191,11 @@ function brand() {
     ...brandOverride,
     name: process.env.MAIL_BRAND_NAME || 'EthixWeb',
     color: process.env.MAIL_BRAND_COLOR || TOKENS.brand,
-    // The EthixWeb wordmark from this app's own public/ folder. A hosted URL
-    // is used when there is a publicly reachable one (utils/appUrl.js resolves
-    // it from APP_BASE_URL or the origin the app is served on); otherwise the
-    // logo rides along as an inline attachment, so it renders either way.
-    logoUrl: appUrl.logoUrl() || LOGO_SRC,
+    // The wordmark now comes from object storage rather than the app's own
+    // public/ folder, so it no longer depends on this deployment being
+    // publicly reachable. MAIL_LOGO_URL overrides it for anyone who needs to
+    // repoint the asset without shipping code.
+    logoUrl: process.env.MAIL_LOGO_URL || HOSTED_LOGO_URL,
     baseUrl: appUrl.baseUrl(),
     supportEmail: process.env.MAIL_SUPPORT_EMAIL || null,
     ...brandOverride,
@@ -689,7 +706,7 @@ function header() {
     // leave a hairline of background under the image.
     `<td class="ew-corner" valign="top" align="right" width="220" `
       + `style="width:220px;padding:0;font-size:0;line-height:0;">`
-      + `<img src="cid:${ICON_CID_PREFIX}web-corner" alt="" width="220" height="132" `
+      + `<img src="${HOSTED_CORNER_URL}" alt="" width="220" height="132" `
       + `style="display:block;border:0;width:220px;height:132px;max-width:100%;`
       + `border-radius:0 14px 0 0;" /></td>`,
     '</tr></table>',

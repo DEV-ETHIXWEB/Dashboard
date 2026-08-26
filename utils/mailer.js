@@ -4,10 +4,10 @@
  * Outbound email.
  *
  * Three real transports, auto-detected in this order (or forced with
- * MAIL_TRANSPORT=smtp|resend|webhook):
- *   1. SMTP_HOST        -> any mailbox you already own: Gmail, Zoho, Outlook,
- *                          Amazon SES, your own server. Uses nodemailer.
- *   2. RESEND_API_KEY   -> Resend HTTPS API
+ * MAIL_TRANSPORT=smtp2go|smtp|webhook):
+ *   1. SMTP2GO_API_KEY  -> SMTP2GO HTTPS API (what this deployment uses)
+ *   2. SMTP_HOST        -> any mailbox you already own: Gmail, Zoho, Outlook,
+ *                          Amazon SES, SMTP2GO's own relay. Uses nodemailer.
  *   3. MAIL_WEBHOOK_URL -> POST {to, subject, text, html} to your own endpoint
  *
  * With none of them set nothing is delivered; the message is still rendered
@@ -84,6 +84,10 @@ function smtpConfigured() {
   return Boolean(process.env.SMTP_HOST);
 }
 
+function smtp2goConfigured() {
+  return Boolean(String(process.env.SMTP2GO_API_KEY || '').trim());
+}
+
 function isEnabled() {
   return transportName() !== 'none';
 }
@@ -94,12 +98,15 @@ function isEnabled() {
  */
 function transportName() {
   const forced = String(process.env.MAIL_TRANSPORT || '').trim().toLowerCase();
+  if (forced === 'smtp2go') return smtp2goConfigured() ? 'smtp2go' : 'none';
   if (forced === 'smtp') return smtpConfigured() ? 'smtp' : 'none';
-  if (forced === 'resend') return process.env.RESEND_API_KEY ? 'resend' : 'none';
   if (forced === 'webhook') return process.env.MAIL_WEBHOOK_URL ? 'webhook' : 'none';
 
+  // SMTP2GO's API wins over a bare SMTP_HOST: an outbound SMTP port is the
+  // thing most likely to be blocked on a serverless host, and this deployment
+  // runs on Vercel.
+  if (smtp2goConfigured()) return 'smtp2go';
   if (smtpConfigured()) return 'smtp';
-  if (process.env.RESEND_API_KEY) return 'resend';
   if (process.env.MAIL_WEBHOOK_URL) return 'webhook';
   return 'none';
 }
@@ -166,6 +173,7 @@ function getSmtpTransport() {
 async function verifyTransport() {
   const name = transportName();
   if (name === 'none') return { ok: false, transport: 'none', error: 'No email transport is configured.' };
+  if (name === 'smtp2go') return verifySmtp2go();
   if (name !== 'smtp') return { ok: true, transport: name, note: 'This transport is checked when a message is sent.' };
   try {
     await getSmtpTransport().verify();
@@ -175,8 +183,35 @@ async function verifyTransport() {
   }
 }
 
+/**
+ * Prove the API key without sending anything.
+ *
+ * The stats endpoint is the cheapest authenticated call SMTP2GO has: it takes
+ * the same key and sends no mail, so "Verify connection" on the Mail page
+ * answers the only question an admin has before the first real send.
+ */
+async function verifySmtp2go() {
+  const base = SMTP2GO_ENDPOINT.replace(/\/email\/send$/, '');
+  try {
+    const res = await fetch(`${base}/stats/email_summary`, {
+      method: 'POST',
+      headers: {
+        'X-Smtp2go-Api-Key': String(process.env.SMTP2GO_API_KEY || '').trim(),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: '{}',
+    });
+    if (res.ok) return { ok: true, transport: 'smtp2go' };
+    const body = await res.text().catch(() => '');
+    return { ok: false, transport: 'smtp2go', error: explainSendError(`SMTP2GO (${res.status}): ${body.slice(0, 200)}`) };
+  } catch (err) {
+    return { ok: false, transport: 'smtp2go', error: `Could not reach SMTP2GO: ${err.message}` };
+  }
+}
+
 function fromAddress() {
-  return process.env.MAIL_FROM || 'EthixWeb Dashboard <onboarding@resend.dev>';
+  return process.env.MAIL_FROM || 'EthixWeb Dashboard <noreply@ethixwebdashboard.com>';
 }
 
 /** Extra inboxes that get "tell the admins" mail, on top of admin accounts. */
@@ -226,34 +261,70 @@ async function sendViaSmtp({ to, subject, text, html }) {
   return { ok: true, transport: 'smtp', providerId: info.messageId || null };
 }
 
-async function sendViaResend({ to, subject, text, html }) {
+const SMTP2GO_ENDPOINT = process.env.SMTP2GO_API_URL || 'https://api.smtp2go.com/v3/email/send';
+
+/**
+ * SMTP2GO over HTTPS.
+ *
+ * Chosen over SMTP2GO's SMTP relay because this app is deployed on Vercel,
+ * where an outbound connection on 587/465 is the first thing to go missing;
+ * an HTTPS POST always works. The SMTP path below still exists, so pointing
+ * SMTP_HOST at mail.smtp2go.com with an SMTP user is a supported fallback.
+ *
+ * Inline artwork: SMTP2GO derives each part's Content-ID from the attachment
+ * filename, so the filename here is the bare cid the HTML already references
+ * (`cid:ethixweb-logo`), not `ethixweb-logo.png`. The mimetype carries the
+ * type instead. Rename one and the masthead silently falls back to alt text.
+ */
+async function sendViaSmtp2go({ to, subject, text, html }) {
   const images = inlineImagesFor(html);
-  const res = await fetch('https://api.resend.com/emails', {
+  const res = await fetch(SMTP2GO_ENDPOINT, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'X-Smtp2go-Api-Key': String(process.env.SMTP2GO_API_KEY || '').trim(),
       'Content-Type': 'application/json',
+      Accept: 'application/json',
     },
     body: JSON.stringify({
-      from: fromAddress(),
+      sender: fromAddress(),
       to,
       subject,
-      text,
-      html: html || undefined,
-      // Resend's own field names for an inline attachment's Content-Id.
+      text_body: text,
+      html_body: html || undefined,
       attachments: images.length > 0
         ? images.map((img) => ({
-          filename: img.filename, content: img.base64, content_type: img.contentType, content_id: img.cid,
+          filename: img.cid, fileblob: img.base64, mimetype: img.contentType,
         }))
         : undefined,
     }),
   });
+
+  const body = await res.text().catch(() => '');
+  let data = {};
+  try { data = body ? JSON.parse(body) : {}; } catch { /* keep the raw text for the message below */ }
+
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Resend rejected the message (${res.status}): ${body.slice(0, 200)}`);
+    throw new Error(`SMTP2GO rejected the message (${res.status}): ${describeSmtp2goFailure(data) || body.slice(0, 200)}`);
   }
-  const data = await res.json().catch(() => ({}));
-  return { ok: true, transport: 'resend', providerId: data.id || null };
+
+  // A 200 is not delivery: SMTP2GO reports per-recipient failures in the body,
+  // so a bad address or an unverified sender would otherwise be logged as sent.
+  const payload = data.data || {};
+  if (Number(payload.succeeded || 0) === 0) {
+    throw new Error(`SMTP2GO accepted nothing: ${describeSmtp2goFailure(data) || body.slice(0, 200)}`);
+  }
+  return { ok: true, transport: 'smtp2go', providerId: payload.email_id || null };
+}
+
+/** Pull the useful sentence out of SMTP2GO's error shape. */
+function describeSmtp2goFailure(data) {
+  const parts = [];
+  if (data?.data?.error) parts.push(data.data.error);
+  if (data?.data?.error_code) parts.push(`(${data.data.error_code})`);
+  const failures = data?.data?.failures;
+  if (Array.isArray(failures) && failures.length > 0) parts.push(failures.join('; '));
+  if (data?.error) parts.push(data.error);
+  return parts.join(' ').trim();
 }
 
 async function sendViaWebhook({ to, subject, text, html }) {
@@ -357,8 +428,8 @@ async function logEmail(entry) {
 /**
  * A test inbox to send everything to instead of the real recipient.
  *
- * Resend's sandbox, and most providers' free tiers, refuse any address except
- * the account owner's. Without this the whole app looks broken in testing:
+ * A provider's trial mode, or a sending domain that is not verified yet, can
+ * refuse every address except the account owner's. Without this the whole app looks broken in testing:
  * every client email fails with a provider error that has nothing to do with
  * the app. Set MAIL_REDIRECT_TO and outbound mail goes to that one inbox with
  * the intended recipient named in the subject, so the flow can still be walked
@@ -372,7 +443,7 @@ function redirectTo() {
 /**
  * Provider errors, in words the person reading them can act on.
  *
- * A 403 from Resend arrives as a JSON blob about domain verification. Dropping
+ * A 4xx from SMTP2GO arrives as a JSON blob with an error_code in it. Dropping
  * that into a toast tells an admin nothing they can use; the raw text still
  * goes to the mail log, where somebody debugging will look for it.
  */
@@ -384,11 +455,14 @@ function explainSendError(message) {
     return `Your email provider is still in test mode: it will only deliver to ${own || 'the account owner'}. `
       + 'Verify a sending domain, or set MAIL_REDIRECT_TO to that address to keep testing.';
   }
-  if (/\b(401|403)\b/.test(raw) && /api[_ ]?key|unauthor/i.test(raw)) {
-    return 'The email provider refused our credentials. Check the API key.';
+  if (/\b(401|403)\b/.test(raw) || /api[_ ]?key|unauthor|API_KEY_INVALID|AUTHENTICATION/i.test(raw)) {
+    return 'SMTP2GO refused our credentials. Check that SMTP2GO_API_KEY matches a live key in the SMTP2GO dashboard.';
   }
-  if (/domain is not verified|not verified/i.test(raw)) {
-    return 'The sending domain is not verified with the email provider yet.';
+  if (/domain is not verified|not verified|sender[^.]*(not allowed|denied)|SENDER_/i.test(raw)) {
+    return 'SMTP2GO will not send as this address. MAIL_FROM must be on a sender domain verified in SMTP2GO.';
+  }
+  if (/NON_VALIDATING|E_ApiResponseCodes/i.test(raw)) {
+    return `SMTP2GO rejected the request: ${raw.slice(0, 140)}`;
   }
   if (/rate.?limit|too many requests|\b429\b/i.test(raw)) {
     return 'The email provider is rate limiting us. Try again shortly.';
@@ -418,13 +492,13 @@ async function sendMail({ to, subject, text, html, template, entity, entityId })
       to: recipients, subject, html, template, entity, entityId,
       status: 'skipped',
       transport: 'none',
-      error: 'No email transport configured (set SMTP_HOST, RESEND_API_KEY, or MAIL_WEBHOOK_URL)',
+      error: 'No email transport configured (set SMTP2GO_API_KEY, SMTP_HOST, or MAIL_WEBHOOK_URL)',
     });
     return { ok: false, skipped: 'email transport not configured', recipients };
   }
 
   try {
-    const send = { smtp: sendViaSmtp, resend: sendViaResend, webhook: sendViaWebhook }[transport];
+    const send = { smtp2go: sendViaSmtp2go, smtp: sendViaSmtp, webhook: sendViaWebhook }[transport];
     const result = await send({ to: recipients, subject: outSubject, text, html });
     await logEmail({
       to: requested, subject, html, template, entity, entityId,
@@ -476,6 +550,7 @@ module.exports = {
   isEnabled,
   transportName,
   smtpConfigured,
+  smtp2goConfigured,
   smtpSummary,
   verifyTransport,
   sendMail,

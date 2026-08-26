@@ -24,7 +24,7 @@ import {
 import { formatRelativeTime } from "@/lib/format";
 import { IntegrationNotConnected } from "@/components/IntegrationNotConnected";
 import {
-  SMTP_SETUP, TEMPLATE_GROUPS, TRANSPORT_LABEL,
+  MAIL_SETUP, TEMPLATE_GROUPS, TRANSPORT_LABEL,
   type EmailLogEntry, type EmailStatus, type SmtpSummary,
 } from "@/lib/mail";
 import { cn } from "@/lib/utils";
@@ -87,8 +87,8 @@ export default function MailCenter() {
         <IntegrationNotConnected
           name="Outbound email"
           icon={PlugZap}
-          vars={SMTP_SETUP.vars}
-          steps={SMTP_SETUP.steps}
+          vars={MAIL_SETUP.vars}
+          steps={MAIL_SETUP.steps}
         />
       )}
 

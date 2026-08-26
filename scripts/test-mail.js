@@ -121,6 +121,10 @@ async function main() {
   // schema before sending -- this test exercises the real logging path too.
   await require('../db/setup').seed();
 
+  // This suite exercises the SMTP path against a local server, so pin the
+  // transport: a real SMTP2GO key in the developer's environment would
+  // otherwise win the auto-detection and send nothing here.
+  process.env.MAIL_TRANSPORT = 'smtp';
   process.env.SMTP_HOST = '127.0.0.1';
   process.env.SMTP_PORT = String(smtp.port);
   process.env.SMTP_SECURE = 'false';
@@ -205,17 +209,21 @@ async function main() {
   // Most providers' free tiers refuse every address except the account owner's.
   // The app has to say something an admin can act on, not forward the JSON.
   {
-    const resendSandbox = 'Resend rejected the message (403): {"statusCode":403,"name":"validation_error",'
-      + '"message":"You can only send testing emails to your own email address (owner@example.com). '
-      + 'To send emails to other recipients, please verify a domain at resend.com/domains"}';
-    const explained = mailer.explainSendError(resendSandbox);
+    const sandbox = 'SMTP2GO rejected the message (403): {"data":{"error":"You can only send testing emails '
+      + 'to your own email address (owner@example.com). Verify a sender domain to send to other recipients.",'
+      + '"error_code":"E_ApiResponseCodes.SENDER_NOT_VERIFIED"}}';
+    const explained = mailer.explainSendError(sandbox);
     check('a sandbox rejection is explained in a sentence', !explained.includes('{'), explained);
     check('and it names the address that would work', explained.includes('owner@example.com'), explained);
     check('and it says what to do about it', /verify a sending domain/i.test(explained), explained);
     check('a long provider error is trimmed, not dumped', explained.length < 220, `${explained.length} chars`);
 
     check('a refused key reads as a key problem',
-      /credentials|API key/i.test(mailer.explainSendError('Resend rejected the message (401): invalid api_key')));
+      /credentials|API key|SMTP2GO_API_KEY/i.test(mailer.explainSendError(
+        'SMTP2GO rejected the message (401): {"data":{"error":"API key is invalid","error_code":"E_ApiResponseCodes.API_KEY_INVALID"}}')));
+    check('an unverified sender reads as a sender problem',
+      /verified sender|MAIL_FROM/i.test(mailer.explainSendError(
+        'SMTP2GO rejected the message (400): {"data":{"error":"sender not allowed","error_code":"E_ApiResponseCodes.SENDER_NOT_VERIFIED"}}')));
     check('an unreachable server reads as a connection problem',
       /Could not reach the mail server/.test(mailer.explainSendError('connect ECONNREFUSED 127.0.0.1:2525')));
   }
