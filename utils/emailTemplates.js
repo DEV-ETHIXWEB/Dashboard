@@ -331,16 +331,16 @@ function iconTile({ size = 46, icon = 'assignment-tile' } = {}) {
   // The art is 128px square with the body inset for its shadow, so the drawn
   // tile reads about 10% smaller than the box it sits in.
   const box = Math.round(size * 1.28);
-  return `<img src="${hostedIcon(name)}" alt="" width="${box}" height="${box}" `
-    + `style="display:block;border:0;width:${box}px;height:${box}px;" />`;
+  return `<img src="${hostedIcon(name)}" alt="" width="${box}" height="${box}" border="0" `
+    + `style="display:block;border:0;outline:none;width:${box}px;height:${box}px;" />`;
 }
 
 /** The circular badge that opens a status message. */
 function heroBadge(icon = 'check-badge', size = 96) {
   return [
     '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto 18px;">',
-    `<tr><td align="center"><img src="${hostedIcon(icon)}" alt="" width="${size}" height="${size}" `
-      + `style="display:block;border:0;width:${size}px;height:${size}px;" /></td></tr>`,
+    `<tr><td align="center"><img src="${hostedIcon(icon)}" alt="" width="${size}" height="${size}" border="0" `
+      + `style="display:block;border:0;outline:none;width:${size}px;height:${size}px;" /></td></tr>`,
     '</table>',
   ].join('');
 }
@@ -363,14 +363,27 @@ function statusPill(status) {
 }
 
 /** Circle with initials -- the stand-in for an avatar image mail clients block. */
-function avatarCircle(name, { size = 32, color } = {}) {
+function avatarCircle(name, { size = 32, color, neumorphic = false } = {}) {
   const bg = color || brand().color;
+  // The footer sits on black, so the raised look the buttons and icon tiles
+  // already use elsewhere -- a soft outer shadow plus an inset top highlight,
+  // same layered skeuomorphism -- reads as one system rather than a flat
+  // circle dropped on a dark panel. Every layer degrades on its own: Outlook
+  // drops the gradient and shadow and is left with the solid bgcolor.
+  const ramp = neumorphic
+    ? `linear-gradient(180deg,color-mix(in srgb,${bg} 82%,#fff) 0%,${bg} 55%,color-mix(in srgb,${bg} 82%,#000) 100%)`
+    : '';
+  const shadow = neumorphic
+    ? '0 4px 10px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.35), inset 0 -1px 2px rgba(0,0,0,.25)'
+    : 'none';
   return [
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="${size}" height="${size}" `
-      + `style="width:${size}px;height:${size}px;border-radius:${size}px;background:${bg};">`,
+      + `style="width:${size}px;height:${size}px;border-radius:${size}px;background-color:${bg};`
+      + `background-image:${ramp};box-shadow:${shadow};">`,
     `<tr><td align="center" valign="middle" height="${size}" `
       + `style="height:${size}px;text-align:center;vertical-align:middle;font-family:${TOKENS.font};`
-      + `font-size:${Math.round(size * 0.38)}px;line-height:${size}px;font-weight:600;color:#ffffff;">`,
+      + `font-size:${Math.round(size * 0.38)}px;line-height:${size}px;font-weight:600;color:#ffffff;`
+      + `text-shadow:${neumorphic ? '0 1px 1px rgba(0,0,0,.35)' : 'none'};">`,
     `${escapeHtml(initialsOf(name))}`,
     '</td></tr></table>',
   ].join('');
@@ -380,7 +393,7 @@ function avatarCircle(name, { size = 32, color } = {}) {
  * The panel ClickUp shows for the task itself: status pill, title, the list it
  * lives in, and a two-column grid of the fields that matter.
  */
-function taskCard({ status, title, breadcrumb, meta = [], progress = null, url = null }) {
+function taskCard({ status, title, breadcrumb, meta = [], url = null }) {
   const rows = meta.filter((m) => m && m.value !== null && m.value !== undefined && m.value !== '');
   const pairs = [];
   for (let i = 0; i < rows.length; i += 2) pairs.push([rows[i], rows[i + 1] || null]);
@@ -410,21 +423,6 @@ function taskCard({ status, title, breadcrumb, meta = [], progress = null, url =
     ].join('')
     : '';
 
-  // Progress sits on its own rule, label at the left and the bar filling the
-  // rest, so it reads as the summary of everything above it.
-  const pct = progress === null || progress === undefined ? null : Math.max(0, Math.min(100, Number(progress)));
-  const progressHtml = pct === null ? '' : [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid ${TOKENS.hairline};">`,
-    '<tr>',
-    `<td width="72" valign="middle" style="padding:18px 14px 16px 0;">${iconTile({ icon: 'progress-tile' })}</td>`,
-    `<td width="150" valign="middle" style="padding:18px 16px 16px 0;font-family:${TOKENS.font};">`,
-    `<div style="font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:${TOKENS.muted};">Progress</div>`,
-    `<div style="font-size:16px;color:${TOKENS.text};padding-top:4px;">${pct}%</div>`,
-    '</td>',
-    `<td valign="middle" style="padding:18px 0 16px;">${progressBar(pct)}</td>`,
-    '</tr></table>',
-  ].join('');
-
   const head = [
     '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>',
     `<td width="22" valign="middle" style="padding-right:10px;">`
@@ -446,7 +444,6 @@ function taskCard({ status, title, breadcrumb, meta = [], progress = null, url =
     '<tr><td class="ew-pad" style="padding:28px 30px 24px;">',
     head,
     grid,
-    progressHtml,
     '</td></tr></table>',
   ].join('');
 }
@@ -699,8 +696,8 @@ function header() {
   const word = escapeHtml(String(b.name).toUpperCase());
 
   const mark = logo
-    ? `<img class="ew-mark" src="${logo}" alt="${word}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}" `
-      + `style="display:block;border:0;width:${LOGO_WIDTH}px;height:${LOGO_HEIGHT}px;max-width:100%;" />`
+    ? `<img class="ew-mark" src="${logo}" alt="${word}" width="${LOGO_WIDTH}" height="${LOGO_HEIGHT}" border="0" `
+      + `style="display:block;border:0;outline:none;width:${LOGO_WIDTH}px;height:${LOGO_HEIGHT}px;max-width:100%;" />`
     : `<div class="ew-mark" style="font-family:${TOKENS.font};font-size:32px;line-height:1;font-weight:600;`
       + `letter-spacing:.02em;color:#ffffff;">${word}</div>`;
 
@@ -727,8 +724,8 @@ function header() {
     // leave a hairline of background under the image.
     `<td class="ew-corner" valign="top" align="right" width="220" `
       + `style="width:220px;padding:0;font-size:0;line-height:0;">`
-      + `<img src="${HOSTED_CORNER_URL}" alt="" width="220" height="132" `
-      + `style="display:block;border:0;width:220px;height:132px;max-width:100%;`
+      + `<img src="${HOSTED_CORNER_URL}" alt="" width="220" height="132" border="0" `
+      + `style="display:block;border:0;outline:none;width:220px;height:132px;max-width:100%;`
       + `border-radius:0 14px 0 0;" /></td>`,
     '</tr></table>',
     '</td></tr>',
@@ -767,7 +764,7 @@ function footer({ reason, links = [], actor = null }) {
   const logo = safeUrl(b.logoUrl);
   const signOff = logo
     ? `<img src="${logo}" alt="${escapeHtml(String(b.name).toUpperCase())}" width="${Math.round(LOGO_WIDTH * 0.78)}" `
-      + `height="${Math.round(LOGO_HEIGHT * 0.78)}" style="display:block;border:0;`
+      + `height="${Math.round(LOGO_HEIGHT * 0.78)}" border="0" style="display:block;border:0;outline:none;`
       + `width:${Math.round(LOGO_WIDTH * 0.78)}px;height:${Math.round(LOGO_HEIGHT * 0.78)}px;max-width:100%;" />`
     : `<div style="font-family:${TOKENS.font};font-size:22px;font-weight:600;letter-spacing:.02em;`
       + `color:${FOOT.text};">${escapeHtml(String(b.name).toUpperCase())}</div>`;
@@ -784,7 +781,7 @@ function footer({ reason, links = [], actor = null }) {
   const actorCol = actor
     ? [
       '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>',
-      `<td width="60" valign="middle" style="padding-right:14px;">${avatarCircle(actor.name, { size: 54, color: actor.color })}</td>`,
+      `<td width="60" valign="middle" style="padding-right:14px;">${avatarCircle(actor.name, { size: 54, color: actor.color, neumorphic: true })}</td>`,
       `<td valign="middle" style="font-family:${TOKENS.font};">`,
       `<div style="font-size:15px;font-weight:600;color:${FOOT.text};">${escapeHtml(actor.name || '')}</div>`,
       actor.role || actor.company
@@ -870,6 +867,9 @@ function renderEmail({
     '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />',
     '<style>',
     ':root{color-scheme:light;supported-color-schemes:light;}',
+    'body{-webkit-text-size-adjust:100%;text-size-adjust:100%;}',
+    'table,td{mso-table-lspace:0pt;mso-table-rspace:0pt;}',
+    'img{-ms-interpolation-mode:bicubic;}',
     // Outlook.com rewrites colours under its own dark theme; these put them
     // back. Everything else already ships the dark values inline.
     `[data-ogsc] .ew-page{background:${TOKENS.page} !important;}`,
@@ -881,6 +881,21 @@ function renderEmail({
     // without repainting the text hides the password entirely.
     `[data-ogsc] .ew-code{background:${TOKENS.ink} !important;}`,
     '[data-ogsc] .ew-code-v{color:#ffffff !important;}',
+    // Apple Mail and iOS Mail apply their own dark-mode rewrite even with the
+    // `color-scheme: light` meta above -- unlike Outlook.com it does this via
+    // `prefers-color-scheme` rather than an attribute, and it is the reason
+    // this template looked fine in Gmail/Android but broke in Safari/iOS: the
+    // dark bands (masthead, footer, code block) would get repainted without
+    // their text following, going invisible. Same fix, same hooks, different
+    // selector.
+    '@media (prefers-color-scheme: dark){',
+    `.ew-page{background:${TOKENS.page} !important;}`,
+    `.ew-card{background:${TOKENS.card} !important;}`,
+    `.ew-band{background-color:#141013 !important;}`,
+    `.ew-foot{background:${FOOT.bg} !important;}`,
+    `.ew-code{background:${TOKENS.ink} !important;}`,
+    '.ew-code-v{color:#ffffff !important;}',
+    '}',
     '@media only screen and (max-width:720px){',
     '.ew-card{width:100% !important;border-radius:0 !important;}',
     '.ew-foot{border-radius:0 !important;}',
