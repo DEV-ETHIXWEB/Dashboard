@@ -1,9 +1,10 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { RoleRoute } from "@/components/RoleRoute";
 import { GuestRoute } from "@/components/GuestRoute";
+import { LogoBuildAnimation } from "@/components/LogoBuildAnimation";
 import { useAuth } from "@/context/AuthContext";
 import { ROUTE_CHUNKS } from "@/lib/routeChunks";
 
@@ -55,9 +56,26 @@ function SuperAdminOnly({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Plays once per full page load -- state initialised to true, so it is
+ * whatever renders first, before the router or auth check have shown
+ * anything else. Never revisited on a client-side route change, since that
+ * never re-mounts App.
+ */
+function BootSplash() {
+  const [booting, setBooting] = useState(true);
+  if (!booting) return null;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background">
+      <LogoBuildAnimation onComplete={() => setBooting(false)} />
+    </div>
+  );
+}
+
 function App() {
   return (
     <>
+      <BootSplash />
       <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route

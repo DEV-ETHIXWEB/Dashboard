@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { LogoBuildAnimation } from "@/components/LogoBuildAnimation";
+import { Loader2 } from "lucide-react";
 
 export function GuestRoute({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -9,7 +9,7 @@ export function GuestRoute({ children }: { children: ReactNode }) {
   if (isLoading) {
     return (
       <div className="flex min-h-svh items-center justify-center bg-background">
-        <LogoBuildAnimation />
+        <Loader2 className="size-6 animate-spin text-muted-foreground" />
       </div>
     );
   }

@@ -1,15 +1,28 @@
+import { useEffect } from "react";
+
 /**
  * The E draws as one line, splits into three bars, then THIXWEB slides in
- * behind it while the ground cuts black -> white -> red -> black. Same build
- * as public/logo-animation.html, trimmed to just the mark for use as a
- * loading screen: no controls, no beat sheet.
+ * behind it while the ground cuts black -> white -> red -> black.
  *
  * Geometry is measured off public/ethixweb.png (422 x 63), so the bars land
  * on the exact pixels the artwork has them.
  */
-const DUR = "4.4s";
+const DUR_MS = 4400;
+const DUR = `${DUR_MS}ms`;
 
-export function LogoBuildAnimation() {
+export function LogoBuildAnimation({ onComplete }: { onComplete?: () => void } = {}) {
+  useEffect(() => {
+    if (!onComplete) return;
+    // A timer, not animationend: five animated elements finish at slightly
+    // different times, so animationend would fire once per element rather
+    // than once for the whole build. Reduced-motion turns the CSS off
+    // entirely, so that viewer gets a short, fixed hold instead of a wait for
+    // an animation that will never end.
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const id = window.setTimeout(onComplete, reduced ? 600 : DUR_MS);
+    return () => window.clearTimeout(id);
+  }, [onComplete]);
+
   return (
     <div
       className="relative aspect-[422/197] w-full max-w-sm overflow-hidden rounded-md bg-black"
