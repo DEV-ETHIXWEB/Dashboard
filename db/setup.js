@@ -315,6 +315,11 @@ async function initPostgresSchema() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_trusted_by TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_channel_id TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_channel_name TEXT`,
+    // The one payment intent behind a payment. Current Stripe API versions no
+    // longer put `charge` on an invoice or `invoice` on a charge, so this is
+    // what tells the mirror that an invoice and a charge are the same money and
+    // must not both be counted. See utils/stripeSync.js.
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_payment_intent TEXT`,
   ];
   for (const sql of alterations) {
     try {

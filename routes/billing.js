@@ -131,7 +131,18 @@ router.post('/sync', requireCSRF, requireRole('admin'), async (req, res, next) =
     for (const client of clients) {
       try {
         const result = await stripeSync.backfillClient(client);
-        results.push({ clientId: client.id, name: client.name, ...result });
+        // An ambiguous email is not an error -- it is a question only the admin
+        // can answer, so it comes back as one instead of as a silent zero.
+        if (result.ambiguous) {
+          results.push({
+            clientId: client.id,
+            name: client.name,
+            ...result,
+            error: `${result.ambiguous.length} Stripe customers use ${client.email}. Link the right one.`,
+          });
+        } else {
+          results.push({ clientId: client.id, name: client.name, ...result });
+        }
       } catch (err) {
         results.push({ clientId: client.id, name: client.name, error: err.message });
       }
@@ -140,6 +151,67 @@ router.post('/sync', requireCSRF, requireRole('admin'), async (req, res, next) =
     await audit(req.user.id, 'sync', 'billing', one?.id || 'all', { clients: results.length });
     res.locals.liveAudience = clients.map((c) => c.id);
     res.json({ ok: true, synced: results });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * The Stripe customers an admin can file a client under.
+ *
+ * Read-only, admin-only, and deliberately not exposed to clients: it names
+ * every customer on the account, which is the whole customer list of the
+ * business.
+ */
+router.get('/customers', requireRole('admin'), async (req, res, next) => {
+  try {
+    if (!stripeSync.isEnabled()) {
+      return res.status(503).json({ error: 'Stripe is not configured yet. Set STRIPE_SECRET_KEY (see README).' });
+    }
+    res.json({ customers: await stripeSync.listCustomers() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * File a client under a Stripe customer, then pull their history straight away.
+ *
+ * Without this the only pairing was "the client's email happens to equal the
+ * Stripe customer's email", which on a real account matches nothing, or worse,
+ * matches the wrong company. Send `stripeCustomerId: null` to unfile them.
+ */
+router.post('/link', requireCSRF, requireRole('admin'), async (req, res, next) => {
+  try {
+    if (!stripeSync.isEnabled()) {
+      return res.status(503).json({ error: 'Stripe is not configured yet. Set STRIPE_SECRET_KEY (see README).' });
+    }
+
+    const { clientId, stripeCustomerId = null } = req.body || {};
+    const client = clientId ? await db.find('users', clientId) : null;
+    if (!client || client.role !== 'client') {
+      return res.status(404).json({ error: 'No such client.' });
+    }
+    if (stripeCustomerId != null && typeof stripeCustomerId !== 'string') {
+      return res.status(400).json({ error: 'stripeCustomerId must be a Stripe customer id, or null to unlink.' });
+    }
+
+    let link;
+    try {
+      link = await stripeSync.linkClient(client.id, stripeCustomerId || null);
+    } catch (err) {
+      // A wrong id is the admin's typo, not a server fault.
+      if (err?.type === 'StripeInvalidRequestError') return res.status(400).json({ error: err.message });
+      throw err;
+    }
+
+    // Linking without importing the history would leave the screen empty and
+    // the admin wondering whether it worked.
+    const synced = stripeCustomerId ? await stripeSync.backfillClient(client) : { payments: 0 };
+
+    await audit(req.user.id, 'update', 'billing_link', client.id, { stripeCustomerId: stripeCustomerId || null });
+    res.locals.liveAudience = [client.id];
+    res.json({ ok: true, ...link, payments: synced.payments });
   } catch (err) {
     next(err);
   }
@@ -287,7 +359,7 @@ async function handleEvent(event) {
     case 'invoice.paid':
     case 'invoice.payment_succeeded': {
       const clientId = await clientIdForCustomer(object.customer, { email: object.customer_email });
-      const { payment, created } = await stripeSync.upsertPayment(stripeSync.fromInvoice(object, { clientId }));
+      const { payment, created, upgraded } = await stripeSync.upsertPayment(stripeSync.fromInvoice(object, { clientId }));
       if (!clientId) return;
 
       await stripeSync.saveBilling(clientId, {
@@ -299,7 +371,9 @@ async function handleEvent(event) {
       pushMoneyChange(clientId);
 
       // Only the first time: a replayed webhook must not re-thank anyone.
-      if (created && payment?.status === 'paid') {
+      // `upgraded` covers the invoice arriving after the charge that paid it,
+      // which is one payment seen twice, not two payments.
+      if ((created || upgraded) && payment?.status === 'paid') {
         await notify(clientId, `Payment received: ${formatMoney(payment.amount, payment.currency)}`, 'billing');
         await emailPayment(clientId, 'paymentReceived', {
           clientName: (await db.find('users', clientId))?.name,

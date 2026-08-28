@@ -75,11 +75,65 @@ async function upsertPayment(record) {
     return { payment: updated, created: false };
   }
 
+  // Not seen under this id -- but an invoice and the charge that paid it are
+  // two ids for one payment, and current Stripe API versions no longer link
+  // them (`invoice.charge` and `charge.invoice` both come back empty). Left
+  // alone, every invoiced payment was mirrored twice and every total a client
+  // read was exactly double what they had actually paid. The payment intent is
+  // the same on both, so it is what joins them.
+  if (record.stripePaymentIntent) {
+    const sibling = (await db.filter('payments', (p) => p.stripePaymentIntent === record.stripePaymentIntent))[0];
+    if (sibling) {
+      const merged = await db.update('payments', sibling.id, mergePayment(sibling, record));
+      // A charge webhook can beat its invoice. When the invoice then folds into
+      // that row this is still the first time the payment has been seen as an
+      // invoice, and the client is still owed their receipt -- so say so rather
+      // than letting the merge swallow the email.
+      return { payment: merged, created: false, upgraded: sibling.kind !== 'invoice' && record.kind === 'invoice' };
+    }
+  }
+
   const payment = await db.insert('payments', {
     ...record,
     createdAt: record.createdAt || new Date().toISOString(),
   });
   return { payment, created: true };
+}
+
+/**
+ * Fold a second view of one payment into the row already stored.
+ *
+ * The invoice knows what the payment was for and where its PDF lives; the
+ * charge knows which card paid it. Whichever arrives second should add what it
+ * knows without throwing away what the first one had, and an invoice always
+ * wins the identity because that is the document the client is shown.
+ */
+function mergePayment(existing, incoming) {
+  const invoiceWins = existing.kind === 'invoice' && incoming.kind !== 'invoice';
+  const base = invoiceWins ? incoming : existing;
+  const lead = invoiceWins ? existing : incoming;
+
+  const merged = { ...base, ...lead };
+  for (const [key, value] of Object.entries(merged)) {
+    if (value === null || value === undefined) {
+      const fallback = invoiceWins ? incoming[key] : existing[key];
+      if (fallback !== null && fallback !== undefined) merged[key] = fallback;
+    }
+  }
+  merged.id = existing.id;
+  merged.clientId = incoming.clientId || existing.clientId;
+  merged.createdAt = existing.createdAt;
+  return merged;
+}
+
+/** The payment intent that settled an invoice, wherever this API version files it. */
+function paymentIntentOf(invoice) {
+  const direct = invoice.payment_intent;
+  if (typeof direct === 'string') return direct;
+  if (direct?.id) return direct.id;
+  const payment = invoice.payments?.data?.[0]?.payment;
+  if (typeof payment?.payment_intent === 'string') return payment.payment_intent;
+  return payment?.payment_intent?.id || null;
 }
 
 /** A Stripe invoice, flattened into the shape the portal reads. */
@@ -92,6 +146,10 @@ function fromInvoice(invoice, { clientId = null } = {}) {
     clientId,
     stripeCustomerId: typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id || null,
     stripeObjectId: invoice.id,
+    // Newer API versions report this through the `payments` sub-list; older
+    // ones put it straight on the invoice. Either way it is the id the paying
+    // charge also carries, which is what stops the two being counted twice.
+    stripePaymentIntent: paymentIntentOf(invoice),
     kind: 'invoice',
     description:
       invoice.description
@@ -121,6 +179,7 @@ function fromCharge(charge, { clientId = null } = {}) {
     clientId,
     stripeCustomerId: typeof charge.customer === 'string' ? charge.customer : charge.customer?.id || null,
     stripeObjectId: charge.id,
+    stripePaymentIntent: typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id || null,
     kind: charge.refunded ? 'refund' : 'charge',
     description: charge.description || 'Payment',
     amount: fromMinorUnits(charge.amount_refunded > 0 ? charge.amount_refunded : charge.amount, currency),
@@ -151,7 +210,10 @@ function fromSubscription(subscription) {
     amount: price ? fromMinorUnits(price.unit_amount, currency) * (item?.quantity || 1) : null,
     currency,
     interval: price?.recurring?.interval || null,
-    currentPeriodEnd: isoFromUnix(subscription.current_period_end),
+    // Newer Stripe API versions moved the billing period onto each subscription
+    // item; older ones keep it on the subscription. Read both so an account on
+    // either version still gets a renewal date instead of a blank.
+    currentPeriodEnd: isoFromUnix(subscription.current_period_end ?? item?.current_period_end),
     cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
   };
 }
@@ -188,6 +250,24 @@ async function readDefaultCard(stripe, customerId) {
 }
 
 /**
+ * Put the product's name on the subscription's price, in place.
+ *
+ * The plan name a client reads is the product's name, which lives one level
+ * past what Stripe will expand in a list call. One extra request buys a real
+ * plan name instead of "Subscription"; failing to get it is not worth losing
+ * the sync over.
+ */
+async function attachProduct(stripe, subscription) {
+  const price = subscription.items?.data?.[0]?.price;
+  if (!price || typeof price.product !== 'string') return;
+  try {
+    price.product = await stripe.products.retrieve(price.product);
+  } catch {
+    // Leave the id in place; fromSubscription falls back to the nickname.
+  }
+}
+
+/**
  * Pull one client's whole money history from Stripe and mirror it locally.
  *
  * Used on first connect, by the admin's "Sync from Stripe" button, and as the
@@ -201,34 +281,60 @@ async function backfillClient(client, { limit = 100 } = {}) {
   let customerId = billing?.stripeCustomerId || null;
 
   // No customer on file: find one by email before creating a duplicate.
+  //
+  // Two are fetched rather than one so an ambiguous email can be recognised
+  // instead of resolved by luck. One real Stripe account here has two separate
+  // companies filed under the same contact address; picking whichever Stripe
+  // listed first would have shown a client half of someone else's payments and
+  // hidden half of their own. When the email is ambiguous nothing is guessed --
+  // the admin is told to link the right customer by hand.
   if (!customerId && client.email) {
-    const found = await stripe.customers.list({ email: client.email, limit: 1 });
+    const found = await stripe.customers.list({ email: client.email, limit: 2 });
+    if (found.data.length > 1) {
+      return {
+        customerId: null,
+        payments: 0,
+        subscription: null,
+        ambiguous: found.data.map((c) => ({ id: c.id, name: c.name || null, email: c.email || null })),
+      };
+    }
     customerId = found.data[0]?.id || null;
   }
   if (!customerId) return { customerId: null, payments: 0, subscription: null };
 
   const [invoices, charges, subscriptions, card] = await Promise.all([
-    stripe.invoices.list({ customer: customerId, limit, expand: ['data.charge'] }),
+    stripe.invoices.list({ customer: customerId, limit, expand: ['data.charge', 'data.payments'] }),
     stripe.charges.list({ customer: customerId, limit }),
-    stripe.subscriptions.list({ customer: customerId, limit: 1, status: 'all', expand: ['data.items.data.price.product'] }),
+    // `data.items.data.price.product` is five levels deep and Stripe refuses
+    // more than four, so asking for it failed the whole backfill with a 400 --
+    // which is why "Sync from Stripe" returned an error for every client. The
+    // product name is fetched separately below instead.
+    stripe.subscriptions.list({ customer: customerId, limit: 1, status: 'all', expand: ['data.items.data.price'] }),
     readDefaultCard(stripe, customerId),
   ]);
 
   let count = 0;
+  const invoiced = new Set();
   for (const invoice of invoices.data) {
-    await upsertPayment(fromInvoice(invoice, { clientId: client.id }));
+    const record = fromInvoice(invoice, { clientId: client.id });
+    if (record.stripePaymentIntent) invoiced.add(record.stripePaymentIntent);
+    await upsertPayment(record);
     count += 1;
   }
 
-  // Only charges Stripe did not already report as part of an invoice, so a
-  // subscription payment is not counted twice.
+  // Only charges that are not already an invoice, so one payment is not counted
+  // twice. `charge.invoice` is empty on current API versions, so the payment
+  // intent -- which the invoice and its charge share -- is what is checked.
   for (const charge of charges.data) {
     if (charge.invoice) continue;
-    await upsertPayment(fromCharge(charge, { clientId: client.id }));
+    const record = fromCharge(charge, { clientId: client.id });
+    if (record.stripePaymentIntent && invoiced.has(record.stripePaymentIntent)) continue;
+    await upsertPayment(record);
     count += 1;
   }
 
   const subscription = subscriptions.data[0] || null;
+  if (subscription) await attachProduct(stripe, subscription);
   const patch = {
     stripeCustomerId: customerId,
     ...card,
@@ -239,6 +345,92 @@ async function backfillClient(client, { limit = 100 } = {}) {
 
   await saveBilling(client.id, patch);
   return { customerId, payments: count, subscription: subscription?.id || null };
+}
+
+/**
+ * Every customer on the Stripe account, with the client each one is filed
+ * under. This is what the admin's "link a Stripe customer" picker reads, and
+ * the reason it exists: a workspace's client emails and its Stripe customer
+ * emails are two separate address books that nobody keeps in step. Matching on
+ * email alone found nothing at all here -- and where it did match, it matched
+ * two companies to one address. So the pairing is stated, not inferred.
+ */
+async function listCustomers({ limit = 100 } = {}) {
+  const stripe = getStripe();
+  if (!stripe) throw new Error('Stripe is not configured. Set STRIPE_SECRET_KEY first.');
+
+  const [customers, billing] = await Promise.all([
+    stripe.customers.list({ limit }),
+    db.all('billing'),
+  ]);
+  const linkedTo = new Map(billing.filter((b) => b.stripeCustomerId).map((b) => [b.stripeCustomerId, b.clientId]));
+
+  return customers.data.map((c) => ({
+    id: c.id,
+    email: c.email || null,
+    name: c.name || null,
+    createdAt: isoFromUnix(c.created),
+    delinquent: Boolean(c.delinquent),
+    linkedClientId: linkedTo.get(c.id) || null,
+  }));
+}
+
+/**
+ * File a client under a Stripe customer, or unfile them.
+ *
+ * Unlinking releases the mirrored payments rather than deleting them: the rows
+ * stay (they are Stripe's history, not ours to destroy) but stop being anyone's,
+ * so a customer moved to the right client cannot leave the old one still
+ * showing payments they never made.
+ */
+async function linkClient(clientId, stripeCustomerId) {
+  const previous = await billingForClient(clientId);
+
+  if (!stripeCustomerId) {
+    if (previous?.stripeCustomerId) await releasePayments(clientId, previous.stripeCustomerId);
+    await saveBilling(clientId, {
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      status: 'no_subscription',
+      plan: null,
+      amount: null,
+      interval: null,
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+      cardBrand: null,
+      cardLast4: null,
+      latestInvoiceUrl: null,
+    });
+    return { clientId, stripeCustomerId: null, payments: 0 };
+  }
+
+  const stripe = getStripe();
+  if (!stripe) throw new Error('Stripe is not configured. Set STRIPE_SECRET_KEY first.');
+
+  // Fail before writing anything if the id is not a customer on this account.
+  const customer = await stripe.customers.retrieve(stripeCustomerId);
+  if (customer.deleted) throw new Error('That Stripe customer has been deleted.');
+
+  // One customer belongs to one client. Taking it from another client releases
+  // their payments too, or both would show the same money.
+  const held = await billingForCustomer(stripeCustomerId);
+  if (held && held.clientId !== clientId) {
+    await releasePayments(held.clientId, stripeCustomerId);
+    await db.update('billing', held.id, { stripeCustomerId: null, status: 'no_subscription', updatedAt: new Date().toISOString() });
+  }
+  if (previous?.stripeCustomerId && previous.stripeCustomerId !== stripeCustomerId) {
+    await releasePayments(clientId, previous.stripeCustomerId);
+  }
+
+  await saveBilling(clientId, { stripeCustomerId });
+  return { clientId, stripeCustomerId, customerName: customer.name || null, customerEmail: customer.email || null };
+}
+
+/** Detach a client's payment rows for one customer, keeping the rows. */
+async function releasePayments(clientId, stripeCustomerId) {
+  const rows = await db.filter('payments', (p) => p.clientId === clientId && p.stripeCustomerId === stripeCustomerId);
+  for (const row of rows) await db.update('payments', row.id, { clientId: null });
+  return rows.length;
 }
 
 /**
@@ -285,5 +477,8 @@ module.exports = {
   fromSubscription,
   saveBilling,
   backfillClient,
+  listCustomers,
+  linkClient,
+  releasePayments,
   summariseForClient,
 };
