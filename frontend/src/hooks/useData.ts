@@ -321,6 +321,47 @@ export function useSyncStripe() {
   });
 }
 
+/** One entry in the admin's list of Stripe customers to file a client under. */
+export interface StripeCustomer {
+  id: string;
+  email: string | null;
+  name: string | null;
+  createdAt: string | null;
+  delinquent: boolean;
+  linkedClientId: string | null;
+}
+
+/**
+ * Every customer on the Stripe account, admin-only.
+ *
+ * Client emails and Stripe customer emails are two address books nobody keeps
+ * in step, so which client a customer belongs to is stated by an admin rather
+ * than guessed from an address.
+ */
+export function useStripeCustomers(enabled = true) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["stripe-customers"],
+    queryFn: () => api<{ customers: StripeCustomer[] }>("GET", "/billing/customers").then((d) => d.customers),
+    enabled: enabled && user?.role === "admin",
+    staleTime: 60_000,
+  });
+}
+
+/** File a client under a Stripe customer, or pass null to unfile them. */
+export function useLinkStripeCustomer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { clientId: string; stripeCustomerId: string | null }) =>
+      api<{ ok: boolean; payments: number; customerName?: string | null }>("POST", "/billing/link", vars),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["payments"] });
+      qc.invalidateQueries({ queryKey: ["billing"] });
+      qc.invalidateQueries({ queryKey: ["stripe-customers"] });
+    },
+  });
+}
+
 /** Opens Stripe's own hosted page, where card details are entered. */
 export function useBillingPortal() {
   return useMutation({

@@ -65,7 +65,7 @@ const SCHEMAS = {
   // keyed by its Stripe object id so a replayed webhook updates rather than
   // duplicates.
   payments: [
-    'id', 'client_id', 'stripe_customer_id', 'stripe_object_id', 'kind',
+    'id', 'client_id', 'stripe_customer_id', 'stripe_object_id', 'stripe_payment_intent', 'kind',
     'description', 'amount', 'currency', 'status', 'paid_at', 'period_start', 'period_end',
     'invoice_url', 'receipt_url', 'invoice_number', 'card_brand', 'card_last4',
     'failure_message', 'created_at',

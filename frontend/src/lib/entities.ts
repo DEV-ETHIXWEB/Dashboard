@@ -124,6 +124,8 @@ export interface Payment {
   id: string;
   clientId: string | null;
   stripeObjectId: string;
+  /** Shared by an invoice and the charge that paid it, so the two never double up. */
+  stripePaymentIntent?: string | null;
   kind: "invoice" | "charge" | "refund";
   description?: string | null;
   amount: number;

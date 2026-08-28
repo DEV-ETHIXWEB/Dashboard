@@ -1,0 +1,148 @@
+<title>Stripe Billing Integration</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html{background:#ffffff}
+  body{
+    margin:0; background:#ffffff; color:#1a1a1a;
+    font:15px/1.5 Georgia, "Times New Roman", serif;
+  }
+  .wrap{max-width:780px;margin:0 auto;padding:34px 22px 70px}
+
+  h1{font-size:25px;line-height:1.15;margin:0 0 4px;font-weight:normal}
+  h2{font-size:18px;margin:24px 0 6px;font-weight:normal;border-bottom:1px solid #1a1a1a;padding-bottom:4px}
+  h3{font-size:15px;margin:16px 0 4px;font-weight:bold}
+  p{margin:7px 0}
+  .lede{color:#4a4a4a;font-size:14px;margin:0 0 4px}
+  .stamp{color:#666;font-size:12.5px;line-height:1.45;margin-top:10px;
+    border-top:1px solid #d5d5d5;border-bottom:1px solid #d5d5d5;padding:8px 0}
+
+  .box{border:1px solid #c8c8c8;padding:9px 12px;margin:10px 0;background:#fafafa}
+  .warn{border:1px solid #1a1a1a;padding:9px 12px;margin:10px 0;background:#f4f4f4}
+
+  .item{border-top:1px solid #d5d5d5;padding:11px 0 2px}
+  .item:first-of-type{border-top:2px solid #1a1a1a}
+  .rank{font-size:11.5px;color:#555;letter-spacing:.03em;text-transform:uppercase}
+  .name{font-size:15.5px;font-weight:bold;margin:2px 0 5px}
+  .lbl{font-weight:bold}
+
+  table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12.5px}
+  th,td{text-align:left;padding:4px 7px;border:1px solid #c8c8c8;vertical-align:top;line-height:1.35}
+  th{background:#f0f0f0;font-weight:bold}
+  .scroll{overflow-x:auto}
+
+  code{font-family:Consolas,"Courier New",monospace;font-size:12.5px;background:#f0f0f0;padding:0 3px}
+  pre{font-family:Consolas,"Courier New",monospace;font-size:11.5px;line-height:1.4;
+    background:#f4f4f4;border-left:3px solid #999;padding:7px 10px;overflow-x:auto;margin:7px 0}
+
+  ul,ol{margin:7px 0;padding-left:20px} li{margin:3px 0}
+  footer{margin-top:18px;border-top:1px solid #1a1a1a;padding-top:8px;color:#555;font-size:12px}
+
+  /* Printing: sized to land inside two A4 pages, with room for a
+     page-break-avoid block to shift without spilling onto a third. */
+  @page{size:A4;margin:11mm 12mm}
+  @media print{
+    body{font:8.8pt/1.3 Georgia,"Times New Roman",serif}
+    .wrap{max-width:none;padding:0}
+    h1{font-size:16pt;margin-bottom:2px}
+    h2{font-size:11pt;margin:11px 0 4px;padding-bottom:2px;page-break-after:avoid}
+    h3{font-size:9.6pt;margin:9px 0 3px;page-break-after:avoid}
+    p{margin:4px 0}
+    .lede{font-size:8.8pt}
+    .stamp{font-size:7.9pt;line-height:1.32;margin-top:6px;padding:5px 0}
+    .box,.warn{padding:5px 8px;margin:6px 0}
+    .item{padding:7px 0 1px;page-break-inside:avoid}
+    .rank{font-size:7.4pt}
+    .name{font-size:9.8pt;margin:1px 0 3px}
+    table{font-size:7.9pt;margin:5px 0;page-break-inside:avoid}
+    th,td{padding:2px 5px;line-height:1.26}
+    pre{font-size:7.4pt;line-height:1.3;padding:4px 7px;margin:4px 0}
+    code{font-size:7.9pt;background:none;padding:0}
+    ul,ol{margin:4px 0;padding-left:16px} li{margin:1px 0}
+    footer{margin-top:10px;padding-top:5px;font-size:7.6pt}
+    a{text-decoration:none;color:inherit}
+  }
+</style>
+
+<div class="wrap">
+
+<h1>Stripe Billing — Setup, Repairs and Verification</h1>
+<p class="lede">EthixWeb CRM. Client payment history, mirrored from Stripe and managed by an admin.</p>
+
+<div class="stamp">
+27 August 2026 · Branch <code>main</code> at commit <code>53f825b</code> · 8 files changed, 471 lines added<br>
+Asked for: connect the live Stripe account, load payment data per client, let an admin manage it, prove it works.<br>
+Verified by: 38 automated checks driving the real app against the live Stripe account on a throwaway in-memory database, plus a manual pass through the admin screen. No production record was written; no key is printed here.
+</div>
+
+<h2>The short version</h2>
+
+<p>The Stripe code was already written, and it was good code. It had never been run against a real Stripe account, and three faults stopped it working at all. All three are fixed, plus a fourth that was quietly getting the money wrong: <strong>every invoiced payment was counted twice</strong>. A client who had paid $4,750 would have been shown $9,500 — two stored rows for one payment, not a display problem.</p>
+
+<div class="box">
+<p><span class="lbl">Plain summary:</span> Stripe is connected, an admin can say which Stripe customer belongs to which client, and each client's real history loads on their page. Totals now match the Stripe dashboard to the cent for all five customers — $2,196 · $4,000 · $4,750 · $260 · $4,750.</p>
+</div>
+
+<h2>What was fixed</h2>
+
+<div class="item">
+<div class="rank">Fault 1 of 4 · Critical · Confirmed</div>
+<div class="name">Every invoiced payment was counted twice</div>
+<p>One payment appears in Stripe as two objects — an <em>invoice</em> and the <em>charge</em> that paid it. The app skipped the charge if it named its invoice, but current Stripe API versions no longer fill that field in, in either direction. The skip never happened, so both were stored. Asking Stripe directly for one customer:</p>
+<pre>invoices marked paid  = $4,750
+charges succeeded     = $4,750   (the same five payments)
+what the app stored   = $9,500   (all ten rows)</pre>
+<p><span class="lbl">Fix:</span> an invoice and its charge share a payment intent. That id is now saved with every payment row, and a second view of the same money merges into the existing row instead of adding another. The invoice keeps the description, number and PDF link; the charge contributes card brand and last four digits. Neither is lost.</p>
+</div>
+
+<div class="item">
+<div class="rank">Fault 2 of 4 · High · Confirmed</div>
+<div class="name">"Sync from Stripe" failed for every client, every time</div>
+<p>The subscription request asked Stripe to expand <code>data.items.data.price.product</code> — five levels deep. Stripe permits four and rejects the whole request: <em>"You cannot expand more than 4 levels of a property."</em> This is the repair button for a webhook that never arrived, and it had never once succeeded against the live account.</p>
+<p><span class="lbl">Fix:</span> ask for four levels, fetch the product name in one extra request. If that request fails the sync still completes, falling back to the price nickname.</p>
+</div>
+
+<div class="item">
+<div class="rank">Fault 3 of 4 · High · Confirmed</div>
+<div class="name">No client could ever be matched to a Stripe customer</div>
+<p>The only pairing rule was "their email addresses happen to be identical". Not one of the three client accounts matched any of the five Stripe customers, so every client would have shown an empty payments page forever, with no way for an admin to correct it. Worse: two companies — <em>Gary's Pipelining</em> and <em>All Phase Plumbing</em> — share one contact address, and the old code took whichever Stripe returned first, so a match could have shown a client another company's history.</p>
+<p><span class="lbl">Fix:</span> the pairing is stated by an admin, not guessed. A new admin-only control lists every Stripe customer and files a client under one, importing that history immediately. A genuinely ambiguous email now says so instead of picking one.</p>
+</div>
+
+<div class="item">
+<div class="rank">Fault 4 of 4 · Medium · Confirmed</div>
+<div class="name">A payment could arrive with no receipt email</div>
+<p>Introduced by the fix for fault 1 and caught before it shipped. Stripe does not guarantee event order; if a charge notification arrived before its invoice, the merge made the invoice look like a repeat of something already recorded — and repeats deliberately send no email, so that client would silently never be thanked.</p>
+<p><span class="lbl">Fix:</span> the merge reports when an invoice folds into a charge for the first time, which counts as a first sighting. A genuinely replayed notification still sends nothing.</p>
+</div>
+
+<h2>What was added</h2>
+
+<p>Every client account is now listed on the Payments page, including clients with no Stripe link — who need attention and previously did not appear at all. Each row offers a <strong>dropdown</strong> of the real Stripe customers (choosing one imports that history and reports how many payments came in; <em>Not linked</em> unlinks) and a <strong>View</strong> button that narrows the page to that client and points the sync button at them. Moving a customer between clients releases the first client's rows in the same step, so two clients can never show the same money. Unlinking detaches the payment records but keeps them — they are Stripe's history.</p>
+
+<p><span class="lbl">Who sees what:</span> a client sees only their own history and can neither list customers nor link anything; an admin sees the whole workspace or one client and does the linking and syncing; sales, project managers and employees see no billing at all.</p>
+
+<p>The customer list is admin-only on purpose — it names every customer of the business. A client requesting it directly is refused, as is a client trying to link themselves; both were tested as real requests, not assumed from a hidden menu.</p>
+
+<h2>How it was verified</h2>
+
+<div class="scroll">
+<table>
+<tr><th>Checked</th><th>Result</th></tr>
+<tr><td>Key permissions for every call the app makes</td><td>All permitted, verified without creating anything</td></tr>
+<tr><td>Totals against Stripe, all five customers</td><td>Exact to the cent</td></tr>
+<tr><td>Two clients under one shared email</td><td>No payment appears under both</td></tr>
+<tr><td>Client requesting the customer list, or linking themselves</td><td>Refused, 403</td></tr>
+<tr><td>Signed webhook / forged signature / same webhook twice</td><td>Accepted on the right client / rejected 400 / one row</td></tr>
+<tr><td>Wrong customer id / wrong client id; existing test suite</td><td>400 and 404, not a server error; suite passes</td></tr>
+</table>
+</div>
+
+<p>Driven by hand in a browser, the dropdown listed all five real customers, linking one showed <em>1 of 1 linked to Stripe</em>, and the page rendered <strong>$4,750.00 across 5 payments</strong> with the correct invoice numbers, dates and receipt links.</p>
+
+<p class="stamp"><span class="lbl">Files changed:</span> <code>utils/stripeSync.js</code> (double-count, expand depth, customer listing, linking, ambiguous emails) · <code>routes/billing.js</code> (two admin endpoints, receipt-email ordering) · <code>db/setup.js</code> and <code>db/schemas.js</code> (one new column joining an invoice to its charge) · <code>frontend/src/pages/Billing.tsx</code> (per-client rows, link control, per-client view and sync) · <code>frontend/src/hooks/useData.ts</code> and <code>lib/entities.ts</code> (hooks and types) · <code>.env</code> (git-ignored, not committed).</p>
+
+<footer>
+EthixWeb CRM · Stripe billing integration · 27 August 2026 · Every figure here was read from the live Stripe account or produced by a check that was actually run.
+</footer>
+
+</div>

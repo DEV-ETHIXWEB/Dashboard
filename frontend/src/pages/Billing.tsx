@@ -1,8 +1,18 @@
+import { useState } from "react";
 import { toast } from "sonner";
 import { CreditCard, CheckCircle2, Loader2, RefreshCw, Settings2, Wallet } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { useBillingStatus, useBillingPortal, usePayments, useSyncStripe, useUsers } from "@/hooks/useData";
+import {
+  useBillingStatus,
+  useBillingPortal,
+  usePayments,
+  useSyncStripe,
+  useUsers,
+  useStripeCustomers,
+  useLinkStripeCustomer,
+} from "@/hooks/useData";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { MoneyPanel, DataList, DataRow, PanelEmpty, BentoGrid, BentoColumns, bento } from "@/components/money/Money";
 import { AttentionNotice, FeeBreakdown, TrustFooter } from "@/components/money/Trust";
@@ -48,11 +58,17 @@ function describeStatus(status: string | undefined): { headline: string; detail:
 export default function Billing() {
   const { user } = useAuth();
   const isStaff = user != null && ["admin", "sales", "project_manager"].includes(user.role);
+  const isAdmin = user?.role === "admin";
   const { data, isLoading, isError, error, refetch } = useBillingStatus();
   const { data: users } = useUsers();
-  const { data: payments } = usePayments();
   const sync = useSyncStripe();
   const portal = useBillingPortal();
+
+  /** Which client the staff view is looking at; null is the whole workspace. */
+  const [focus, setFocus] = useState<string | null>(null);
+  const { data: payments } = usePayments(focus ?? undefined);
+  const { data: customers } = useStripeCustomers(isAdmin);
+  const link = useLinkStripeCustomer();
 
   const checkout = useMutation({
     mutationFn: () => api<{ url: string }>("POST", "/billing/checkout"),
@@ -95,6 +111,32 @@ export default function Billing() {
     const rows = (data?.billing as BillingRecord[]) ?? [];
     const clientName = (id: string) => users?.find((u) => u.id === id)?.name ?? id;
 
+    // One row per client account, not per billing record: a client nobody has
+    // filed under a Stripe customer yet is exactly the one an admin needs to
+    // see, and they have no billing record to be listed by.
+    const clients = (users ?? []).filter((u) => u.role === "client");
+    const billingFor = (clientId: string) => rows.find((b) => b.clientId === clientId);
+    const customerFor = (clientId: string) => {
+      const id = billingFor(clientId)?.stripeCustomerId;
+      return id ? customers?.find((c) => c.id === id) ?? { id, name: null, email: null } : null;
+    };
+
+    /** File a client under a customer, or unfile them, and say what happened. */
+    const relink = (clientId: string, value: string) =>
+      link.mutate(
+        { clientId, stripeCustomerId: value === "none" ? null : value },
+        {
+          onSuccess: (r) => {
+            toast.success(
+              value === "none"
+                ? "Unlinked. Their payments are no longer shown against this account."
+                : `Linked${r.customerName ? ` to ${r.customerName}` : ""} · ${r.payments} payment${r.payments === 1 ? "" : "s"} imported`,
+            );
+          },
+          onError: (err) => toast.error(err instanceof Error ? err.message : "Could not link that customer"),
+        },
+      );
+
     return (
       <BentoGrid className="mx-auto w-full max-w-6xl">
         <header className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${bento(4)}`}>
@@ -111,7 +153,7 @@ export default function Billing() {
               disabled={sync.isPending || data?.enabled === false}
               title={data?.enabled === false ? "Stripe is not configured yet" : "Pull the latest from Stripe"}
               onClick={() =>
-                sync.mutate(undefined, {
+                sync.mutate(focus ?? undefined, {
                   onSuccess: (r) => {
                     const failed = r.synced.filter((x) => x.error);
                     toast.success(
@@ -125,25 +167,86 @@ export default function Billing() {
               }
             >
               {sync.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-              Sync from Stripe
+              {focus ? `Sync ${clientName(focus)}` : "Sync from Stripe"}
             </Button>
           )}
         </header>
 
-        <MoneyPanel className={bento(4)} title="All client accounts" subtitle={`${rows.length} on record`}>
-          {rows.length === 0 ? (
-            <p className="py-1 text-sm text-muted-foreground">No payment records yet.</p>
+        <MoneyPanel
+          className={bento(4)}
+          title="Client accounts"
+          subtitle={
+            isAdmin
+              ? `${clients.filter((c) => billingFor(c.id)?.stripeCustomerId).length} of ${clients.length} linked to Stripe`
+              : `${rows.length} on record`
+          }
+        >
+          {clients.length === 0 ? (
+            <PanelEmpty>No client accounts yet.</PanelEmpty>
           ) : (
             <DataList>
-              {rows.map((b) => {
-                const state = describeStatus(b.status);
+              {clients.map((c) => {
+                const b = billingFor(c.id);
+                const customer = customerFor(c.id);
+                const state = describeStatus(b?.status);
+                const linked = Boolean(customer);
+
                 return (
                   <DataRow
-                    key={b.id}
-                    title={clientName(b.clientId)}
-                    meta={`${b.plan ?? "No plan"} · Updated ${plainDate(b.updatedAt)}`}
-                    status={state.ok ? state.headline : undefined}
-                    flag={state.ok ? undefined : state.headline}
+                    key={c.id}
+                    title={c.name}
+                    meta={
+                      linked
+                        ? `${customer?.name ?? customer?.id} · ${b?.plan ?? "No plan"} · Updated ${plainDate(b?.updatedAt)}`
+                        : "Not linked to Stripe, so no payments are shown"
+                    }
+                    status={linked && state.ok ? state.headline : undefined}
+                    flag={linked && !state.ok ? state.headline : !linked ? "Needs linking" : undefined}
+                    action={
+                      isAdmin ? (
+                        <div className="flex items-center gap-2">
+                          {/* The pairing is chosen, never inferred: client emails
+                              and Stripe customer emails are two separate lists,
+                              and one address here belongs to two companies. */}
+                          <Select
+                            value={customer?.id ?? "none"}
+                            disabled={data?.enabled === false || link.isPending}
+                            onValueChange={(v) => relink(c.id, v ?? "none")}
+                          >
+                            <SelectTrigger className="h-10 w-[190px]" aria-label={`Stripe customer for ${c.name}`}>
+                              {/* The label is stated rather than looked up: the
+                                  list is unmounted while closed, so Radix would
+                                  otherwise fall back to showing the raw value. */}
+                              <SelectValue placeholder="Link a customer">
+                                {customer ? (customer.name ?? customer.email ?? customer.id) : "Not linked"}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Not linked</SelectItem>
+                              {(customers ?? []).map((cust) => {
+                                const heldBy =
+                                  cust.linkedClientId && cust.linkedClientId !== c.id
+                                    ? ` · ${clientName(cust.linkedClientId)}`
+                                    : "";
+                                return (
+                                  <SelectItem key={cust.id} value={cust.id}>
+                                    {cust.name ?? cust.email ?? cust.id}
+                                    {heldBy}
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            variant="ghost"
+                            className="h-10 px-3"
+                            onClick={() => setFocus(focus === c.id ? null : c.id)}
+                          >
+                            {focus === c.id ? "Show all" : "View"}
+                          </Button>
+                        </div>
+                      ) : undefined
+                    }
                   />
                 );
               })}
@@ -153,18 +256,27 @@ export default function Billing() {
 
         <MoneyPanel
           className={bento(4)}
-          title="Payments received"
+          title={focus ? `Payments from ${clientName(focus)}` : "Payments received"}
           subtitle={
             payments && payments.count > 0
               ? `${paymentMoney(payments.total, payments.currency)} across ${payments.count} payment${payments.count === 1 ? "" : "s"}`
               : "Nothing recorded yet"
+          }
+          action={
+            focus ? (
+              <Button variant="ghost" className="h-10 px-3" onClick={() => setFocus(null)}>
+                Show every client
+              </Button>
+            ) : undefined
           }
         >
           {!payments || payments.payments.length === 0 ? (
             <PanelEmpty>
               {data?.enabled === false
                 ? "Stripe is not configured, so there is nothing to mirror yet."
-                : "No payments have come through Stripe yet. Sync pulls in anything already on the account."}
+                : focus && !customerFor(focus)
+                  ? "This client is not linked to a Stripe customer yet. Pick one above and their history is imported straight away."
+                  : "No payments have come through Stripe yet. Sync pulls in anything already on the account."}
             </PanelEmpty>
           ) : (
             <PaymentList payments={payments.payments.slice(0, 25)} />
