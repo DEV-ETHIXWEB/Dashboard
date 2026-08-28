@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ShieldCheck, Loader2, Lock, Activity, Mail, Sun, Moon, Monitor, Check, Clock } from "lucide-react";
+import { ShieldCheck, Loader2, Lock, Activity, Mail, Sun, Moon, Monitor, Check, Clock, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -62,6 +62,7 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [expiredAccess, setExpiredAccess] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const [otpError, setOtpError] = useState<string | null>(null);
   const [codeDestination, setCodeDestination] = useState<string | null>(null);
@@ -519,13 +520,22 @@ export default function Login() {
                           <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground/70 pointer-events-none" />
                           <Input
                             id="password"
-                            type="password"
+                            type={showPassword ? "text" : "password"}
                             placeholder="••••••••"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             autoComplete="current-password"
-                            className="h-10 pl-10 pr-3.5 bg-background border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all text-sm text-foreground placeholder:text-muted-foreground/50"
+                            className="h-10 pl-10 pr-10 bg-background border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all text-sm text-foreground placeholder:text-muted-foreground/50"
                           />
+                          <button
+                            type="button"
+                            tabIndex={-1}
+                            aria-label={showPassword ? "Hide password" : "Show password"}
+                            onClick={() => setShowPassword((v) => !v)}
+                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-foreground cursor-pointer"
+                          >
+                            {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                          </button>
                         </div>
                       </div>
 
