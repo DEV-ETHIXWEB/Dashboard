@@ -104,6 +104,23 @@ async function listUpdates(ticketId) {
   return updates.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
 }
 
+/**
+ * Display names for a set of user ids, looked up once each.
+ *
+ * The timeline carries author and target ids that the browser cannot always
+ * resolve -- a client is shown a deliberately short staff roster -- so the
+ * names are attached server-side. Ids are deduplicated first: a busy ticket
+ * repeats the same two or three authors down its whole length.
+ *
+ * A missing user yields null rather than throwing: someone who has since been
+ * removed should leave their updates readable, not break the ticket.
+ */
+async function nameMap(ids) {
+  const unique = [...new Set((ids || []).filter(Boolean))];
+  const users = await Promise.all(unique.map((id) => db.find('users', id)));
+  return new Map(unique.map((id, i) => [id, users[i]?.name || null]));
+}
+
 async function insertUpdate(fields) {
   return db.insert('ticket_updates', {
     id: uuidv4(),
@@ -311,6 +328,11 @@ async function createRequest(user, ticket, kind, { targetUserId, note } = {}) {
 /**
  * Accept or decline a pending request. Only the person being asked can answer
  * it -- or an admin, who can unblock a request aimed at someone unavailable.
+ *
+ * The admin override stops at their own requests. It exists so a ticket does
+ * not sit waiting on somebody who is on leave; letting an admin accept a
+ * handover they themselves sent would turn "ask someone to take this" into
+ * "assign it to whoever I like, and log it as their decision".
  */
 async function respondToRequest(user, ticket, requestId, accept) {
   const request = await db.find('ticket_updates', requestId);
@@ -319,7 +341,9 @@ async function respondToRequest(user, ticket, requestId, accept) {
   if (request.status !== REQUEST_STATUS.PENDING) {
     throw new WorkflowError('That request has already been answered.', 409);
   }
-  if (request.targetUserId !== user.id && user.role !== 'admin') {
+  const isTarget = request.targetUserId === user.id;
+  const canUnblock = user.role === 'admin' && request.authorId !== user.id;
+  if (!isTarget && !canUnblock) {
     throw new WorkflowError('Only the person being asked can answer this.', 403);
   }
 
@@ -412,7 +436,7 @@ async function allPendingRequests() {
 module.exports = {
   KINDS, REQUEST_STATUS, STAGES, WorkflowError,
   canView, canRecordProgress, canDelegate,
-  listUpdates, listCollaborators, collaboratorIds,
+  listUpdates, listCollaborators, collaboratorIds, nameMap,
   addProgressUpdate, createRequest, respondToRequest,
   addCollaborator, removeCollaborator,
   pendingRequestsFor, allPendingRequests,
