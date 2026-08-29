@@ -92,6 +92,20 @@ export function useRunDomainSweep() {
   });
 }
 
+/**
+ * Clear mail log entries -- either a hand-picked set of ids, or everything in
+ * a date range. Super-admin only on the server; the button that calls this is
+ * hidden from everyone else too.
+ */
+export function useDeleteMailLog() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (criteria: { ids: string[] } | { from: string; to: string }) =>
+      api<{ ok: true; removed: number }>("DELETE", "/mail/log", criteria),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["mail", "log"] }),
+  });
+}
+
 export function useSendProgressDigest() {
   const qc = useQueryClient();
   return useMutation({

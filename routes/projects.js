@@ -13,30 +13,43 @@ const STATUS_PCT = { 'To Do': 0, 'In Progress': 50, 'In Review': 90, Complete: 1
 router.use(requireAuth);
 router.use(requirePage('projects'));
 
-async function withProgress(project) {
-  const tasks = await db.filter('tasks', (t) => t.projectId === project.id);
+function progressFor(project, tasks) {
   const total = tasks.length;
   const complete = tasks.filter((t) => t.status === 'Complete').length;
   const pct = total === 0 ? 0 : Math.round(tasks.reduce((sum, t) => sum + (STATUS_PCT[t.status] ?? 0), 0) / total);
   return { ...project, progress: { pct, complete, total } };
 }
 
-async function visibleTo(user, project) {
+function visibleTo(user, project, tasksByProject) {
   if (user.role === 'admin' || user.role === 'sales' || user.role === 'project_manager') return true;
   if (user.role === 'client') return project.clientId === user.id;
   if (user.role === 'employee') {
-    const tasks = await db.filter('tasks', (t) => t.projectId === project.id && t.assigneeId === user.id);
-    return tasks.length > 0;
+    const tasks = tasksByProject.get(project.id) || [];
+    return tasks.some((t) => t.assigneeId === user.id);
   }
   return false;
 }
 
+/**
+ * One read of the tasks table, grouped by project, instead of a query per
+ * project -- a workspace with N projects used to run up to 2N full scans of
+ * tasks just to render the list.
+ */
+function groupTasksByProject(tasks) {
+  const byProject = new Map();
+  for (const t of tasks) {
+    if (!byProject.has(t.projectId)) byProject.set(t.projectId, []);
+    byProject.get(t.projectId).push(t);
+  }
+  return byProject;
+}
+
 router.get('/', async (req, res, next) => {
   try {
-    const all = await db.all('projects');
-    const visible = [];
-    for (const p of all) if (await visibleTo(req.user, p)) visible.push(p);
-    const withProgressList = await Promise.all(visible.map(withProgress));
+    const [all, tasks] = await Promise.all([db.all('projects'), db.all('tasks')]);
+    const tasksByProject = groupTasksByProject(tasks);
+    const visible = all.filter((p) => visibleTo(req.user, p, tasksByProject));
+    const withProgressList = visible.map((p) => progressFor(p, tasksByProject.get(p.id) || []));
     res.json({ projects: withProgressList });
   } catch (err) {
     next(err);
@@ -46,9 +59,12 @@ router.get('/', async (req, res, next) => {
 router.get('/:id', async (req, res, next) => {
   try {
     const project = await db.find('projects', req.params.id);
-    if (!project || !(await visibleTo(req.user, project))) return res.status(404).json({ error: 'Project not found' });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
     const tasks = await db.filter('tasks', (t) => t.projectId === project.id);
-    res.json({ project: await withProgress(project), tasks });
+    if (!visibleTo(req.user, project, new Map([[project.id, tasks]]))) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json({ project: progressFor(project, tasks), tasks });
   } catch (err) {
     next(err);
   }
@@ -70,7 +86,7 @@ router.post('/', requireCSRF, requireRole('admin', 'sales', 'project_manager'), 
     await audit(req.user.id, 'create', 'project', project.id);
     await notify(clientId, `A new project was created for you: "${name}"`, 'project');
     if (assignedPmId) await notify(assignedPmId, `You were assigned as PM on "${name}"`, 'project');
-    res.status(201).json({ project: await withProgress(project) });
+    res.status(201).json({ project: progressFor(project, []) });
   } catch (err) {
     next(err);
   }
@@ -106,7 +122,8 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
     if (patch.status && patch.status !== project.status) {
       await notify(project.clientId, `Your project "${project.name}" moved to ${patch.status}`, 'project');
     }
-    res.json({ project: await withProgress(updated) });
+    const tasks = await db.filter('tasks', (t) => t.projectId === req.params.id);
+    res.json({ project: progressFor(updated, tasks) });
   } catch (err) {
     next(err);
   }

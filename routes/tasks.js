@@ -22,9 +22,19 @@ async function visibleTo(user, task) {
 router.get('/', async (req, res, next) => {
   try {
     let tasks = await db.all('tasks');
-    const visible = [];
-    for (const t of tasks) if (await visibleTo(req.user, t)) visible.push(t);
-    tasks = visible;
+
+    // A client sees a task when they own the project it sits on. visibleTo
+    // resolves that a task at a time; the projects are read once here instead.
+    if (req.user.role === 'client') {
+      const projects = await db.filter('projects', (p) => p.clientId === req.user.id);
+      const mine = new Set(projects.map((p) => p.id));
+      tasks = tasks.filter((t) => mine.has(t.projectId));
+    } else {
+      const visible = [];
+      for (const t of tasks) if (await visibleTo(req.user, t)) visible.push(t);
+      tasks = visible;
+    }
+
     if (req.query.projectId) tasks = tasks.filter((t) => t.projectId === req.query.projectId);
     res.json({ tasks });
   } catch (err) {
