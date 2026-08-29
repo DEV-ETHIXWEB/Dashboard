@@ -34,6 +34,8 @@ router.get('/status', (req, res) => {
       connected: clickup.isEnabled(),
       ticketMirroring: clickup.isTicketMirroringEnabled(),
       ticketsListId: clickup.ticketsListId(),
+      taskMirroring: clickup.isTaskMirroringEnabled(),
+      tasksListId: clickup.tasksListId(),
     },
     slack: { connected: slack.isEnabled() },
   });
