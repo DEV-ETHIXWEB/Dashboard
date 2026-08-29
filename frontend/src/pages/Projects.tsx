@@ -33,7 +33,14 @@ export default function Projects() {
   const canManage = user != null && ["admin", "sales", "project_manager"].includes(user.role);
   const canDelete = user?.role === "admin";
   const clients = (users ?? []).filter((u) => u.role === "client");
-  const pms = (users ?? []).filter((u) => u.role === "project_manager");
+  /**
+   * Who can run a project. Admins belong here: the server already treats them
+   * as managers everywhere else (MANAGER_ROLES in utils/ticketWorkflow.js), and
+   * on a small team they are the people actually managing the work. Filtering
+   * to the literal `project_manager` role left this picker empty in a workspace
+   * of admins, which reads as a broken control rather than an empty list.
+   */
+  const pms = (users ?? []).filter((u) => ["admin", "project_manager"].includes(u.role));
 
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -266,6 +273,13 @@ export default function Projects() {
                             ))}
                           </SelectContent>
                         </Select>
+                        {/* An empty dropdown gives no clue whether it is broken
+                            or simply has nobody in it. Say which. */}
+                        {pms.length === 0 && (
+                          <p className="text-[11px] text-muted-foreground">
+                            No managers yet — add one under Team.
+                          </p>
+                        )}
                       </div>
 
                       <div className="space-y-1.5">
