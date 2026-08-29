@@ -18,8 +18,17 @@ const messages = require('../utils/emailMessages');
 const admins = require('../utils/admins');
 const slaWatch = require('../utils/slaWatch');
 const domainWatch = require('../utils/domainWatch');
+const roles = require('../utils/roles');
 
 router.use(requireAuth, requireRole('admin'));
+
+/** Clearing the mail log is a super admin's call -- an ordinary admin can read it, not empty it. */
+function requireSuperAdmin(req, res, next) {
+  if (!roles.isSuperAdmin(req.user)) {
+    return res.status(403).json({ error: 'Only a super admin can delete mail log entries.' });
+  }
+  next();
+}
 
 router.get('/status', async (req, res, next) => {
   try {
@@ -106,6 +115,55 @@ router.get('/log', async (req, res, next) => {
       entries: rows.map(({ html, ...rest }) => ({ ...rest, hasHtml: Boolean(html) })),
       configured: mailer.isEnabled(),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Clear mail log entries so the table does not grow without bound.
+ *
+ * Two ways to pick what goes, matching what the Mail page offers: an explicit
+ * set of ids (checked by hand), or a date range (`from`/`to`, inclusive,
+ * matched against createdAt). Exactly one of the two must be given -- mixing
+ * them would let a date range silently expand a hand-picked set, which is not
+ * what "select these" or "select this range" separately promised.
+ */
+router.delete('/log', requireCSRF, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const { ids, from, to } = req.body || {};
+    const hasIds = Array.isArray(ids) && ids.length > 0;
+    const hasRange = typeof from === 'string' && from && typeof to === 'string' && to;
+
+    if (hasIds && hasRange) {
+      return res.status(400).json({ error: 'Choose either specific messages or a date range, not both.' });
+    }
+    if (!hasIds && !hasRange) {
+      return res.status(400).json({ error: 'Give either a list of message ids or a from/to date range.' });
+    }
+
+    let removed;
+    let criteria;
+    if (hasIds) {
+      const idSet = new Set(ids.map(String));
+      removed = await db.removeWhere('email_log', (e) => idSet.has(e.id));
+      criteria = { mode: 'ids', count: idSet.size };
+    } else {
+      const fromTime = new Date(from);
+      const toTime = new Date(to);
+      if (Number.isNaN(fromTime.getTime()) || Number.isNaN(toTime.getTime())) {
+        return res.status(400).json({ error: 'from and to must be valid dates.' });
+      }
+      // Inclusive of the whole "to" day, not just midnight of it.
+      const fromIso = new Date(fromTime.setHours(0, 0, 0, 0)).toISOString();
+      const toIso = new Date(toTime.setHours(23, 59, 59, 999)).toISOString();
+      if (fromIso > toIso) return res.status(400).json({ error: 'from must not be after to.' });
+      removed = await db.removeWhere('email_log', (e) => e.createdAt >= fromIso && e.createdAt <= toIso);
+      criteria = { mode: 'range', from: fromIso, to: toIso };
+    }
+
+    await audit(req.user.id, 'delete', 'email_log', null, { removed, ...criteria });
+    res.json({ ok: true, removed });
   } catch (err) {
     next(err);
   }

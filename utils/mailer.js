@@ -538,10 +538,7 @@ async function sendTemplate({ to, message, template, entity, entityId }) {
 /** Newest first, for the admin Mail page. */
 async function recentLog(limit = 100) {
   const { db } = require('../db/setup');
-  const rows = await db.all('email_log');
-  return rows
-    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-    .slice(0, limit);
+  return db.recent('email_log', limit);
 }
 
 module.exports = {

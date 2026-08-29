@@ -85,6 +85,18 @@ router.get('/', async (req, res, next) => {
     if (['admin', 'project_manager'].includes(req.user.role)) void slaWatch.maybeSweep();
 
     const all = await db.all('tickets');
+
+    // An employee's visibility depends on the collaborator table, which
+    // canView reads one ticket at a time. Read it once here instead: the list
+    // used to run a full scan of ticket_collaborators per ticket on the page.
+    if (req.user.role === 'employee') {
+      const mine = await db.filter('ticket_collaborators', (c) => c.userId === req.user.id);
+      const onTickets = new Set(mine.map((c) => c.ticketId));
+      return res.json({
+        tickets: all.filter((t) => t.assigneeId === req.user.id || onTickets.has(t.id)),
+      });
+    }
+
     const visible = [];
     for (const t of all) if (await visibleTo(req.user, t)) visible.push(t);
     res.json({ tickets: visible });

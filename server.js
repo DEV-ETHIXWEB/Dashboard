@@ -5,6 +5,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 
 const { seed } = require('./db/setup');
@@ -61,6 +62,12 @@ if (corsOrigins.length > 0) {
 }
 
 app.use(cookieParser());
+
+// Gzip/brotli-negotiated compression for every response this server sends --
+// JSON API payloads and static assets alike. Vite's own hashed output is
+// already minified but not compressed on disk, so this is the only place
+// that shrinks it in transit.
+app.use(compression());
 
 // Emails carry absolute links and the emblem from public/. When APP_BASE_URL
 // is not set, the first request teaches the app what its own origin is.

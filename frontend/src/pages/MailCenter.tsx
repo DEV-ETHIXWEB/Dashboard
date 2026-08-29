@@ -2,10 +2,10 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle, CheckCircle2, Clock, Eye, Inbox, Loader2, Mail, MailCheck, MailX,
-  PlugZap, RefreshCw, Send, ShieldCheck, Users, Globe,
+  PlugZap, RefreshCw, Send, ShieldCheck, Trash2, Users, Globe,
 } from "lucide-react";
 import {
-  useMailLog, useMailLogEntry, useMailPreview, useMailStatus, useMailTemplates,
+  useDeleteMailLog, useMailLog, useMailLogEntry, useMailPreview, useMailStatus, useMailTemplates,
   useRunDomainSweep, useRunSlaSweep, useSendTestEmail, useVerifyTransport,
 } from "@/hooks/useMail";
 import { useAuth } from "@/context/AuthContext";
@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DatePicker } from "@/components/ui/date-picker";
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
@@ -36,12 +37,16 @@ import { cn } from "@/lib/utils";
  * approving a design here is approving what a client receives.
  */
 export default function MailCenter() {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.isSuperAdmin ?? false;
+
   const status = useMailStatus();
   const templates = useMailTemplates();
   const log = useMailLog(150);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [openEntry, setOpenEntry] = useState<EmailLogEntry | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
 
   const activeKey = selected ?? templates.data?.[0]?.key ?? null;
 
@@ -170,6 +175,9 @@ export default function MailCenter() {
             onRetry={() => log.refetch()}
             refreshing={log.isFetching}
             onOpen={setOpenEntry}
+            isSuperAdmin={isSuperAdmin}
+            checkedIds={checkedIds}
+            onCheckedIdsChange={setCheckedIds}
           />
         </TabsContent>
       </Tabs>
@@ -418,6 +426,9 @@ function LogTable({
   onRetry,
   refreshing,
   onOpen,
+  isSuperAdmin,
+  checkedIds,
+  onCheckedIdsChange,
 }: {
   entries: EmailLogEntry[];
   loading: boolean;
@@ -425,6 +436,9 @@ function LogTable({
   onRetry: () => void;
   refreshing: boolean;
   onOpen: (entry: EmailLogEntry) => void;
+  isSuperAdmin: boolean;
+  checkedIds: Set<string>;
+  onCheckedIdsChange: (next: Set<string>) => void;
 }) {
   if (error) return <ErrorState title="Could not read the mail log" error={error} onRetry={onRetry} />;
   if (loading) {
@@ -446,18 +460,56 @@ function LogTable({
     );
   }
 
+  function toggle(id: string) {
+    const next = new Set(checkedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onCheckedIdsChange(next);
+  }
+
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-end">
-        <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground" onClick={onRetry}>
-          <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
-          Refresh
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          {isSuperAdmin && checkedIds.size > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1.5 text-muted-foreground"
+              onClick={() => onCheckedIdsChange(new Set())}
+            >
+              Clear selection ({checkedIds.size})
+            </Button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {isSuperAdmin && (
+            <ClearLogDialog
+              selectedIds={[...checkedIds]}
+              onCleared={() => onCheckedIdsChange(new Set())}
+            />
+          )}
+          <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground" onClick={onRetry}>
+            <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <ul className="space-y-2">
         {entries.map((entry) => (
-          <li key={entry.id}>
+          <li key={entry.id} className="flex items-stretch gap-2">
+            {isSuperAdmin && (
+              <label className="flex shrink-0 cursor-pointer items-center px-1 select-none">
+                <input
+                  type="checkbox"
+                  checked={checkedIds.has(entry.id)}
+                  onChange={() => toggle(entry.id)}
+                  aria-label={`Select message: ${entry.subject}`}
+                  className="size-3.5 accent-primary cursor-pointer"
+                />
+              </label>
+            )}
             <button
               type="button"
               onClick={() => onOpen(entry)}
@@ -484,6 +536,132 @@ function LogTable({
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * Super-admin only: empty out the mail log, either the messages checked by
+ * hand on the list, or everything that landed within a date range.
+ */
+function ClearLogDialog({ selectedIds, onCleared }: { selectedIds: string[]; onCleared: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"selected" | "range">("selected");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const del = useDeleteMailLog();
+
+  function openDialog() {
+    setMode(selectedIds.length > 0 ? "selected" : "range");
+    setOpen(true);
+  }
+
+  function submit() {
+    if (mode === "selected") {
+      if (selectedIds.length === 0) return;
+      del.mutate(
+        { ids: selectedIds },
+        {
+          onSuccess: (res) => {
+            toast.success(`Deleted ${res.removed} message${res.removed === 1 ? "" : "s"} from the log`);
+            onCleared();
+            setOpen(false);
+          },
+          onError: (err) => toast.error(err instanceof Error ? err.message : "Could not delete those messages"),
+        },
+      );
+    } else {
+      if (!from || !to) return;
+      del.mutate(
+        { from, to },
+        {
+          onSuccess: (res) => {
+            toast.success(`Deleted ${res.removed} message${res.removed === 1 ? "" : "s"} from the log`);
+            setFrom("");
+            setTo("");
+            onCleared();
+            setOpen(false);
+          },
+          onError: (err) => toast.error(err instanceof Error ? err.message : "Could not delete those messages"),
+        },
+      );
+    }
+  }
+
+  const canSubmit = mode === "selected" ? selectedIds.length > 0 : Boolean(from && to);
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => (next ? openDialog() : setOpen(false))}>
+      <DialogTrigger
+        render={
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-destructive">
+            <Trash2 className="size-3.5" />
+            Clear log
+          </Button>
+        }
+      />
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Clear mail log entries</DialogTitle>
+          <DialogDescription>
+            This permanently removes log entries. It does not affect anything that was already sent.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="flex gap-1 rounded-xl bg-secondary/40 p-1">
+            <button
+              type="button"
+              onClick={() => setMode("selected")}
+              className={cn(
+                "flex-1 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                mode === "selected" ? "bg-card shadow-xs ring-1 ring-foreground/10" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Selected ({selectedIds.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("range")}
+              className={cn(
+                "flex-1 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                mode === "range" ? "bg-card shadow-xs ring-1 ring-foreground/10" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Date range
+            </button>
+          </div>
+
+          {mode === "selected" ? (
+            <p className="text-sm text-muted-foreground">
+              {selectedIds.length > 0
+                ? `${selectedIds.length} message${selectedIds.length === 1 ? "" : "s"} checked on the list will be deleted.`
+                : "Check messages on the list first, or switch to a date range."}
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="clear-from">From</Label>
+                <DatePicker id="clear-from" value={from} onChange={setFrom} placeholder="Start date" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="clear-to">To</Label>
+                <DatePicker id="clear-to" value={to} onChange={setTo} min={from || undefined} placeholder="End date" />
+              </div>
+            </div>
+          )}
+
+          <Button
+            variant="destructive"
+            className="h-10 w-full gap-2"
+            disabled={!canSubmit || del.isPending}
+            onClick={submit}
+          >
+            {del.isPending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+            Delete{mode === "selected" && selectedIds.length > 0 ? ` ${selectedIds.length}` : ""}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
