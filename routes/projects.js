@@ -10,6 +10,23 @@ const approvals = require('../utils/approvals');
 
 const STATUS_PCT = { 'To Do': 0, 'In Progress': 50, 'In Review': 90, Complete: 100 };
 
+/** Roles that can be named as the manager of a project. */
+const PM_ROLES = ['admin', 'project_manager'];
+
+/**
+ * Whether an id may be written into `assignedPmId`.
+ *
+ * Nothing checked this before: the field was taken straight off the request
+ * body, so a client id -- or an id belonging to nobody at all -- could end up
+ * as the manager a project names in the client's portal. Null is allowed and
+ * means unassigned.
+ */
+async function isValidPm(id) {
+  if (!id) return true;
+  const user = await db.find('users', id);
+  return Boolean(user) && PM_ROLES.includes(user.role);
+}
+
 router.use(requireAuth);
 router.use(requirePage('projects'));
 
@@ -76,6 +93,9 @@ router.post('/', requireCSRF, requireRole('admin', 'sales', 'project_manager'), 
     if (!name || !clientId) return res.status(400).json({ error: 'name and clientId are required' });
     const client = await db.find('users', clientId);
     if (!client || client.role !== 'client') return res.status(400).json({ error: 'clientId must reference a client user' });
+    if (!(await isValidPm(assignedPmId))) {
+      return res.status(400).json({ error: 'The project manager must be an admin or a project manager.' });
+    }
 
     const project = await db.insert('projects', {
       name, type: type || 'General', clientId, assignedPmId: assignedPmId || null,
@@ -109,6 +129,12 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
       if (!nextClient || nextClient.role !== 'client') {
         return res.status(400).json({ error: 'That is not a client account.' });
       }
+    }
+
+    // Same check on the way in as on create -- an edit is the other door into
+    // this field, and only checking one of them checks neither.
+    if ('assignedPmId' in patch && !(await isValidPm(patch.assignedPmId))) {
+      return res.status(400).json({ error: 'The project manager must be an admin or a project manager.' });
     }
 
     const updated = await db.update('projects', req.params.id, patch);

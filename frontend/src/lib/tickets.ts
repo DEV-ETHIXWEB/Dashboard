@@ -16,6 +16,13 @@ export interface TicketUpdate {
   status: RequestStatus | null;
   createdAt: string;
   resolvedAt: string | null;
+  /**
+   * Resolved by the timeline endpoint. The browser cannot always do this
+   * itself -- a client is shown a deliberately short staff roster -- so these
+   * are the names to render, with the /users lookup only as a fallback.
+   */
+  authorName?: string | null;
+  targetName?: string | null;
 }
 
 export interface TicketCollaborator {
@@ -24,6 +31,8 @@ export interface TicketCollaborator {
   userId: string;
   addedBy: string | null;
   createdAt: string;
+  /** Resolved server-side, same reason as TicketUpdate.authorName. */
+  name?: string | null;
 }
 
 export interface TicketStage {
@@ -34,6 +43,8 @@ export interface TicketStage {
 
 export interface TicketTimeline {
   ticket: Ticket;
+  /** The assignee's name, resolved server-side. Null when unassigned. */
+  assigneeName: string | null;
   updates: TicketUpdate[];
   collaborators: TicketCollaborator[];
   can: {

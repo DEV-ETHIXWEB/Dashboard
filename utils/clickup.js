@@ -574,6 +574,112 @@ async function mirrorTicket(ticket, { clientName } = {}) {
   return task;
 }
 
+// --- task mirroring --------------------------------------------------------
+//
+// Same shape as ticket mirroring above, for the same reason: one list, named
+// by an environment variable, and every call best-effort. The dashboard's task
+// board and ClickUp were two unconnected systems -- a task created here never
+// reached ClickUp at all -- and this is the smallest thing that joins them
+// without inventing a per-project list mapping the app has nowhere to store.
+
+/** The list dashboard tasks are mirrored into. Mirroring is off when unset. */
+function tasksListId() {
+  return process.env.CLICKUP_TASKS_LIST_ID || null;
+}
+
+function isTaskMirroringEnabled() {
+  return Boolean(isEnabled() && tasksListId());
+}
+
+/** Dashboard task priority -> ClickUp priority. */
+const CLICKUP_TASK_PRIORITY = { Urgent: 'urgent', High: 'high', Medium: 'normal', Low: 'low' };
+
+/**
+ * The ClickUp member id for an email address, or null.
+ *
+ * ClickUp identifies people by its own numeric ids, which have nothing to do
+ * with this app's user ids; email is the only field both sides hold. Somebody
+ * with no ClickUp seat yields null and the task is mirrored unassigned, which
+ * is a better outcome than failing the whole mirror over an assignee.
+ */
+async function memberIdForEmail(email) {
+  const wanted = String(email || '').trim().toLowerCase();
+  if (!wanted) return null;
+  try {
+    const members = await fetchMembers();
+    const match = members.find((m) => String(m.email || '').toLowerCase() === wanted);
+    return match ? Number(match.id) : null;
+  } catch (err) {
+    // A roster we cannot read is not a reason to lose the task.
+    console.error('Could not read the ClickUp member list:', err.message);
+    return null;
+  }
+}
+
+/** A dashboard due date is a plain day; ClickUp wants epoch milliseconds. */
+function dueMillis(due) {
+  if (!due) return null;
+  const at = new Date(due).getTime();
+  return Number.isFinite(at) ? at : null;
+}
+
+/**
+ * Create the ClickUp task mirroring a dashboard task.
+ * Returns null when mirroring is switched off. Callers treat a throw as
+ * non-fatal: the task is already saved here, and no integration outage may
+ * undo that.
+ */
+async function mirrorTask(task, { projectName, assigneeEmail } = {}) {
+  const listId = tasksListId();
+  if (!listId) return null;
+
+  const assigneeId = await memberIdForEmail(assigneeEmail);
+  const created = await createTask(listId, {
+    name: task.name,
+    description: [
+      'Created from the EthixWeb dashboard.',
+      '',
+      projectName ? `**Project:** ${projectName}` : null,
+      `**Priority:** ${task.priority || 'Medium'}`,
+      `**Status:** ${task.status || 'To Do'}`,
+    ].filter((l) => l !== null).join('\n'),
+    priority: CLICKUP_TASK_PRIORITY[task.priority] || 'normal',
+    ...(dueMillis(task.due) === null ? {} : { dueAt: dueMillis(task.due) }),
+    ...(assigneeId === null ? {} : { assignees: [assigneeId] }),
+  });
+  return created;
+}
+
+/**
+ * Push an edit onto the mirrored task.
+ *
+ * Only mirroring creation would let the two boards disagree within a day, at
+ * which point people stop trusting either. `patch` carries the dashboard's own
+ * field names; anything absent is left alone in ClickUp.
+ */
+async function updateMirroredTask(clickupTaskId, patch = {}, { assigneeEmail } = {}) {
+  if (!clickupTaskId || !isEnabled()) return null;
+
+  const input = {};
+  if (patch.name !== undefined) input.name = patch.name;
+  if (patch.priority !== undefined) input.priority = CLICKUP_TASK_PRIORITY[patch.priority] || 'normal';
+  if (patch.due !== undefined) input.dueAt = dueMillis(patch.due);
+  if (patch.assigneeId !== undefined) {
+    const memberId = await memberIdForEmail(assigneeEmail);
+    // No match means nobody to add. Leaving the existing assignee in place is
+    // the honest outcome: we cannot express "this person, who has no seat".
+    if (memberId !== null) input.assignees = [memberId];
+  }
+  if (Object.keys(input).length === 0) return null;
+  return updateTask(clickupTaskId, input);
+}
+
+/** Remove the mirror when the dashboard task goes. */
+async function deleteMirroredTask(clickupTaskId) {
+  if (!clickupTaskId || !isEnabled()) return false;
+  return deleteTask(clickupTaskId);
+}
+
 module.exports = {
   isEnabled,
   ClickUpError,
@@ -593,6 +699,11 @@ module.exports = {
   isTicketMirroringEnabled,
   ticketsListId,
   mirrorTicket,
+  isTaskMirroringEnabled,
+  tasksListId,
+  mirrorTask,
+  updateMirroredTask,
+  deleteMirroredTask,
   bucketFor,
   BUCKET_ORDER,
 };

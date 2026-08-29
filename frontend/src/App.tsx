@@ -57,14 +57,48 @@ function SuperAdminOnly({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** Set for the lifetime of a tab once the build has played there. */
+const SPLASH_SEEN_KEY = "ew:splash-seen";
+
 /**
- * Plays once per full page load -- state initialised to true, so it is
- * whatever renders first, before the router or auth check have shown
- * anything else. Never revisited on a client-side route change, since that
- * never re-mounts App.
+ * Whether the wordmark build still owes this viewer a performance.
+ *
+ * It used to play on every full page load, which meant a refresh cost three
+ * seconds of watching a logo assemble -- and a refresh is usually somebody in
+ * a hurry, or somebody who thinks the page is stuck. Once per tab is the rule
+ * now: sessionStorage survives a reload but not a new tab, so the brand still
+ * opens a genuine visit and never stands between someone and their own data
+ * twice.
+ *
+ * Read during the initialiser rather than in an effect, so the very first
+ * render already knows. Storage can throw outright -- a locked-down browser,
+ * a private window -- and the honest fallback there is to play it: a splash
+ * shown once too often is a smaller failure than a blank first paint.
+ */
+function splashPending(): boolean {
+  try {
+    return window.sessionStorage.getItem(SPLASH_SEEN_KEY) === null;
+  } catch {
+    return true;
+  }
+}
+
+function rememberSplashSeen() {
+  try {
+    window.sessionStorage.setItem(SPLASH_SEEN_KEY, "1");
+  } catch {
+    /* Nothing to do: the splash simply plays again next load. */
+  }
+}
+
+/**
+ * Plays once per tab -- state initialised from storage, so it is whatever
+ * renders first, before the router or auth check have shown anything else.
+ * Never revisited on a client-side route change, since that never re-mounts
+ * App.
  */
 function BootSplash() {
-  const [booting, setBooting] = useState(true);
+  const [booting, setBooting] = useState(splashPending);
   if (!booting) return null;
   return (
     // The same wash the Login page stands on, so the app does not open on a
@@ -87,7 +121,12 @@ function BootSplash() {
           they carry a whole page; behind one wordmark they just shout. Sits
           above every backdrop layer and below the mark. */}
       <div className="pointer-events-none absolute inset-0 bg-black/55" style={{ zIndex: -5 }} />
-      <LogoBuildAnimation onComplete={() => setBooting(false)} />
+      <LogoBuildAnimation
+        onComplete={() => {
+          rememberSplashSeen();
+          setBooting(false);
+        }}
+      />
     </div>
   );
 }

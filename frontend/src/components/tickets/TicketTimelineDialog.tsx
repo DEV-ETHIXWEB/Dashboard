@@ -59,9 +59,15 @@ export function TicketTimelineDialog({
   const respond = useRespondToRequest();
   const removeCollaborator = useRemoveCollaborator();
 
+  /**
+   * Fallback only. The timeline now carries the names it needs, because this
+   * roster is deliberately incomplete for a client -- it holds their PM and
+   * whoever is assigned, and nobody else -- which is what used to render an
+   * admin's update as "Someone".
+   */
   const nameOf = useMemo(() => {
     const map = new Map((users ?? []).map((u) => [u.id, u.name]));
-    return (id: string | null) => (id ? map.get(id) ?? "Someone" : "System");
+    return (id: string | null | undefined) => (id ? map.get(id) ?? "Someone" : "System");
   }, [users]);
 
   /** Staff who could take over or help -- never the person already assigned. */
@@ -164,8 +170,8 @@ export function TicketTimelineDialog({
             <ProgressBar progress={ticket.progress ?? 0} stage={stageLabel(ticket.stage, stages)} />
 
             <WorkingOn
-              assigneeName={ticket.assigneeId ? nameOf(ticket.assigneeId) : null}
-              collaborators={data.collaborators.map((c) => ({ ...c, name: nameOf(c.userId) }))}
+              assigneeName={ticket.assigneeId ? data.assigneeName ?? nameOf(ticket.assigneeId) : null}
+              collaborators={data.collaborators.map((c) => ({ ...c, name: c.name ?? nameOf(c.userId) }))}
               canRemove={canDelegate}
               onRemove={(userId) =>
                 removeCollaborator.mutate(
@@ -443,8 +449,14 @@ function Timeline({
       {[...updates].reverse().map((update) => {
         const Icon = KIND_ICON[update.kind];
         const pending = isRequest(update) && update.status === "pending";
-        // Only the person asked can answer — admins can unblock a stuck request.
-        const canAnswer = pending && (update.targetUserId === currentUserId || isAdmin);
+        // Only the person asked can answer. An admin can unblock a request
+        // aimed at somebody unavailable — but never one they sent themselves,
+        // or "ask someone to take this" becomes "assign it to whoever I like
+        // and log it as their decision". The server enforces the same rule.
+        const canAnswer =
+          pending
+          && (update.targetUserId === currentUserId
+            || (isAdmin && update.authorId !== currentUserId));
 
         return (
           <li key={update.id} className="flex gap-2.5 rounded-xl bg-secondary/40 p-3">
@@ -454,10 +466,13 @@ function Timeline({
 
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="text-sm font-medium text-foreground">{nameOf(update.authorId)}</span>
+                <span className="text-sm font-medium text-foreground">
+                  {update.authorName ?? nameOf(update.authorId)}
+                </span>
                 {isRequest(update) && (
                   <span className="text-sm text-muted-foreground">
-                    {update.kind === "handover" ? "asked" : "asked for help from"} {nameOf(update.targetUserId)}
+                    {update.kind === "handover" ? "asked" : "asked for help from"}{" "}
+                    {update.targetName ?? nameOf(update.targetUserId)}
                   </span>
                 )}
                 <span className="text-xs text-muted-foreground">{formatRelativeTime(new Date(update.createdAt).getTime())}</span>

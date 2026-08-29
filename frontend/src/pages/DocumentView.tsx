@@ -12,7 +12,14 @@ import { formatBytes } from "@/lib/format";
 import { plainDate } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
-/** What an iframe can actually render. Everything else is a download. */
+/**
+ * What an iframe can actually render. Everything else is a download.
+ *
+ * Must stay in step with VIEWABLE in routes/reports.js -- the server decides
+ * what it will serve inline, and a type listed only here renders an empty
+ * frame. SVG is on neither list: it is a document that can carry script, and
+ * the upload allowlist no longer accepts one.
+ */
 const VIEWABLE = [
   "application/pdf",
   "text/plain",
@@ -21,7 +28,6 @@ const VIEWABLE = [
   "image/jpeg",
   "image/gif",
   "image/webp",
-  "image/svg+xml",
 ];
 
 /**
@@ -126,27 +132,53 @@ export default function DocumentView() {
           description="This document is on the record but its contents were never stored. Ask whoever added it to upload it again."
         />
       ) : viewable ? (
-        // An iframe, not <object>: the app's CSP sets `object-src 'none'`, so an
-        // <object> would render nothing at all here.
-        //
-        // Sandboxed because the bytes inside are an upload, and an upload is
-        // whatever the person who sent it decided. Without this the document
-        // renders same-origin, and anything it manages to execute runs as the
-        // viewer.
-        //
-        // `allow-scripts` without `allow-same-origin` is the point: the frame
-        // gets an opaque origin, so scripts inside it cannot read this app's
-        // cookies, storage, or DOM, and its requests are cross-origin against
-        // a SameSite=Lax session that will not travel. A bare sandbox="" would
-        // be tighter still, but it stops Chrome's PDF viewer working, and PDFs
-        // are most of what this page shows.
-        <iframe
-          src={src}
-          title={report.name}
-          sandbox="allow-scripts"
-          referrerPolicy="no-referrer"
-          className="h-[75svh] w-full rounded-2xl border border-border bg-card"
-        />
+        <>
+          {/*
+            An iframe, not <object>: the app's CSP sets `object-src 'none'`, so
+            an <object> would render nothing at all here.
+
+            This used to carry sandbox="allow-scripts", which was a mistake in
+            two directions. A sandbox without allow-same-origin gives the frame
+            an opaque origin, and a SameSite=Lax session cookie will not travel
+            into one -- so this request arrived unauthenticated and the frame
+            showed a 401 in every Chromium browser. Brave went further and
+            refused to run its PDF viewer in an opaque-origin frame at all,
+            which is the "blocked by Brave" panel people were seeing.
+
+            It was also guarding a door that is already shut. The sandbox was
+            added when an SVG could be uploaded and served back inline; today
+            ALLOWED_UPLOADS in routes/reports.js will not accept one, and
+            VIEWABLE will not serve one. What is left -- PDF, text, CSV, and
+            raster images -- cannot execute in a document context. The PDF is
+            the only one carrying a scripting engine, and it runs inside the
+            browser's own viewer, with no reach into this page.
+
+            The boundary that actually holds is on the server: a MIME
+            allowlist, unknown types forced to application/octet-stream, and a
+            global nosniff header.
+          */}
+          <iframe
+            src={src}
+            title={report.name}
+            referrerPolicy="no-referrer"
+            className="h-[75svh] w-full rounded-2xl border border-border bg-card"
+          />
+          {/* Both Brave and Chrome have a setting that downloads PDFs instead
+              of ever rendering them, and no attribute here overrides it. When
+              that is on, the frame above is blank and this is the way out. */}
+          <p className="mt-2 t-caption text-muted-foreground">
+            Not showing?{" "}
+            <a
+              href={src}
+              target="_blank"
+              rel="noreferrer"
+              className="focus-clear rounded underline underline-offset-2 hover:text-foreground"
+            >
+              Open it in a new tab
+            </a>{" "}
+            — some browsers are set to download documents rather than display them.
+          </p>
+        </>
       ) : (
         <EmptyState
           icon={FileWarning}

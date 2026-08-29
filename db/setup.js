@@ -187,7 +187,8 @@ async function initPostgresSchema() {
     )`,
     `CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY, project_id TEXT, name TEXT NOT NULL, assignee_id TEXT,
-      status TEXT, priority TEXT, due TEXT
+      status TEXT, priority TEXT, due TEXT,
+      clickup_task_id TEXT, clickup_task_url TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS tickets (
       id TEXT PRIMARY KEY, subject TEXT NOT NULL, category TEXT, client_id TEXT,
@@ -291,6 +292,8 @@ async function initPostgresSchema() {
     `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS clickup_task_id TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS clickup_task_url TEXT`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS clickup_task_id TEXT`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS clickup_task_url TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_pages TEXT`,

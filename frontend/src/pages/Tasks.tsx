@@ -49,7 +49,15 @@ export default function Tasks() {
   const deleteTask = useDeleteTask();
 
   const canManage = user && ["admin", "project_manager"].includes(user.role);
-  const employees = (users ?? []).filter((u) => u.role === "employee");
+  /**
+   * Who a task can be given to. Admins and PMs are included alongside
+   * employees: filtering to the literal `employee` role left this picker empty
+   * in a workspace of admins, so no task could be assigned to anybody at all.
+   * See the same widening for the PM picker in Projects.tsx.
+   */
+  const employees = (users ?? []).filter((u) =>
+    ["admin", "project_manager", "employee"].includes(u.role),
+  );
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
@@ -271,6 +279,13 @@ export default function Tasks() {
                           ))}
                         </SelectContent>
                       </Select>
+                      {/* An empty dropdown gives no clue whether it is broken
+                          or simply has nobody in it. Say which. */}
+                      {employees.length === 0 && (
+                        <p className="text-[11px] text-muted-foreground">
+                          No team members yet — add one under Team.
+                        </p>
+                      )}
                     </div>
 
                     <div className="space-y-1.5">

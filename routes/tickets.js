@@ -279,14 +279,40 @@ router.delete('/:id', requireCSRF, requireRole('admin'), async (req, res, next) 
 
 /** The whole story of a ticket: notes, requests, and who is working it. */
 router.get('/:id/timeline', loadTicket, handleWorkflow(async (req, res) => {
-  const [updates, collaborators] = await Promise.all([
+  const [allUpdates, collaborators] = await Promise.all([
     workflow.listUpdates(req.ticket.id),
     workflow.listCollaborators(req.ticket.id),
   ]);
+
+  // A client follows their own ticket; they do not follow the team's staffing
+  // of it. Handover and collaboration requests -- and the system notes that
+  // record the answer -- are internal traffic, so they are dropped here rather
+  // than hidden in the browser: a row filtered in React has still been sent.
+  const updates = req.user.role === 'client'
+    ? allUpdates.filter((u) => u.kind === workflow.KINDS.PROGRESS)
+    : allUpdates;
+
+  // Names travel with the timeline instead of being looked up in the browser.
+  // `GET /users` is deliberately narrow for a client -- themselves, their PM,
+  // and whoever is assigned -- so an update written by anybody else had no
+  // name to resolve and rendered as "Someone". This tells them exactly one
+  // thing more: who wrote the message they are already reading.
+  const names = await workflow.nameMap([
+    req.ticket.assigneeId,
+    ...updates.map((u) => u.authorId),
+    ...updates.map((u) => u.targetUserId),
+    ...collaborators.map((c) => c.userId),
+  ]);
+
   res.json({
     ticket: req.ticket,
-    updates,
-    collaborators,
+    assigneeName: names.get(req.ticket.assigneeId) || null,
+    updates: updates.map((u) => ({
+      ...u,
+      authorName: names.get(u.authorId) || null,
+      targetName: names.get(u.targetUserId) || null,
+    })),
+    collaborators: collaborators.map((c) => ({ ...c, name: names.get(c.userId) || null })),
     can: {
       recordProgress: await workflow.canRecordProgress(req.user, req.ticket),
       delegate: workflow.canDelegate(req.user, req.ticket),
