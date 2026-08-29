@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { RoleRoute } from "@/components/RoleRoute";
 import { GuestRoute } from "@/components/GuestRoute";
 import { LogoBuildAnimation } from "@/components/LogoBuildAnimation";
+import { BrandBackdrop } from "@/components/BrandBackdrop";
 import { useAuth } from "@/context/AuthContext";
 import { ROUTE_CHUNKS } from "@/lib/routeChunks";
 
@@ -66,7 +67,26 @@ function BootSplash() {
   const [booting, setBooting] = useState(true);
   if (!booting) return null;
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background">
+    // The same wash the Login page stands on, so the app does not open on a
+    // flat fill and then cut to a designed screen.
+    //
+    // Pinned to `dark` rather than following the theme: the wordmark draws in
+    // white, and this backdrop resolves to a pale gradient under a light
+    // theme, which would leave the animation invisible for those viewers.
+    <div className="dark fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-background">
+      {/* The wash itself, on its own layer. It cannot go on the container:
+          the gradient opens at secondary/50, so painting it directly would
+          leave the splash half-transparent and show the app behind it. The
+          opaque bg-background above is what makes this a screen, not a veil. */}
+      <div
+        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-secondary/50 via-background to-background"
+        style={{ zIndex: -40 }}
+      />
+      <BrandBackdrop />
+      {/* Knocks the wash back. At full strength the blobs are Login's, where
+          they carry a whole page; behind one wordmark they just shout. Sits
+          above every backdrop layer and below the mark. */}
+      <div className="pointer-events-none absolute inset-0 bg-black/55" style={{ zIndex: -5 }} />
       <LogoBuildAnimation onComplete={() => setBooting(false)} />
     </div>
   );
