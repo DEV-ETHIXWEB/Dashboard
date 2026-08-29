@@ -904,7 +904,18 @@ function renderEmail({
     '.ew-band img{border-radius:0 !important;}',
     // Side-by-side halves become full-width rows: below this width there is
     // not enough room for two columns of readable text.
-    '.ew-col{display:block !important;width:100% !important;padding:0 0 14px !important;}',
+    //
+    // The borders have to go with the layout. They are drawn for a grid --
+    // border-left divides the two columns, border-top divides one pair of rows
+    // from the next -- and neither means anything once the cells are stacked.
+    // Left behind, the divider became a stray vertical line running down the
+    // outside of every right-hand cell (PRIORITY, FIRST RESPONSE DUE in the
+    // ticket card, the actor block in the footer), and the row rule became a
+    // horizontal line above two stacked items out of four, which reads as
+    // damage rather than structure. Stacked rows are separated by the padding
+    // above instead.
+    '.ew-col{display:block !important;width:100% !important;padding:0 0 14px !important;'
+      + 'border-left:0 !important;border-top:0 !important;}',
     '}',
     // The masthead has its own breakpoint, lower than the card's. Between 620
     // and 720 the band is still wide enough for the wordmark and the web side
