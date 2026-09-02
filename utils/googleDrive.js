@@ -1,6 +1,5 @@
 'use strict';
 
-const { google } = require('googleapis');
 const { Readable } = require('stream');
 
 function isDriveConfigured() {
@@ -10,6 +9,13 @@ function isDriveConfigured() {
 let driveClient = null;
 function getDriveClient() {
   if (driveClient) return driveClient;
+  // Required here rather than at the top of the file. `googleapis` is the
+  // largest dependency in the tree by a wide margin, and loading it costs a
+  // second or more of a cold serverless boot -- a cost every request paid,
+  // including the 401 that a signed-out visitor's login page waits on, for a
+  // client that only report uploads ever ask for. Nothing here runs until
+  // somebody actually files a report to Drive.
+  const { google } = require('googleapis');
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
   const auth = new google.auth.GoogleAuth({
     credentials,
