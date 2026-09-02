@@ -130,11 +130,14 @@ export default function Login() {
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
+  /** Only ever set for a fault that is true of every address, never of one. */
+  const [forgotError, setForgotError] = useState<string | null>(null);
 
   async function requestReset(e: React.FormEvent) {
     e.preventDefault();
     if (!forgotEmail.trim()) return;
     setForgotBusy(true);
+    setForgotError(null);
     try {
       await api<{ ok: boolean; message: string }>("POST", "/auth/password/forgot", {
         email: forgotEmail.trim(),
@@ -143,9 +146,24 @@ export default function Login() {
       // account, and so does this screen. Saying "no such user" here would turn
       // the form into a way of finding out who has a login.
       setForgotSent(true);
-    } catch {
-      // Even a failure is reported as success, for the same reason. A genuine
-      // outage shows up in the mail log, where somebody can act on it.
+    } catch (err) {
+      // 503 is the server saying it cannot build a reset link for anybody --
+      // it has no public address configured. That is true of every address, so
+      // showing it gives away nothing about this one, and it is the only
+      // failure worth breaking the rule below for: telling someone to watch an
+      // inbox that will never receive anything is how a dead feature stays
+      // dead. It is exactly how this one went unnoticed.
+      if (err instanceof ApiError && err.status === 503) {
+        setForgotError(
+          typeof err.payload?.error === "string"
+            ? err.payload.error
+            : "Password reset is not set up on this server yet. Ask your administrator.",
+        );
+        errorFeedback();
+        return;
+      }
+      // Anything else is still reported as success, for the reason above. A
+      // genuine outage shows up in the mail log, where somebody can act on it.
       setForgotSent(true);
     } finally {
       setForgotBusy(false);
@@ -661,6 +679,7 @@ export default function Login() {
                               onClick={() => {
                                 setForgotOpen(false);
                                 setForgotSent(false);
+                                setForgotError(null);
                                 setForgotEmail("");
                               }}
                               className="focus-clear w-fit cursor-pointer rounded text-[11px] font-medium text-primary hover:underline"
@@ -673,6 +692,11 @@ export default function Login() {
                             <Label htmlFor="forgot-email" className="t-label tracking-wider text-muted-foreground">
                               Reset your password
                             </Label>
+                            {forgotError && (
+                              <p role="alert" className="text-[11px] leading-relaxed text-destructive">
+                                {forgotError}
+                              </p>
+                            )}
                             <div className="relative">
                               <Mail className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground/70" />
                               <Input

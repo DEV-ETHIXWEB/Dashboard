@@ -534,6 +534,27 @@ router.post('/password/forgot', passwordResetLimiter, async (req, res, next) => 
   });
 
   try {
+    // Asked before the address is even read, and answered identically for every
+    // address, so it still cannot be used to tell one apart from another:
+    // whether this deployment knows its own public address has nothing to do
+    // with who is asking.
+    //
+    // It is said out loud because the alternative was worse than an error. With
+    // no APP_BASE_URL there is no link to put in the mail, so nothing was sent
+    // -- and the screen said "a reset link is on its way. Check your inbox."
+    // The one person who could have noticed was told it had worked, and the
+    // only trace was a console warning on a serverless host nobody reads.
+    if (!baseUrl()) {
+      console.error(
+        '[auth] Password reset is unavailable: APP_BASE_URL is not set, so no reset link can be built '
+          + 'and no email was sent. Set APP_BASE_URL to the public address of this deployment and redeploy.',
+      );
+      return res.status(503).json({
+        error: 'Password reset is not set up on this server yet. Ask your administrator to set APP_BASE_URL.',
+        reason: 'app_base_url_unset',
+      });
+    }
+
     const email = String(req.body?.email || '').trim().toLowerCase();
     if (!email || !email.includes('@')) return sameAnswer();
 
@@ -547,24 +568,22 @@ router.post('/password/forgot', passwordResetLimiter, async (req, res, next) => 
       purpose: 'reset',
       ipAddress: normalizeIp(req.ip),
     });
+    // Non-null: the guard at the top of this handler already refused the
+    // request when there was no base address to build one from.
     const url = setPasswordUrl(link.path);
 
-    if (url) {
-      await mailer.sendTemplate({
-        to: user.email,
-        message: messages.passwordReset({
-          user,
-          resetUrl: url,
-          expiresAt: link.expiresAt,
-          ipAddress: normalizeIp(req.ip),
-        }),
-        template: 'password_reset',
-        entity: 'user',
-        entityId: user.id,
-      });
-    } else {
-      console.warn('[auth] A reset was requested but APP_BASE_URL is unset, so no link could be built.');
-    }
+    await mailer.sendTemplate({
+      to: user.email,
+      message: messages.passwordReset({
+        user,
+        resetUrl: url,
+        expiresAt: link.expiresAt,
+        ipAddress: normalizeIp(req.ip),
+      }),
+      template: 'password_reset',
+      entity: 'user',
+      entityId: user.id,
+    });
 
     // The address is deliberately absent from the audit row: this endpoint is
     // reachable by anyone, and writing every address somebody types into it
