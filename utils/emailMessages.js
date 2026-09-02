@@ -1004,6 +1004,273 @@ function testEmail({ requestedBy }) {
   };
 }
 
+/**
+ * The five messages the credential and password-policy features send.
+ *
+ * The rule they all follow, and the reason this block exists at all: **none of
+ * them ever carries a password.** The older credentialsIssued() above does,
+ * because an admin handing over a login in person needs something to read out.
+ * These do not: a scheduled delivery lands in an inbox hours after anyone
+ * decided to send it, and a secret sitting unread in a mailbox is a secret with
+ * no owner watching it. What travels instead is a single-use link that sets a
+ * password the sender never learns.
+ */
+
+/**
+ * A new account, told how to choose its own first password.
+ *
+ * The email address is stated plainly because it is the user id and not a
+ * secret -- and because people genuinely forget which address a workspace
+ * knows them by. The link is the only sensitive thing here, and it dies the
+ * moment it is used.
+ */
+function accountActivation({ user, activationUrl, expiresAt, sections = null, invitedBy = null, kind = 'activation' }) {
+  const url = t.safeUrl(activationUrl);
+  const isReset = kind === 'reset';
+  const brandName = t.brand().name;
+  const roleWord = user.role === 'client' ? 'client portal' : 'team dashboard';
+
+  return {
+    subject: isReset
+      ? `Set a new password for your ${brandName} account`
+      : `Set up your ${brandName} ${roleWord} account`,
+    html: t.renderEmail({
+      preheader: isReset
+        ? 'One link, one use, and you choose the password.'
+        : `Choose a password and your ${roleWord} is ready.`,
+      eyebrow: isReset ? 'Password setup' : 'Welcome',
+      title: isReset ? 'Choose a new password' : `Set up your ${roleWord}`,
+      actor: invitedBy ? { name: invitedBy, line: `${invitedBy} set this up for you` } : null,
+      blocks: [
+        t.paragraph(
+          isReset
+            ? `Hi ${user.name}. Use the button below to choose a new password. Nobody here can see what you pick.`
+            : `Hi ${user.name}. Your account is ready. The one thing left is a password, and you choose it yourself -- we never set one for you.`,
+        ),
+        t.panel({
+          title: 'Your sign-in address',
+          html: t.fact('Email', user.email),
+        }),
+        expiresAt
+          ? t.callout({
+            tone: 'warn',
+            title: 'This link works once',
+            body: `It stops working on ${t.formatWhen(expiresAt)}, or as soon as you have used it. Ask for another if you miss it.`,
+          })
+          : '',
+        Array.isArray(sections) && sections.length > 0
+          ? t.panel({ title: 'What you will find inside', html: t.bulletList(sections) })
+          : '',
+        t.paragraph(
+          'If you were not expecting this, ignore it. The link is useless until somebody opens it, and it expires on its own.',
+          { muted: true, size: 13 },
+        ),
+      ].filter(Boolean),
+      cta: url ? { label: isReset ? 'Choose a new password' : 'Set my password', url } : null,
+      reason: 'Sent because an administrator set up or reset this account.',
+    }),
+    text: t.renderText([
+      isReset ? 'Choose a new password.' : 'Your account is ready -- choose a password.',
+      '',
+      `Email: ${user.email}`,
+      url ? `Set your password: ${url}` : null,
+      '',
+      expiresAt ? `The link works once and expires on ${t.formatWhen(expiresAt)}.` : null,
+      'We never send passwords by email. If you were not expecting this, ignore it.',
+    ]),
+  };
+}
+
+/** The nudge before a password ages out, while doing something about it is still optional. */
+function passwordExpiring({ user, daysLeft, expiresAt, resetUrl = null }) {
+  const url = t.safeUrl(resetUrl) || loginLink();
+  const when = daysLeft <= 0
+    ? 'today'
+    : daysLeft === 1
+      ? 'tomorrow'
+      : `in ${daysLeft} days`;
+
+  return {
+    subject: `Your ${t.brand().name} password expires ${when}`,
+    html: t.renderEmail({
+      preheader: `Change it now and you will not be interrupted later.`,
+      eyebrow: 'Security',
+      title: `Your password expires ${when}`,
+      blocks: [
+        t.paragraph(
+          `Hi ${user.name}. Passwords here are replaced every month. Yours is due ${when}, and changing it now takes about thirty seconds.`,
+        ),
+        expiresAt ? t.fact('Expires', t.formatWhen(expiresAt)) : '',
+        t.paragraph(
+          'Leave it and nothing dramatic happens -- you will simply be asked to set a new one the next time you sign in.',
+          { muted: true, size: 13 },
+        ),
+      ].filter(Boolean),
+      cta: url ? { label: 'Change my password', url } : null,
+      reason: 'Sent because this workspace replaces passwords monthly.',
+    }),
+    text: t.renderText([
+      `Your ${t.brand().name} password expires ${when}.`,
+      expiresAt ? `Expires ${t.formatWhen(expiresAt)}.` : null,
+      '',
+      url ? `Change it: ${url}` : null,
+      'If you do nothing you will be asked to set a new one at your next sign-in.',
+    ]),
+  };
+}
+
+/**
+ * The reset link itself.
+ *
+ * Sent both by the monthly sweep, when a password has actually aged out, and
+ * by the forgot-password form. The wording covers both without the reader
+ * having to know which, because from their side it is the same job.
+ */
+function passwordReset({ user, resetUrl, expiresAt, ipAddress = null, required = false }) {
+  const url = t.safeUrl(resetUrl);
+  const minutes = expiresAt ? Math.max(1, Math.round((Number(expiresAt) - Date.now()) / 60000)) : null;
+
+  return {
+    subject: required
+      ? `Time to reset your ${t.brand().name} password`
+      : `Reset your ${t.brand().name} password`,
+    html: t.renderEmail({
+      preheader: 'One link, good once, and it expires shortly.',
+      eyebrow: 'Password reset',
+      title: required ? 'Your password needs replacing' : 'Reset your password',
+      blocks: [
+        t.paragraph(
+          required
+            ? `Hi ${user.name}. Your password has reached the end of its month. Set a new one and you are back in.`
+            : `Hi ${user.name}. Somebody asked to reset the password on this account. If that was you, the button below is how.`,
+        ),
+        minutes
+          ? t.callout({
+            tone: 'warn',
+            title: 'Works once',
+            body: `This link expires in ${minutes} minutes and stops working the moment it is used.`,
+          })
+          : '',
+        t.paragraph(
+          ipAddress
+            ? `Requested from ${ipAddress}. If that was not you, do not open the link -- nothing has changed yet, and telling an administrator is the right next step.`
+            : 'If you did not ask for this, ignore it. Nothing changes until the link is opened.',
+          { muted: true, size: 13 },
+        ),
+      ].filter(Boolean),
+      cta: url ? { label: 'Set a new password', url } : null,
+      reason: 'Sent because a password reset was requested for this account.',
+    }),
+    text: t.renderText([
+      required ? 'Your password has expired and needs replacing.' : 'Reset your password.',
+      '',
+      url ? `Set a new password: ${url}` : null,
+      minutes ? `The link works once and expires in ${minutes} minutes.` : null,
+      '',
+      ipAddress ? `Requested from ${ipAddress}.` : null,
+      'If this was not you, do not open the link.',
+    ]),
+  };
+}
+
+/**
+ * Confirmation that a password actually changed.
+ *
+ * The one email in this set that exists purely so a takeover cannot be silent.
+ * It carries no link to click, on purpose: a "was this you?" message with a
+ * button in it teaches people to click buttons in messages about their
+ * password, which is the exact habit the attacker needs.
+ */
+function passwordChanged({ user, at = Date.now(), ipAddress = null, via = 'self' }) {
+  const how = {
+    self: 'from your profile page',
+    reset: 'using a password reset link',
+    admin: 'by an administrator',
+  }[via] || 'on your account';
+
+  return {
+    subject: `Your ${t.brand().name} password was changed`,
+    html: t.renderEmail({
+      preheader: 'If this was you, there is nothing to do.',
+      eyebrow: 'Security',
+      title: 'Your password was changed',
+      blocks: [
+        t.paragraph(`Hi ${user.name}. The password on your account was changed ${how}.`),
+        t.panel({
+          title: 'What happened',
+          html: [
+            t.fact('When', t.formatWhen(at)),
+            ipAddress ? t.fact('From', ipAddress) : '',
+            t.fact('Other sessions', 'Signed out everywhere else'),
+          ].filter(Boolean).join(''),
+        }),
+        t.paragraph(
+          'If this was not you, tell an administrator now. Do not use any link in this message to do it -- go to the dashboard the way you normally would.',
+          { muted: true, size: 13 },
+        ),
+      ],
+      cta: null,
+      reason: 'Sent because the password on this account changed.',
+    }),
+    text: t.renderText([
+      `Your ${t.brand().name} password was changed ${how}.`,
+      `When: ${t.formatWhen(at)}`,
+      ipAddress ? `From: ${ipAddress}` : null,
+      'Every other session was signed out.',
+      '',
+      'If this was not you, tell an administrator -- reach the dashboard the way you normally would, not through this email.',
+    ]),
+  };
+}
+
+/**
+ * A scheduled hand-over that did not go out, addressed to the administrators.
+ *
+ * Worth its own message because the failure is invisible from every other
+ * angle: the person who was supposed to receive a login simply never hears
+ * anything, and nobody finds out until they ask why they cannot sign in.
+ */
+function credentialDeliveryFailed({ user, error, scheduledAt = null, attempts = 1 }) {
+  const base = baseUrl();
+
+  return {
+    subject: `Could not deliver ${user.name}'s login`,
+    html: t.renderEmail({
+      preheader: 'A scheduled credential delivery failed and is waiting to be retried.',
+      eyebrow: 'Delivery failed',
+      title: 'A login could not be delivered',
+      blocks: [
+        t.paragraph(
+          `The scheduled activation email for ${user.name} did not go out. They have not been told anything, and their account is untouched.`,
+        ),
+        t.panel({
+          title: 'Details',
+          html: [
+            t.fact('Account', `${user.name} (${user.email})`),
+            scheduledAt ? t.fact('Was due', t.formatWhen(scheduledAt)) : '',
+            t.fact('Attempts', String(attempts)),
+            t.fact('Reason', String(error || 'Unknown error')),
+          ].filter(Boolean).join(''),
+        }),
+        t.paragraph(
+          'Fix the cause and retry it from Client Access. Nothing is sent automatically until you do.',
+          { muted: true, size: 13 },
+        ),
+      ],
+      cta: base ? { label: 'Open Client Access', url: `${base}/portal/client-access` } : null,
+      reason: 'Sent to administrators because a scheduled credential delivery failed.',
+    }),
+    text: t.renderText([
+      `The scheduled login email for ${user.name} (${user.email}) failed.`,
+      scheduledAt ? `Was due: ${t.formatWhen(scheduledAt)}` : null,
+      `Attempts: ${attempts}`,
+      `Reason: ${error || 'Unknown error'}`,
+      '',
+      base ? `Retry it: ${base}/portal/client-access` : null,
+    ]),
+  };
+}
+
 // --- preview registry ------------------------------------------------------
 // The admin Mail page renders these without touching the database.
 
@@ -1018,6 +1285,13 @@ const SAMPLE_TICKET = {
   description: 'The "Book Now" button on mobile leads to a 404 page. Customers cannot book at all from phones.',
   createdAt: new Date().toISOString(),
   responseDueAt: Date.now() + 4 * 60 * 60 * 1000,
+};
+
+const SAMPLE_USER = {
+  id: 'u-sample',
+  name: 'David Shaw',
+  email: 'david.shaw@brightpath-retail.com',
+  role: 'client',
 };
 
 const SAMPLE_PAYMENT = {
@@ -1200,6 +1474,57 @@ const TEMPLATES = {
       window: 'in 7 days',
     }),
   },
+  account_activation: {
+    label: 'Account activation',
+    description: 'A scheduled hand-over: the link that lets a new account choose its own password.',
+    render: () => accountActivation({
+      user: SAMPLE_USER,
+      activationUrl: 'https://dashboard.example.com/set-password#token=sample',
+      expiresAt: Date.now() + 72 * 60 * 60 * 1000,
+      sections: ['Work progress', 'Tickets', 'Billing'],
+      invitedBy: 'Admin User',
+    }),
+  },
+  password_expiring: {
+    label: 'Password expiring',
+    description: 'The heads-up a few days before a password reaches the end of its month.',
+    render: () => passwordExpiring({
+      user: SAMPLE_USER,
+      daysLeft: 3,
+      expiresAt: Date.now() + 3 * 24 * 60 * 60 * 1000,
+      resetUrl: 'https://dashboard.example.com/set-password#token=sample',
+    }),
+  },
+  password_reset: {
+    label: 'Password reset',
+    description: 'The single-use link that sets a new password. Never carries a password itself.',
+    render: () => passwordReset({
+      user: SAMPLE_USER,
+      resetUrl: 'https://dashboard.example.com/set-password#token=sample',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      ipAddress: '203.0.113.9',
+    }),
+  },
+  password_changed: {
+    label: 'Password changed',
+    description: 'Confirmation that a password moved, so a takeover cannot happen quietly.',
+    render: () => passwordChanged({
+      user: SAMPLE_USER,
+      at: Date.now(),
+      ipAddress: '203.0.113.9',
+      via: 'reset',
+    }),
+  },
+  credential_delivery_failed: {
+    label: 'Credential delivery failed',
+    description: 'Sent to administrators when a scheduled login email could not be delivered.',
+    render: () => credentialDeliveryFailed({
+      user: SAMPLE_USER,
+      error: 'The mail server rejected our username or password.',
+      scheduledAt: Date.now() - 30 * 60 * 1000,
+      attempts: 2,
+    }),
+  },
   test: {
     label: 'Test message',
     description: 'Deliverability check sent from the Mail page.',
@@ -1247,6 +1572,11 @@ module.exports = {
   slaWarning,
   loginCode,
   credentialsIssued,
+  accountActivation,
+  passwordExpiring,
+  passwordReset,
+  passwordChanged,
+  credentialDeliveryFailed,
   adminRosterChanged,
   progressDigest,
   paymentReceived,

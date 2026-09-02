@@ -1,7 +1,8 @@
 import {
   IconApprovals, IconAuditLog, IconBilling, IconBudget, IconClickUp, IconClientAccess, IconDashboard,
   IconDomains, IconEmblem, IconHome, IconLoginCodes, IconMail, IconMessages, IconNotifications,
-  IconProgress, IconProjects, IconReports, IconSlack, IconTasks, IconTeam, IconTickets, type EthixIcon,
+  IconProfile, IconProgress, IconProjects, IconReports, IconSlack, IconTasks, IconTeam, IconTickets,
+  type EthixIcon,
 } from "@/components/icons/ethix";
 import { canSeePage, pageKeyForPath } from "@/lib/permissions";
 import type { Role, User } from "@/lib/types";
@@ -59,6 +60,8 @@ const STAFF_NAV: NavItem[] = [
   { to: "/portal/audit", label: "Audit log", short: "Log", icon: IconAuditLog, roles: ["admin"], superAdminOnly: true },
   { to: "/portal/security", label: "Security", icon: IconClientAccess, roles: ["admin"] },
   { to: "/portal/notifications", label: "Notifications", icon: IconNotifications },
+  // No role list: everybody who can sign in has a profile.
+  { to: "/portal/profile", label: "Your profile", short: "Profile", icon: IconProfile },
 ];
 
 const STAFF_GROUPS: { heading: string; labels: string[] }[] = [
@@ -66,7 +69,7 @@ const STAFF_GROUPS: { heading: string; labels: string[] }[] = [
   { heading: "Operations & Finance", labels: ["Work progress", "Tickets", "Client messages", "Reports", "Budget", "Billing"] },
   { heading: "Integrations", labels: ["ClickUp", "Slack"] },
   { heading: "Administration", labels: ["Team", "Client Access", "Approvals", "Audit log", "Login Codes", "Mail"] },
-  { heading: "Account", labels: ["Security", "Notifications"] },
+  { heading: "Account", labels: ["Your profile", "Security", "Notifications"] },
 ];
 
 /**
@@ -92,6 +95,7 @@ const CLIENT_SECONDARY: NavItem[] = [
   { to: "/portal/reports", label: "Documents", icon: IconReports },
   { to: "/portal/budget", label: "Spending", icon: IconBudget },
   { to: "/portal/notifications", label: "Alerts", icon: IconNotifications },
+  { to: "/portal/profile", label: "Your profile", short: "Profile", icon: IconProfile },
 ];
 
 type Viewer = Pick<User, "role"> & { allowedPages?: User["allowedPages"]; isSuperAdmin?: boolean };

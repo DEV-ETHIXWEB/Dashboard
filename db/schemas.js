@@ -4,6 +4,20 @@ const SCHEMAS = {
   users: [
     'id', 'name', 'email', 'role', 'company', 'password', 'google_id',
     'two_factor_enabled', 'two_factor_contact', 'password_expires_at',
+    // Password *age*, which is a different question from the line above.
+    // `password_expires_at` is when this account's access lapses -- an admin
+    // sets it when issuing a client login, and the account stops working. These
+    // three are the monthly password policy: when the secret was last set,
+    // whether it must be replaced before anything else can happen, and when a
+    // reset link was last redeemed. Conflating the two would mean a client on a
+    // 30-day password rotation loses their account on day 31. See
+    // utils/passwordPolicy.js.
+    'password_changed_at', 'password_reset_required', 'password_reset_at',
+    // When this account's picture last changed. The bytes live in user_avatars;
+    // only the timestamp is here, because db.all('users') runs on nearly every
+    // request and must not start dragging images through it. Doubles as the
+    // cache-buster on the avatar URL.
+    'avatar_updated_at',
     // JSON array of client page keys (see utils/clientPages.js). NULL = no restriction.
     'allowed_pages',
     // A super admin is an admin with two extra powers: they can appoint other
@@ -42,7 +56,15 @@ const SCHEMAS = {
   ],
   ticket_collaborators: ['id', 'ticket_id', 'user_id', 'added_by', 'created_at'],
   notifications: ['id', 'user_id', 'message', 'type', 'read', 'created_at'],
-  sessions: ['id', 'user_id', 'csrf_token', 'created_at', 'expires_at', 'pending'],
+  // `user_agent` and `ip_address` exist for one screen: the list on somebody's
+  // own profile that lets them look down it and spot a session that is not
+  // theirs. "Another device" cannot do that job. Both are self-reported and
+  // nothing is ever authorised on the strength of them -- they are a label, and
+  // only their owner is shown them. See utils/userAgent.js.
+  sessions: [
+    'id', 'user_id', 'csrf_token', 'created_at', 'expires_at', 'pending',
+    'user_agent', 'ip_address',
+  ],
   activity_log: ['id', 'actor_id', 'action', 'entity', 'entity_id', 'meta', 'created_at'],
   domains: [
     'id', 'client_id', 'domain_name', 'platform', 'hosting_provider', 'hosting_region',
@@ -88,6 +110,30 @@ const SCHEMAS = {
   // half of the link is stored, so a database leak cannot be replayed as a
   // login. See utils/loginLinks.js for the token format.
   login_links: ['id', 'user_id', 'token_hash', 'ip_address', 'created_at', 'expires_at', 'consumed'],
+  // One scheduled hand-over of a login. A row is created when an admin picks a
+  // date, claimed atomically when it comes due, and never carries the secret
+  // itself: what is sent is an activation link, minted at delivery time.
+  // See utils/credentialDelivery.js.
+  credential_deliveries: [
+    'id', 'user_id', 'kind', 'status', 'scheduled_at',
+    'attempts', 'last_attempt_at', 'last_error',
+    'claimed_at', 'sent_at', 'cancelled_at',
+    'created_by', 'created_at', 'updated_at',
+  ],
+  // Account-activation and password-reset links. Same shape as login_links and
+  // for the same reason: only the SHA-256 of the secret half is stored, so a
+  // database leak cannot be replayed as a password change.
+  password_tokens: [
+    'id', 'user_id', 'purpose', 'token_hash', 'ip_address',
+    'created_at', 'expires_at', 'consumed', 'consumed_at', 'issued_by',
+  ],
+  // One picture per account. Its own table rather than columns on `users`
+  // because the whole user list is read on nearly every request, and base64
+  // image bytes have no business travelling with it.
+  user_avatars: [
+    'id', 'user_id', 'storage_type', 'mime_type', 'size_bytes',
+    'width', 'height', 'content_base64', 'checksum', 'updated_at', 'updated_by',
+  ],
   // Every outbound email the app attempted, including the ones skipped because
   // no transport is configured. Drives the admin Mail page.
   email_log: [

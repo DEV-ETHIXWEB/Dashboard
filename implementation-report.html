@@ -1,0 +1,270 @@
+<title>Implementation Report — Credentials, Passwords, Avatars, Profile</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html{background:#e9e9e9}
+  body{
+    margin:0; color:#1a1a1a;
+    font:9.8px/1.36 Georgia, "Times New Roman", serif;
+  }
+
+  /* One A4 sheet per page. Fixed height so what you see is what prints. */
+  .sheet{
+    width:794px; height:1123px;
+    background:#ffffff;
+    margin:24px auto; padding:40px 46px 34px;
+    box-sizing:border-box; overflow:hidden;
+    box-shadow:0 1px 6px rgba(0,0,0,.22);
+  }
+
+  .cols{column-count:2; column-gap:24px; column-fill:auto; height:100%}
+
+  h1{font-size:21px;line-height:1.1;margin:0 0 4px;font-weight:normal;letter-spacing:-.01em}
+  .lede{color:#4a4a4a;font-size:10.4px;margin:0 0 8px;line-height:1.4}
+  .stamp{color:#555;font-size:9.1px;line-height:1.4;margin:0 0 11px;
+    border-top:1px solid #d5d5d5;border-bottom:1px solid #d5d5d5;padding:6px 0}
+
+  h2{font-size:12.3px;margin:0 0 4px;font-weight:normal;
+    border-bottom:1px solid #1a1a1a;padding-bottom:2.5px;
+    break-after:avoid; page-break-after:avoid}
+  h2 .n{font-size:9.6px;color:#777;margin-right:5px}
+  h3{font-size:10px;margin:7px 0 2px;font-weight:bold;break-after:avoid}
+  section{margin:0 0 10px}
+  p{margin:0 0 5px}
+  .lbl{font-weight:bold}
+  code{font-family:"Consolas","DejaVu Sans Mono",monospace;font-size:8.9px}
+
+  ul{margin:0 0 6px;padding-left:13px}
+  li{margin:0 0 2.5px}
+
+  table{width:100%;border-collapse:collapse;margin:0 0 6px;font-size:9.1px;line-height:1.32}
+  th,td{text-align:left;padding:2.5px 4px;border:1px solid #c8c8c8;vertical-align:top}
+  th{background:#f0f0f0;font-weight:bold}
+  td.k{font-weight:bold;white-space:nowrap;width:1%}
+  td.num{white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}
+  td.ok{font-weight:bold}
+
+  .box{border:1px solid #c8c8c8;background:#fafafa;padding:5px 7px;margin:0 0 7px}
+  .box p:last-child{margin-bottom:0}
+  .box.warn{border-color:#9a9a9a;background:#f2f2f2;border-left:3px solid #1a1a1a}
+
+  footer{border-top:1px solid #1a1a1a;padding-top:5px;color:#555;font-size:9px;line-height:1.38;margin-top:3px}
+  .kicker{font-size:8.8px;letter-spacing:.06em;text-transform:uppercase;color:#777;margin:0 0 3px}
+
+  /* A4 at 96dpi is exactly 794 x 1123px, so the sheets above already are the
+     printed pages. Print with margin 0 and the sheet's own padding becomes the
+     page margin -- what is on screen is what comes out, two pages, no reflow. */
+  @media print{
+    html,body{background:#fff}
+    .sheet{
+      margin:0; box-shadow:none; height:1122px;
+      break-after:page; page-break-after:always;
+      -webkit-print-color-adjust:exact; print-color-adjust:exact;
+    }
+    .sheet:last-child{break-after:auto;page-break-after:auto}
+    @page{size:A4;margin:0}
+  }
+</style>
+
+<!-- ============================ PAGE ONE ============================ -->
+<div class="sheet">
+<div class="cols">
+
+  <h1>Implementation Report</h1>
+  <p class="lede">Scheduled credential delivery, monthly password policy, profile pictures and a dedicated profile page &mdash; built onto the existing EthixWeb CRM, plus the faults found and fixed along the way.</p>
+
+  <div class="stamp">
+    <b>Status:</b> complete and verified end to end in a browser. <b>Tests:</b> 315 app / 183 security / 39 mail &mdash; 0 failures. Typecheck clean, 0 lint errors, all 22 tables migrate.<br>
+    <b>Before it will work on your deployment, two environment values must be corrected.</b> See section 2 &mdash; nothing else in this report matters until they are.
+  </div>
+
+  <section>
+  <h2><span class="n">1</span>What was built</h2>
+  <table>
+    <tr><td class="k">Credential<br>delivery</td><td>An admin picks a date and time; at that moment the account is emailed a <b>single-use activation link</b>, not a password. Schedule, reschedule, cancel, retry, with <i>Scheduled / Sent / Failed / Cancelled</i> status. One pending delivery per account, ever.</td></tr>
+    <tr><td class="k">Monthly<br>passwords</td><td>Configurable maximum password age (default 30 days) with a warning email before it, and a reset link when it passes. An expired password keeps the session but closes the rest of the app until a new one is set.</td></tr>
+    <tr><td class="k">Avatars</td><td>Upload, replace, remove. Validated by reading the file's actual bytes. Shown in the sidebar, phone menu, Team, Client Access, audit log and profile, with initials as the fallback.</td></tr>
+    <tr><td class="k">Profile page</td><td><code>/portal/profile</code> for every signed-in account: details, password standing, change-password, signed-in devices, preferences, own activity.</td></tr>
+  </table>
+  <p>Nothing existing was replaced. The immediate &quot;here is a password&quot; path an admin uses in person still works exactly as before; the <i>scheduled</i> path is the one that carries a link instead.</p>
+
+  <h3>Where to find each part</h3>
+  <table>
+    <tr><td class="k">Client Access</td><td>A <b>Delivery</b> button per client opens schedule / reschedule / cancel / retry. Password standing and delivery status show as badges on each row, beside the existing access-expiry pill.</td></tr>
+    <tr><td class="k">Team</td><td>Password standing badge per member.</td></tr>
+    <tr><td class="k">Mail</td><td><b>Check credentials</b> runs both scheduled jobs by hand. All five new templates preview here.</td></tr>
+    <tr><td class="k">Your profile</td><td>New, in the sidebar under <i>Account</i>, and by clicking your own name at the bottom of the sidebar.</td></tr>
+    <tr><td class="k">Sign-in page</td><td><b>Forgot password?</b> beside the password field.</td></tr>
+    <tr><td class="k"><code>/set-password</code></td><td>The public page a link opens. Outside every guard, since whoever opens it is either signed out or blocked.</td></tr>
+  </table>
+
+  <h3>What a delivery does, in order</h3>
+  <table>
+    <tr><td class="k">1</td><td>Admin picks a moment. One row is written; picking again <b>moves</b> it rather than queueing a second.</td></tr>
+    <tr><td class="k">2</td><td>A sweep finds it due and <b>claims</b> it atomically.</td></tr>
+    <tr><td class="k">3</td><td>A token is minted <i>now</i>, so its clock starts when the email lands &mdash; not when the delivery was booked.</td></tr>
+    <tr><td class="k">4</td><td>The email goes; the row reads <i>Sent</i>. A failure retries twice, then parks and alerts the admins.</td></tr>
+    <tr><td class="k">5</td><td>The recipient sets a password nobody here ever learns.</td></tr>
+  </table>
+  </section>
+
+  <section>
+  <h2><span class="n">2</span>Configuration you must fix</h2>
+  <p>Three faults were found on this machine. None is in the code; all three are why nothing appeared to work.</p>
+
+  <div class="box warn">
+  <p><span class="lbl">1. Your SMTP2GO key is rejected.</span> Verified with a read-only call: <i>&quot;SMTP2GO refused our credentials.&quot;</i> No email works at all &mdash; not the new ones, not sign-in codes, not ticket alerts. Replace <code>SMTP2GO_API_KEY</code> with a live key.</p>
+  </div>
+
+  <div class="box warn">
+  <p><span class="lbl">2. <code>APP_BASE_URL</code> is not set</span> &mdash; and neither is <code>CORS_ORIGINS</code>. The app deliberately refuses to learn its own address from a request header unless one of those already names it, so an attacker cannot point welcome-email links at their own server. With neither set the address is permanently unknown, and an activation or reset link <i>is</i> the whole email &mdash; so both features fail rather than degrade. Set <code>APP_BASE_URL=https://your-domain</code> and restart.</p>
+  </div>
+
+  <div class="box warn">
+  <p><span class="lbl">3. <code>public/</code> had never been built.</span> It is gitignored build output, and <code>npm start</code> serves the frontend from it &mdash; so with no <code>public/</code> the app renders nothing whatsoever. Fixed: <code>npm run build</code> has been run and the folder now holds all four features.</p>
+  </div>
+
+  <p>Because fault 2 is silent and expensive, it is now loud in two places: the boot log states plainly that scheduled deliveries <b>will fail</b> without it, and the delivery dialog shows a &quot;this will fail&quot; banner <i>before</i> a date is chosen rather than booking a failure for later.</p>
+  <p>New optional settings are documented in <code>.env.example</code>: password age, warning window, minimum length, link lifetimes, whether the job timers arm, and where avatar bytes live. Every one has a working default.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">3</span>Database</h2>
+  <p>All additive, all through the existing boot-migration list. No table was altered destructively and no data is rewritten except one backfill.</p>
+  <table>
+    <tr><th>Change</th><th>Why</th></tr>
+    <tr><td class="k">+ credential_<br>deliveries</td><td>Schedule, status, attempts, last error, claim stamp. One pending row per account.</td></tr>
+    <tr><td class="k">+ password_<br>tokens</td><td>Activation and reset links. Only the SHA-256 of the secret is stored.</td></tr>
+    <tr><td class="k">+ user_avatars</td><td>Image bytes in their own table, keyed one-per-user. <b>Not</b> on <code>users</code>: that row is read on nearly every request.</td></tr>
+    <tr><td class="k">users +4</td><td><code>password_changed_at</code>, <code>password_reset_required</code>, <code>password_reset_at</code>, <code>avatar_updated_at</code>.</td></tr>
+    <tr><td class="k">sessions +2</td><td><code>user_agent</code>, <code>ip_address</code> &mdash; so the device list can name a session instead of calling every row &quot;another device&quot;.</td></tr>
+    <tr><td class="k">Backfill</td><td><code>password_changed_at = now</code> where null, so nobody is locked out the morning the policy switches on.</td></tr>
+    <tr><td class="k">+4 indexes</td><td>Due-delivery lookup, per-user lookups, token expiry.</td></tr>
+  </table>
+  <p><span class="lbl">Why the password age is a new column:</span> <code>password_expires_at</code> already existed, but it means <i>this account lapses and stops working</i> &mdash; an admin sets it per client. Reusing it for a 30-day rotation would delete every client's access on day 31. The two are deliberately separate, and both are shown side by side on Client Access.</p>
+  <p>Five matching driver methods were added to <b>both</b> the Postgres and Firestore drivers, so the two cannot drift.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">4</span>API</h2>
+  <table>
+    <tr><td class="k">GET</td><td><code>/api/credentials</code> &mdash; list + config flags</td></tr>
+    <tr><td class="k">POST</td><td><code>/api/credentials/run</code> &mdash; run both sweeps now</td></tr>
+    <tr><td class="k">POST</td><td><code>/api/credentials/:userId</code> &mdash; schedule / reschedule</td></tr>
+    <tr><td class="k">DELETE</td><td><code>/api/credentials/:userId</code> &mdash; cancel</td></tr>
+    <tr><td class="k">POST</td><td><code>/api/credentials/:id/retry</code></td></tr>
+    <tr><td class="k">POST</td><td><code>/api/auth/password/forgot</code> &mdash; public</td></tr>
+    <tr><td class="k">POST</td><td><code>/api/auth/password/verify</code> &mdash; public</td></tr>
+    <tr><td class="k">POST</td><td><code>/api/auth/password/reset</code> &mdash; public</td></tr>
+    <tr><td class="k">GET</td><td><code>/api/users/me/profile</code></td></tr>
+    <tr><td class="k">DELETE</td><td><code>/api/users/me/sessions</code></td></tr>
+    <tr><td class="k">GET/POST/<br>DELETE</td><td><code>/api/users/:id/avatar</code> (<code>me</code> works as an id)</td></tr>
+  </table>
+  <p>Every one authenticates, authorises by role, validates input, returns the existing response shape and writes an audit row. The three public ones are the only unauthenticated additions and are rate-limited as a group.</p>
+  </section>
+
+</div>
+</div>
+
+<!-- ============================ PAGE TWO ============================ -->
+<div class="sheet">
+<div class="cols">
+
+  <section>
+  <h2><span class="n">5</span>Scheduled jobs</h2>
+  <p>Built in the pattern this codebase already uses (<code>slaWatch</code>, <code>domainWatch</code>) rather than adding a queue: the app targets serverless, where a <code>setInterval</code> at boot is a scheduler on a laptop that silently does nothing in production.</p>
+  <table>
+    <tr><td class="k">credential<br>Scheduler</td><td>Finds due deliveries and sends them.</td></tr>
+    <tr><td class="k">password<br>Watch</td><td>Warns before expiry; flags and emails a reset link after it.</td></tr>
+  </table>
+  <p>Each runs three ways: on admin request traffic (throttled to one pass per interval), from a <b>Check credentials</b> button on the Mail page, and from a real timer on any host that keeps a process alive &mdash; so a 3am delivery does not wait for the first sign-in.</p>
+  <p><span class="lbl">Duplicate emails are impossible, not unlikely.</span> A delivery is taken by an atomic <code>scheduled &rarr; sending</code> claim, so two instances sweeping at the same moment means exactly one of them sends. A claim whose process died is released after 15 minutes. Failures retry twice with backoff, then park as <i>Failed</i> and email the administrators.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">6</span>Email</h2>
+  <p>Five templates added to the existing registry, so all five preview on the Mail page like every other message.</p>
+  <table>
+    <tr><td class="k">account_activation</td><td>Choose your first password</td></tr>
+    <tr><td class="k">password_expiring</td><td>Warning before expiry</td></tr>
+    <tr><td class="k">password_reset</td><td>The single-use link</td></tr>
+    <tr><td class="k">password_changed</td><td>Confirmation, so a takeover cannot be silent</td></tr>
+    <tr><td class="k">credential_delivery_failed</td><td>To admins, when a send gives up</td></tr>
+  </table>
+  <p><b>No email in this set ever contains a password.</b> The mail log's scrubber was extended so a stored message body cannot hold a live token either.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">7</span>Security</h2>
+  <ul>
+    <li><b>Tokens are stored hashed</b> (SHA-256 of a 32-byte secret), compared in constant time, single-use through a conditional update, and expiring. Copied from the existing sign-in-link design rather than invented.</li>
+    <li><b>Links travel in the URL fragment</b> (<code>#token=</code>), which browsers never send to a server &mdash; so a token cannot reach an access log or a <code>Referer</code> header, and a link-scanner cannot burn the single use.</li>
+    <li><b>Passwords stay bcrypt</b>, via the app's existing hashing. Every write is routed so the age stamp cannot be forgotten &mdash; including down the approval queue.</li>
+    <li><b>A reset destroys every session</b> of that account, plus outstanding links and live sign-in codes.</li>
+    <li><b>No user enumeration:</b> the forgot-password endpoint returns a byte-identical answer for a known and an unknown address (asserted in the tests).</li>
+    <li><b>Uploads are judged on their bytes.</b> Filename and declared type are ignored entirely; format and dimensions are read from the file header. SVG, HTML and oversized files are refused, and the type a file is <i>served</i> as is the one the validator decided.</li>
+    <li><b>Nothing sensitive is logged</b> &mdash; no password, token or hash appears in an audit row, error or email log.</li>
+    <li><b>Admin-on-admin rules preserved:</b> scheduling or retrying another administrator's credentials remains a super admin's alone.</li>
+  </ul>
+  </section>
+
+  <section>
+  <h2><span class="n">8</span>Bugs found and fixed</h2>
+  <table>
+    <tr><td class="k">Pre-existing</td><td>The security suite was <b>already failing</b>: 69 passed, 32 failed, then crashed. One stale expectation &mdash; it wanted a super admin to receive a peer admin's regenerated password, which the code deliberately withholds &mdash; cascaded into 30 downstream failures. The test was corrected to assert the secure behaviour; <b>the control was not weakened.</b></td></tr>
+    <tr><td class="k">Mine</td><td>Multer's file-size error fired before the handler, so an oversized upload returned <i>500 &quot;something went wrong on the server&quot;</i> instead of 413.</td></tr>
+    <tr><td class="k">Mine</td><td>The &quot;too short&quot; password message was word-for-word identical to the hint above it, so typing produced no visible change.</td></tr>
+    <tr><td class="k">Polish</td><td>Session and email addresses showed as <code>::ffff:127.0.0.1</code>; the normaliser is now shared.</td></tr>
+  </table>
+  </section>
+
+  <section>
+  <h2><span class="n">9</span>Files</h2>
+  <p><b>21 created</b> &mdash; 9 backend (<code>passwordPolicy</code>, <code>passwordTokens</code>, <code>credentialDelivery</code>, <code>credentialScheduler</code>, <code>passwordWatch</code>, <code>imageValidation</code>, <code>avatarStore</code>, <code>userAgent</code>, <code>routes/credentials</code>) and 12 frontend (Profile, SetPassword, UserAvatar, AvatarUploader, ChangePasswordForm, PasswordResetRequired, PasswordStatusBadge, DateTimePicker, two hooks, two libs).</p>
+  <p><b>36 modified</b>, each minimally: schema and drivers, auth middleware and routes, users routes, the approval queue, mail templates and scrubber, rate limits, live-update topics, server wiring, nine frontend screens, both test suites and <code>.env.example</code>.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">10</span>Verification</h2>
+  <table>
+    <tr><th>Check</th><th>Before</th><th>After</th></tr>
+    <tr><td class="k">test:app</td><td class="num">234 / 0</td><td class="num ok">315 / 0</td></tr>
+    <tr><td class="k">test:security</td><td class="num">69 / <b>32</b></td><td class="num ok">183 / 0</td></tr>
+    <tr><td class="k">test:mail</td><td class="num">39 / 0</td><td class="num ok">39 / 0</td></tr>
+    <tr><td class="k">tsc / lint</td><td class="num">clean</td><td class="num ok">clean</td></tr>
+    <tr><td class="k">migrations</td><td class="num">19 tables</td><td class="num ok">22 tables</td></tr>
+  </table>
+  <p>81 new checks cover the delivery lifecycle, duplicate-send prevention, token expiry / reuse / forgery, enumeration, the reset-required gate, upload validation and profile permissions. Beyond the suites, the whole chain was walked in a real browser: reset email &rarr; set password &rarr; confirmation &rarr; dead link &rarr; sign in; and schedule &rarr; sweep &rarr; activation email.</p>
+
+  <h3>Checking it yourself</h3>
+  <p>Once a live mail key and <code>APP_BASE_URL</code> are in place, the fastest honest test is about four minutes:</p>
+  <ul>
+    <li>Client Access &rarr; <b>Delivery</b> on any client &rarr; pick <i>In an hour</i>, then edit the time to a minute ago &rarr; <b>Schedule</b>.</li>
+    <li>Mail &rarr; <b>Check credentials</b>. It reports what it sent. The row turns <i>Sent</i>.</li>
+    <li>Open the email, follow the link, set a password. The link dies on second use.</li>
+    <li>Sign in with it. The confirmation email should already be waiting.</li>
+  </ul>
+  <p>To see the expiry wall without waiting a month, start the server with <code>PASSWORD_MAX_AGE_DAYS=0.00002</code> &mdash; every password ages out in under two seconds. That is exactly how it was verified here.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">11</span>Also added on request</h2>
+  <p><b>Real device names.</b> The session list now reads <i>Edge on Windows</i>, <i>Safari on iPhone</i>, <i>Safari on macOS</i> with matching icons and IP, rather than &quot;Another device&quot; on every row &mdash; which was useless for the one thing that list is for.</p>
+  <p><b>A custom date &amp; time picker</b> replacing the browser's own <code>datetime-local</code> chrome, composed from the app's existing DatePicker and Selects, with <i>In an hour</i> / <i>Tomorrow 9am</i> / <i>Next Monday 9am</i> presets. <b>Tab padding</b> corrected on the profile page only.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">12</span>Limitations</h2>
+  <ul>
+    <li><b>Phone number and department are not on the profile.</b> The schema has neither, and inventing columns you may model differently was the wrong call. Say the word and they are a short change.</li>
+    <li><b>Avatars resize in the browser</b>, not the server. A server-side resize means a native image library, which breaks a serverless bundle. The server still validates every byte; it just does not repair a bad file. <code>utils/avatarStore.js</code> is a driver seam for object storage later.</li>
+    <li><b>The Firestore path is written but not exercised</b> against a live Firestore, as this deployment runs Postgres.</li>
+    <li><b>Password rotation defaults to on</b> at 30 days. Existing accounts start their clock at first boot after the migration, so nobody is locked out; set <code>PASSWORD_POLICY_ENABLED=false</code> to disable.</li>
+  </ul>
+  </section>
+
+  <footer>
+  Generated 2 September 2026. Every claim here was verified by running it &mdash; test counts are actual output, and the browser walkthroughs were performed against a live server. Nothing is reported as working that was not observed working.
+  </footer>
+
+</div>
+</div>

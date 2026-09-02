@@ -168,6 +168,71 @@ const firestoreDb = {
       return { id: doc.id, ...doc.data(), consumed: true };
     });
   },
+
+  /** Single-use password-setup link, same transaction guard as above. */
+  async consumePasswordToken(id) {
+    const ref = getDb().collection('password_tokens').doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      if (doc.data().consumed === true) return null;
+      const consumedAt = Date.now();
+      tx.update(ref, { consumed: true, consumedAt });
+      return { id: doc.id, ...doc.data(), consumed: true, consumedAt };
+    });
+  },
+
+  async pruneExpiredPasswordTokens() {
+    const snap = await getDb().collection('password_tokens').where('expiresAt', '<', Date.now()).get();
+    await deleteAll('password_tokens', snap.docs.map((d) => d.id));
+  },
+
+  async invalidateUserPasswordTokens(userId, purpose = null) {
+    const snap = await getDb().collection('password_tokens').where('userId', '==', userId).get();
+    const ids = snap.docs
+      .filter((d) => d.data().consumed !== true && (!purpose || d.data().purpose === purpose))
+      .map((d) => d.id);
+    await deleteAll('password_tokens', ids);
+  },
+
+  /**
+   * Take ownership of a scheduled delivery, once. The transaction is what stops
+   * two instances sweeping at the same moment from both sending the email.
+   */
+  async claimCredentialDelivery(id) {
+    const ref = getDb().collection('credential_deliveries').doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data.status !== 'scheduled') return null;
+      const now = Date.now();
+      const patch = {
+        status: 'sending',
+        claimedAt: now,
+        lastAttemptAt: now,
+        attempts: Number(data.attempts || 0) + 1,
+      };
+      tx.update(ref, patch);
+      return { id: doc.id, ...data, ...patch };
+    });
+  },
+
+  /** Hand back a claim whose process died before it reached a conclusion. */
+  async releaseStaleCredentialClaims(olderThanMs) {
+    const cutoff = Date.now() - olderThanMs;
+    const snap = await getDb().collection('credential_deliveries').where('status', '==', 'sending').get();
+    const stale = snap.docs.filter((d) => Number(d.data().claimedAt || 0) < cutoff);
+    const client = getDb();
+    for (let i = 0; i < stale.length; i += 450) {
+      const batch = client.batch();
+      for (const doc of stale.slice(i, i + 450)) {
+        batch.update(doc.ref, { status: 'scheduled', claimedAt: null });
+      }
+      await batch.commit();
+    }
+    return stale.map((d) => ({ id: d.id, ...d.data(), status: 'scheduled' }));
+  },
 };
 
 async function deleteAll(collection, ids) {

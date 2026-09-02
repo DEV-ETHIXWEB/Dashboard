@@ -43,7 +43,10 @@ const TOPIC_KEYS: Record<LiveTopic, string[][]> = {
   billing: [["billing"], ["payments"]],
   domains: [["domains"]],
   notifications: [["notifications"]],
-  users: [["users"]],
+  // A change to an account moves three screens: the people list, the
+  // scheduled-delivery list that hangs off it, and the viewer's own profile
+  // (their picture, their sessions, their password standing).
+  users: [["users"], ["credential-deliveries"], ["profile"]],
   mail: [["mail"]],
   otp: [["otp-logs"]],
   approvals: [["approvals"], ["audit-log"]],

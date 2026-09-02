@@ -56,6 +56,20 @@ function rowToCamel(row, collection) {
   if ('amount' in out && out.amount !== null) out.amount = Number(out.amount);
   if ('sizeBytes' in out && out.sizeBytes !== null) out.sizeBytes = Number(out.sizeBytes);
   if ('passwordExpiresAt' in out && out.passwordExpiresAt !== null) out.passwordExpiresAt = Number(out.passwordExpiresAt);
+  // `pg` hands BIGINT back as a string so no precision is lost on the way out.
+  // Every one of these is an epoch-millisecond stamp that callers compare with
+  // Date.now(), and a string compares false against every number there.
+  for (const key of [
+    'passwordChangedAt', 'passwordResetAt', 'avatarUpdatedAt',
+    'scheduledAt', 'lastAttemptAt', 'claimedAt', 'sentAt', 'cancelledAt', 'consumedAt',
+  ]) {
+    if (key in out && out[key] !== null && out[key] !== undefined) out[key] = Number(out[key]);
+  }
+  if (collection === 'password_tokens' && 'expiresAt' in out && out.expiresAt !== null) {
+    out.expiresAt = Number(out.expiresAt);
+  }
+  if ('width' in out && out.width !== null) out.width = Number(out.width);
+  if ('height' in out && out.height !== null) out.height = Number(out.height);
   if ('responseDueAt' in out && out.responseDueAt !== null) out.responseDueAt = Number(out.responseDueAt);
   if ('firstResponseAt' in out && out.firstResponseAt !== null) out.firstResponseAt = Number(out.firstResponseAt);
   if ('resolvedNotifiedAt' in out && out.resolvedNotifiedAt !== null) out.resolvedNotifiedAt = Number(out.resolvedNotifiedAt);
@@ -159,6 +173,64 @@ const pgDb = {
     );
     return rowToCamel(res.rows[0], 'login_links') || null;
   },
+  /**
+   * Same single-use guarantee as consumeLoginLink, for a password-setup link.
+   * Two people opening the same reset email at once means exactly one of them
+   * gets a row back; the other is told the link has been used.
+   */
+  async consumePasswordToken(id) {
+    const res = await getPool().query(
+      `UPDATE password_tokens SET consumed = TRUE, consumed_at = $2
+         WHERE id = $1 AND consumed = FALSE RETURNING *`,
+      [id, Date.now()]
+    );
+    return rowToCamel(res.rows[0], 'password_tokens') || null;
+  },
+  async pruneExpiredPasswordTokens() {
+    await getPool().query(`DELETE FROM password_tokens WHERE expires_at < $1`, [Date.now()]);
+  },
+  /** Drop every unused token for one account -- a newer link supersedes them. */
+  async invalidateUserPasswordTokens(userId, purpose = null) {
+    if (purpose) {
+      await getPool().query(
+        `DELETE FROM password_tokens WHERE user_id = $1 AND purpose = $2 AND consumed = FALSE`,
+        [userId, purpose]
+      );
+      return;
+    }
+    await getPool().query(`DELETE FROM password_tokens WHERE user_id = $1 AND consumed = FALSE`, [userId]);
+  },
+  /**
+   * Take ownership of a scheduled delivery, once.
+   *
+   * This is the whole duplicate-email guarantee. Two app instances sweeping at
+   * the same moment -- two serverless invocations, a timer and a manual run --
+   * both see the same due row; the UPDATE ... WHERE status = 'scheduled' means
+   * only one of them gets it back, and only that one sends.
+   */
+  async claimCredentialDelivery(id) {
+    const res = await getPool().query(
+      `UPDATE credential_deliveries
+          SET status = 'sending', claimed_at = $2, attempts = attempts + 1, last_attempt_at = $2
+        WHERE id = $1 AND status = 'scheduled' RETURNING *`,
+      [id, Date.now()]
+    );
+    return rowToCamel(res.rows[0], 'credential_deliveries') || null;
+  },
+  /**
+   * Hand a stuck delivery back to the queue.
+   *
+   * A claim that never reached a conclusion -- the process died mid-send -- would
+   * otherwise sit in 'sending' forever and never be retried by anyone.
+   */
+  async releaseStaleCredentialClaims(olderThanMs) {
+    const res = await getPool().query(
+      `UPDATE credential_deliveries SET status = 'scheduled', claimed_at = NULL
+        WHERE status = 'sending' AND claimed_at < $1 RETURNING *`,
+      [Date.now() - olderThanMs]
+    );
+    return res.rows.map((row) => rowToCamel(row, 'credential_deliveries'));
+  },
 };
 
 const firestore = DB_DRIVER === 'firestore' ? require('./firestore') : null;
@@ -215,7 +287,8 @@ async function initPostgresSchema() {
     )`,
     `CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, user_id TEXT, csrf_token TEXT,
-      created_at BIGINT, expires_at BIGINT, pending BOOLEAN DEFAULT FALSE
+      created_at BIGINT, expires_at BIGINT, pending BOOLEAN DEFAULT FALSE,
+      user_agent TEXT, ip_address TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS activity_log (
       id TEXT PRIMARY KEY, actor_id TEXT, action TEXT, entity TEXT,
@@ -280,6 +353,33 @@ async function initPostgresSchema() {
       transport TEXT, error TEXT, entity TEXT, entity_id TEXT, html TEXT, created_at TEXT
     )`,
     `CREATE INDEX IF NOT EXISTS idx_email_log_created_at ON email_log(created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS credential_deliveries (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'activation',
+      status TEXT NOT NULL DEFAULT 'scheduled', scheduled_at BIGINT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0, last_attempt_at BIGINT, last_error TEXT,
+      claimed_at BIGINT, sent_at BIGINT, cancelled_at BIGINT,
+      created_by TEXT, created_at TEXT, updated_at TEXT
+    )`,
+    // The sweep asks exactly one question -- "what is scheduled and due?" -- so
+    // that is the index it gets.
+    `CREATE INDEX IF NOT EXISTS idx_credential_deliveries_due ON credential_deliveries(status, scheduled_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_credential_deliveries_user ON credential_deliveries(user_id)`,
+    `CREATE TABLE IF NOT EXISTS password_tokens (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT 'reset',
+      token_hash TEXT NOT NULL, ip_address TEXT, created_at TEXT, expires_at BIGINT,
+      consumed BOOLEAN DEFAULT FALSE, consumed_at BIGINT, issued_by TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_password_tokens_user ON password_tokens(user_id, purpose)`,
+    `CREATE INDEX IF NOT EXISTS idx_password_tokens_expires ON password_tokens(expires_at)`,
+    // One row per account, enforced by the database rather than by whoever
+    // remembers to check first: replacing a picture is an upsert, not a second
+    // row that the reader then has to choose between.
+    `CREATE TABLE IF NOT EXISTS user_avatars (
+      id TEXT PRIMARY KEY, user_id TEXT UNIQUE NOT NULL,
+      storage_type TEXT NOT NULL DEFAULT 'database',
+      mime_type TEXT NOT NULL, size_bytes BIGINT, width INTEGER, height INTEGER,
+      content_base64 TEXT, checksum TEXT, updated_at TEXT, updated_by TEXT
+    )`,
   ];
   for (const sql of statements) await p.query(sql);
 
@@ -290,6 +390,10 @@ async function initPostgresSchema() {
     `ALTER TABLE users ALTER COLUMN password DROP NOT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_expires_at BIGINT`,
     `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending BOOLEAN DEFAULT FALSE`,
+    // What the session list on somebody's own profile names each row with.
+    // Sessions opened before this shipped simply read as an unknown device.
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent TEXT`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ip_address TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS clickup_task_id TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS clickup_task_url TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS clickup_task_id TEXT`,
@@ -323,6 +427,18 @@ async function initPostgresSchema() {
     // what tells the mirror that an invoice and a charge are the same money and
     // must not both be counted. See utils/stripeSync.js.
     `ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_payment_intent TEXT`,
+    // The monthly password policy. Separate from password_expires_at, which is
+    // when the account itself stops working -- see the note in db/schemas.js.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at BIGINT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_required BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_at BIGINT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_updated_at BIGINT`,
+    // Existing accounts have no recorded password age, and an unknown age must
+    // not read as "older than a month" -- that would demand a reset from every
+    // person in the workspace on the morning this deploys. Their clock starts
+    // now instead. Runs once in practice: after this, nothing writes a password
+    // without stamping the time (see utils/passwordPolicy.js stampChange).
+    `UPDATE users SET password_changed_at = ${Date.now()} WHERE password_changed_at IS NULL AND password IS NOT NULL`,
   ];
   for (const sql of alterations) {
     try {
@@ -371,6 +487,7 @@ async function bootstrapSuperAdmin() {
     email,
     role: 'admin',
     password: bcrypt.hashSync(password, 10),
+    passwordChangedAt: Date.now(),
     isSuperAdmin: true,
     adminTrusted: true,
     adminTrustedAt: new Date().toISOString(),
@@ -406,6 +523,9 @@ async function seed() {
   await initSchema();
 
   const hash = (pw) => bcrypt.hashSync(pw, 10);
+  // The demo accounts are stamped with a password age so the policy has an
+  // honest value to read; without it every seeded login looks never-changed.
+  const seededAt = Date.now();
   const usersEmpty = (await db.all('users')).length === 0;
 
   // An empty workspace gets its first account from the environment, never from
@@ -434,17 +554,17 @@ async function seed() {
       // approval flow is exercised the moment anyone tries it.
       db.insert('users', {
         id: 'u-admin', name: 'Admin User', email: 'admin@ethixweb.local', role: 'admin',
-        password: hash('Admin#2026!'), isSuperAdmin: true, adminTrusted: true,
+        password: hash('Admin#2026!'), passwordChangedAt: seededAt, isSuperAdmin: true, adminTrusted: true,
         adminTrustedAt: new Date().toISOString(), adminTrustedBy: 'system',
       }),
       db.insert('users', {
         id: 'u-admin-2', name: 'Priya Nair', email: 'priya.nair@ethixweb.local', role: 'admin',
-        password: hash('Admin#2026!'), isSuperAdmin: false, adminTrusted: false,
+        password: hash('Admin#2026!'), passwordChangedAt: seededAt, isSuperAdmin: false, adminTrusted: false,
       }),
-      db.insert('users', { id: 'u-sales', name: 'Emily Turner', email: 'emily.turner@ethixweb.local', role: 'sales', password: hash('Sales#2026!') }),
-      db.insert('users', { id: 'u-pm', name: 'Ryan Coleman', email: 'ryan.coleman@ethixweb.local', role: 'project_manager', password: hash('Manager#2026!') }),
-      db.insert('users', { id: 'u-employee', name: 'Jordan Brooks', email: 'jordan.brooks@ethixweb.local', role: 'employee', password: hash('Staff#2026!') }),
-      db.insert('users', { id: 'u-client', name: 'David Shaw', email: 'client@brightpath-retail.com', role: 'client', company: 'BrightPath Retail Co.', password: hash('Client#2026!') }),
+      db.insert('users', { id: 'u-sales', name: 'Emily Turner', email: 'emily.turner@ethixweb.local', role: 'sales', password: hash('Sales#2026!'), passwordChangedAt: seededAt }),
+      db.insert('users', { id: 'u-pm', name: 'Ryan Coleman', email: 'ryan.coleman@ethixweb.local', role: 'project_manager', password: hash('Manager#2026!'), passwordChangedAt: seededAt }),
+      db.insert('users', { id: 'u-employee', name: 'Jordan Brooks', email: 'jordan.brooks@ethixweb.local', role: 'employee', password: hash('Staff#2026!'), passwordChangedAt: seededAt }),
+      db.insert('users', { id: 'u-client', name: 'David Shaw', email: 'client@brightpath-retail.com', role: 'client', company: 'BrightPath Retail Co.', password: hash('Client#2026!'), passwordChangedAt: seededAt }),
     ]);
   }
 

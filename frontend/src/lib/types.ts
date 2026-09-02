@@ -11,6 +11,64 @@ export type ClientPageKey =
   | "budget"
   | "billing";
 
+/**
+ * Where an account stands on the monthly password policy.
+ *
+ * Mirrors utils/passwordPolicy.js statusFor(). The server decides the state;
+ * this copy exists so a badge can be drawn without a second request, and it is
+ * never the thing that grants or refuses anything -- middleware/auth.js checks
+ * the same rule again on every call.
+ */
+export type PasswordState =
+  | "active"
+  | "expiring_soon"
+  | "reset_required"
+  | "reset_completed"
+  | "no_password";
+
+export interface PasswordStatus {
+  state: PasswordState;
+  label: string;
+  /** When the password was last set. Epoch ms, or null when never recorded. */
+  changedAt: number | null;
+  /** When a reset link was last redeemed. */
+  resetAt: number | null;
+  /** When it ages out, or null when the policy does not apply. */
+  expiresAt: number | null;
+  daysLeft: number | null;
+  resetRequired: boolean;
+  policyEnabled: boolean;
+  maxAgeDays: number;
+  warnDays: number;
+  minLength: number;
+}
+
+export type CredentialDeliveryStatus = "scheduled" | "sent" | "failed" | "cancelled";
+
+/** One scheduled hand-over of a login. Never carries the link or a password. */
+export interface CredentialDelivery {
+  id: string;
+  userId: string;
+  kind: "activation" | "reset";
+  status: CredentialDeliveryStatus;
+  scheduledAt: number | null;
+  sentAt: number | null;
+  cancelledAt: number | null;
+  attempts: number;
+  lastAttemptAt: number | null;
+  lastError: string | null;
+  canRetry: boolean;
+  createdBy: string | null;
+  createdAt: string | null;
+}
+
+/** The same row with enough of the account attached to render a table line. */
+export interface CredentialDeliveryRow extends CredentialDelivery {
+  userName: string;
+  userEmail: string | null;
+  userRole: Role | null;
+}
+
 export interface User {
   id: string;
   name: string;
@@ -29,6 +87,18 @@ export interface User {
   isSuperAdmin?: boolean;
   /** An admin who has been vouched for and can act without a second signature. */
   adminTrusted?: boolean;
+  /**
+   * When this *account* lapses, which is a different thing from the password
+   * ageing out below. An admin sets it when issuing a client login, and past it
+   * the login stops working entirely. See utils/passwordPolicy.js.
+   */
+  passwordExpiresAt?: number | null;
+  /** Where this account stands on the monthly password policy. */
+  passwordStatus?: PasswordStatus;
+  /** Whether there is a profile picture to fetch. Drives the initials fallback. */
+  hasAvatar?: boolean;
+  /** Changes whenever the picture does, so the avatar URL busts its own cache. */
+  avatarUpdatedAt?: number | null;
 }
 
 /**
@@ -89,9 +159,18 @@ export interface AuditEntry {
   actorName: string;
   actorRole: Role | null;
   actorIsSuperAdmin: boolean;
+  /** Versions the actor's avatar URL; null when they have no picture. */
+  actorAvatarUpdatedAt?: number | null;
 }
 
 export interface PublicConfig {
+  /** The password rules, so a form can state them before refusing anything. */
+  passwordPolicy?: {
+    enabled: boolean;
+    minLength: number;
+    maxAgeDays: number;
+    warnDays: number;
+  };
   googleSignInEnabled: boolean;
   googleClientId: string | null;
   firebaseEnabled: boolean;

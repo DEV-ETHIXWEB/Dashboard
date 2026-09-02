@@ -6,9 +6,21 @@ export function setCsrfToken(token: string | null) {
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /**
+   * The rest of the failure body, when the server sent one.
+   *
+   * Most callers only ever want `message`, which is why it stays the first
+   * argument. A few need a machine-readable discriminator alongside it -- the
+   * set-password page has to tell "expired" from "already used" to say
+   * something useful -- and losing that meant either parsing English or adding
+   * a second request. Never populated for a network failure, where there is no
+   * body to speak of.
+   */
+  payload: Record<string, unknown>;
+  constructor(message: string, status: number, payload: Record<string, unknown> = {}) {
     super(message);
     this.status = status;
+    this.payload = payload;
   }
 }
 
@@ -157,7 +169,11 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ApiError((data as { error?: string }).error || `Request failed (${res.status})`, res.status);
+    throw new ApiError(
+      (data as { error?: string }).error || `Request failed (${res.status})`,
+      res.status,
+      data as Record<string, unknown>,
+    );
   }
 
   const payload = (await res.json().catch(() => ({}))) as T;
@@ -191,7 +207,11 @@ export async function apiUpload<T = unknown>(path: string, formData: FormData): 
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ApiError((data as { error?: string }).error || `Request failed (${res.status})`, res.status);
+    throw new ApiError(
+      (data as { error?: string }).error || `Request failed (${res.status})`,
+      res.status,
+      data as Record<string, unknown>,
+    );
   }
 
   const payload = (await res.json().catch(() => ({}))) as T;

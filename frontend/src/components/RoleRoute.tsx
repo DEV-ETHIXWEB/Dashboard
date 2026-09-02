@@ -3,17 +3,37 @@ import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AppShell } from "@/components/AppShell";
+import { PasswordResetRequired } from "@/components/PasswordResetRequired";
 import { canSeePage, pageKeyForPath } from "@/lib/permissions";
 import type { Role } from "@/lib/types";
 
 export function RoleRoute({ roles, children }: { roles?: Role[]; children: ReactNode }) {
   return (
     <ProtectedRoute>
-      <AppShell>
-        <RoleGate roles={roles}>{children}</RoleGate>
-      </AppShell>
+      <PasswordGate>
+        <AppShell>
+          <RoleGate roles={roles}>{children}</RoleGate>
+        </AppShell>
+      </PasswordGate>
     </ProtectedRoute>
   );
+}
+
+/**
+ * An expired password stands in front of every screen, not beside one.
+ *
+ * Outside AppShell on purpose: the server is already refusing every endpoint
+ * the shell reads from -- notifications, approvals, the live stream -- so
+ * rendering the dashboard around a notice would fill it with error states and
+ * make a policy look like an outage. One screen, one thing to do.
+ *
+ * The server enforces this independently (middleware/auth.js). This is what
+ * makes the enforcement legible rather than what performs it.
+ */
+function PasswordGate({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  if (user?.passwordStatus?.resetRequired) return <PasswordResetRequired />;
+  return <>{children}</>;
 }
 
 function RoleGate({ roles, children }: { roles?: Role[]; children: ReactNode }) {

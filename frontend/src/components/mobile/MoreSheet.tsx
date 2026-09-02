@@ -5,8 +5,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { LiveIndicator } from "@/components/LiveIndicator";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { initials } from "@/lib/format";
+import { UserAvatar } from "@/components/UserAvatar";
 import { successFeedback, tapFeedback } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/lib/nav";
@@ -120,11 +119,7 @@ export function MoreSheet({
           </div>
 
           <div className="flex items-center gap-3 px-5 pt-1 pb-3">
-            <Avatar className="size-10 shrink-0">
-              <AvatarFallback className="bg-primary/10 text-sm font-semibold text-primary">
-                {user ? initials(user.name) : "?"}
-              </AvatarFallback>
-            </Avatar>
+            <UserAvatar user={user} size="lg" className="size-10" fallbackClassName="text-sm" />
             <div className="min-w-0 flex-1">
               <div className="truncate text-[15px] leading-tight font-semibold">{user?.name}</div>
               <div className="truncate text-xs text-muted-foreground">{user?.email}</div>

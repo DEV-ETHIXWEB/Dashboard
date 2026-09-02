@@ -360,10 +360,14 @@ const UNLOGGED_BODIES = new Set(['credentials', 'login_code']);
  * into some future email must not be replayable out of the log either.
  */
 function scrubStoredHtml(html) {
-  return String(html || '').replace(
-    /(magic-link\/verify\?token=)[^"'&\s<]+/gi,
-    '$1[redacted]',
-  );
+  return String(html || '')
+    .replace(/(magic-link\/verify\?token=)[^"'&\s<]+/gi, '$1[redacted]')
+    // Activation and password-reset links carry their token in the URL
+    // fragment, so it never reaches a server log on its own -- but the message
+    // body is a copy of the whole URL, and storing that would put a live
+    // password-setup link on the Mail page for any admin to open. The rendered
+    // email keeps its shape here; only the secret goes.
+    .replace(/(set-password#token=)[^"'&\s<]+/gi, '$1[redacted]');
 }
 
 /** What is safe to keep of this message's body. */

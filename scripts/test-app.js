@@ -48,6 +48,26 @@ function makeClient(base) {
       try { data = JSON.parse(text); } catch { data = text; }
       return { status: res.status, data, text, headers: res.headers };
     },
+    /** Multipart under an arbitrary field name, for the avatar endpoints. */
+    async uploadField(path, field, file) {
+      const form = new FormData();
+      if (file) form.set(field, new Blob([file.bytes], { type: file.type }), file.name);
+      const headers = {};
+      if (jar.size) headers.Cookie = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+      if (csrf) headers['X-CSRF-Token'] = csrf;
+      const res = await fetch(base + path, { method: 'POST', headers, body: form });
+      const text = await res.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch { data = text; }
+      return { status: res.status, data, text, headers: res.headers };
+    },
+    /** A GET whose body is bytes rather than JSON -- an image, say. */
+    async raw(path) {
+      const headers = {};
+      if (jar.size) headers.Cookie = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+      const res = await fetch(base + path, { headers });
+      return { status: res.status, buf: Buffer.from(await res.arrayBuffer()), headers: res.headers };
+    },
     /** The same session, sending multipart -- the only way to reach an upload. */
     async upload(path, fields, file) {
       const form = new FormData();
@@ -74,6 +94,47 @@ function makeClient(base) {
  * of having one. A test running in-process reads it the way the mail transport
  * would have.
  */
+/**
+ * A genuine PNG of a given size.
+ *
+ * Built rather than checked in as a fixture because the avatar validator reads
+ * the real header -- a handful of magic bytes with a plausible size glued on
+ * would pass a signature check and fail an honest one, which would make the
+ * test prove less than it appears to.
+ */
+function pngBytes(width, height) {
+  const zlib = require('zlib');
+  const table = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  const crc = (buf) => {
+    let c = 0xffffffff;
+    for (const b of buf) c = table[(c ^ b) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const typed = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const check = Buffer.alloc(4); check.writeUInt32BE(crc(typed));
+    return Buffer.concat([len, typed, check]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;   // 8 bits per channel
+  ihdr[9] = 2;   // truecolour
+  const scanlines = Buffer.alloc((width * 3 + 1) * height);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', zlib.deflateSync(scanlines)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
 async function latestCodeFor(email) {
   const { db } = require('../db/setup');
   const { decryptCode } = require('../utils/otpCrypto');
@@ -976,6 +1037,329 @@ async function main() {
 
   r = await client.req('GET', '/api/users/me/recovery-codes');
   check('a client has no backup codes to read', r.status === 403 || r.data.status?.remaining === 0, `${r.status} ${r.text.slice(0, 120)}`);
+
+  // --- scheduled credential delivery ---------------------------------------
+  // The whole point of this feature: an admin books a moment, and at that
+  // moment the account is emailed a link that lets it set its own password.
+  // Nothing here ever sees a password, and neither does the admin.
+  {
+    const { db } = require('../db/setup');
+
+    r = await admin.req('POST', `/api/credentials/${clientId}`, { scheduledAt: Date.now() + 3600_000 });
+    check('an admin can schedule a credential delivery',
+      r.status === 201 && r.data.delivery?.status === 'scheduled', `${r.status} ${r.text.slice(0, 200)}`);
+    const deliveryId = r.data.delivery?.id;
+
+    r = await admin.req('POST', `/api/credentials/${clientId}`, { scheduledAt: Date.now() + 7200_000 });
+    check('rescheduling moves the existing row rather than queueing a second',
+      r.status === 200 && r.data.rescheduled === true && r.data.delivery?.id === deliveryId,
+      `${r.status} ${r.text.slice(0, 200)}`);
+
+    r = await admin.req('GET', '/api/credentials');
+    const forClient = (r.data.deliveries || []).filter((d) => d.userId === clientId);
+    check('the account has exactly one delivery on record', forClient.length === 1, JSON.stringify(forClient));
+    check('the delivery record carries no secret',
+      !/password|token|secret/i.test(JSON.stringify(forClient[0] || {})), JSON.stringify(forClient[0] || {}));
+
+    r = await admin.req('POST', `/api/credentials/${clientId}`, { scheduledAt: 'tomorrow please' });
+    check('a delivery needs a real timestamp', r.status === 400, `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await admin.req('DELETE', `/api/credentials/${clientId}`);
+    check('a pending delivery can be cancelled',
+      r.status === 200 && r.data.delivery?.status === 'cancelled', `${r.status} ${r.text.slice(0, 200)}`);
+
+    r = await admin.req('DELETE', `/api/credentials/${clientId}`);
+    check('cancelling twice is refused rather than silently repeated', r.status === 404, `${r.status}`);
+
+    // A transport, just for this block, so the send can actually be proved.
+    // Every other test in this file runs with none on purpose.
+    const http = require('http');
+    const delivered = [];
+    const sink = http.createServer((req2, res2) => {
+      let body = '';
+      req2.on('data', (c) => { body += c; });
+      req2.on('end', () => {
+        try { delivered.push(JSON.parse(body)); } catch { delivered.push({ raw: body }); }
+        res2.writeHead(200, { 'Content-Type': 'application/json' });
+        res2.end('{"ok":true}');
+      });
+    });
+    await new Promise((resolve) => sink.listen(0, resolve));
+    process.env.MAIL_WEBHOOK_URL = `http://127.0.0.1:${sink.address().port}/mail`;
+    process.env.MAIL_FROM = 'EthixWeb <noreply@example.com>';
+
+    try {
+      const scheduler = require('../utils/credentialScheduler');
+
+      r = await admin.req('POST', `/api/credentials/${clientId}`, { scheduledAt: Date.now() - 1000 });
+      check('a delivery can be booked for a moment that has passed', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+      const dueId = r.data.delivery.id;
+
+      let sweep = await scheduler.runSweep();
+      check('the sweep sends what is due', sweep.sent === 1 && sweep.failed === 0, JSON.stringify(sweep));
+      check('the email really left the building', delivered.length === 1, `${delivered.length} sent`);
+      const activationText = String(delivered[0] && delivered[0].text || '');
+      check('and hands over no password',
+        !/^\s*Password:/mi.test(activationText) && !activationText.includes('ClientPass#1'),
+        activationText.slice(0, 200));
+      check('it carries a single-use set-password link',
+        /set-password#token=/.test(String(delivered[0] && delivered[0].text || '')),
+        String(delivered[0] && delivered[0].text || '').slice(0, 200));
+
+      let row = await db.find('credential_deliveries', dueId);
+      check('the delivery is marked sent', row.status === 'sent' && Number(row.sentAt) > 0, JSON.stringify(row.status));
+
+      // The duplicate guarantee. A second sweep -- a second serverless
+      // invocation, a timer racing a page load -- must find nothing to do.
+      sweep = await scheduler.runSweep();
+      check('a second sweep sends nothing, so nobody gets two credential emails',
+        sweep.sent === 0 && sweep.due === 0 && delivered.length === 1,
+        `${JSON.stringify(sweep)} / ${delivered.length} emails`);
+
+      const stored = await db.filter('password_tokens', (t) => t.userId === clientId && t.purpose === 'activation');
+      check('an activation token was stored', stored.length === 1, String(stored.length));
+      const replayable = Object.values(stored[0] || {}).some(
+        (v) => typeof v === 'string' && /^[0-9a-f-]{36}\.[A-Za-z0-9_-]{20,}$/.test(v),
+      );
+      check('only the hash of it, never anything replayable',
+        stored[0] && /^[a-f0-9]{64}$/.test(stored[0].tokenHash) && !replayable,
+        JSON.stringify(stored[0] || {}).slice(0, 200));
+
+      const logged = await db.filter('email_log', (e) => e.template === 'account_activation');
+      check('the send is on the mail log', logged.length === 1, String(logged.length));
+      check('with the live token redacted out of the stored body',
+        !/set-password#token=[A-Za-z0-9._-]{20,}/.test(String(logged[0] && logged[0].html || '')),
+        String(logged[0] && logged[0].html || '').slice(0, 160));
+    } finally {
+      delete process.env.MAIL_WEBHOOK_URL;
+      sink.close();
+    }
+
+    // --- the password reset flow -------------------------------------------
+    const passwordTokens = require('../utils/passwordTokens');
+
+    // These are unauthenticated endpoints, and /password/reset clears the
+    // caller's session cookie by design. Driven from an empty jar, so the
+    // admin session running the rest of this file survives.
+    const outsider = makeClient(base);
+    r = await outsider.req('POST', '/api/auth/password/forgot', { email: 'qa.client@example.com' });
+    const realAnswer = r.text;
+    check('a reset can be requested without signing in', r.status === 200, `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await outsider.req('POST', '/api/auth/password/forgot', { email: 'nobody@nowhere.example' });
+    check('an unknown address gets a byte-identical answer, so nobody can enumerate accounts',
+      r.status === 200 && r.text === realAnswer, r.text.slice(0, 160));
+
+    // The secret only exists at mint time, so one is minted here the same way
+    // the app does and the link is exercised end to end.
+    const clientUser = await db.find('users', clientId);
+    const minted = passwordTokens.issueToken();
+    await db.insert('password_tokens', {
+      id: minted.id,
+      userId: clientId,
+      purpose: 'reset',
+      tokenHash: passwordTokens.hashSecret(minted.secret),
+      createdAt: new Date().toISOString(),
+      expiresAt: Date.now() + 600_000,
+      consumed: false,
+    });
+    const goodToken = passwordTokens.formatToken(minted);
+
+    r = await outsider.req('POST', '/api/auth/password/verify', { token: goodToken });
+    check('a live link verifies', r.status === 200 && r.data.ok === true, `${r.status} ${r.text.slice(0, 160)}`);
+    check('and never echoes the account email back',
+      !r.text.includes('qa.client@example.com'), r.text.slice(0, 160));
+
+    r = await outsider.req('POST', '/api/auth/password/verify', {
+      token: passwordTokens.formatToken({ id: minted.id, secret: 'not-the-secret' }),
+    });
+    check('a forged secret is refused', r.status === 400 && r.data.reason === 'invalid', `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await outsider.req('POST', '/api/auth/password/verify', { token: 'garbage' });
+    check('a malformed link is refused', r.status === 400, `${r.status}`);
+
+    // An expired one, minted directly with a time already past.
+    const stale = passwordTokens.issueToken();
+    await db.insert('password_tokens', {
+      id: stale.id,
+      userId: clientId,
+      purpose: 'reset',
+      tokenHash: passwordTokens.hashSecret(stale.secret),
+      createdAt: new Date().toISOString(),
+      expiresAt: Date.now() - 1000,
+      consumed: false,
+    });
+    r = await outsider.req('POST', '/api/auth/password/verify', { token: passwordTokens.formatToken(stale) });
+    check('an expired link is refused, and says so', r.status === 400 && r.data.reason === 'expired', `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await outsider.req('POST', '/api/auth/password/reset', { token: goodToken, password: 'short' });
+    check('a password below the policy minimum is refused', r.status === 422, `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await outsider.req('POST', '/api/auth/password/reset', { token: goodToken, password: 'Quiet-Harbour-Lantern-4' });
+    check('a good password is accepted', r.status === 200 && r.data.ok === true, `${r.status} ${r.text.slice(0, 200)}`);
+
+    r = await outsider.req('POST', '/api/auth/password/reset', { token: goodToken, password: 'Second-Attempt-Password-8' });
+    check('the same link cannot be used a second time',
+      r.status === 400 && r.data.reason === 'used', `${r.status} ${r.text.slice(0, 160)}`);
+
+    const afterReset = await db.find('users', clientId);
+    check('the stored hash actually changed', afterReset.password !== clientUser.password);
+    check('the password is never stored in the clear',
+      !String(afterReset.password).includes('Quiet-Harbour-Lantern-4'));
+    check('the reset stamped the password age', Number(afterReset.passwordChangedAt) > Date.now() - 60_000);
+    check('and recorded that it was a reset', Number(afterReset.passwordResetAt) > 0);
+
+    const liveSessions = await db.filter('sessions', (s) => s.userId === clientId);
+    check('every session of that account was destroyed by the reset', liveSessions.length === 0, String(liveSessions.length));
+
+    const auditRows = await db.filter('activity_log', (a) => a.action === 'password_reset' && a.entityId === clientId);
+    check('the reset is in the audit log', auditRows.length === 1, String(auditRows.length));
+    check('with no token or password in it',
+      !/Quiet-Harbour|token/i.test(JSON.stringify(auditRows[0] || {})), JSON.stringify(auditRows[0] || {}).slice(0, 200));
+
+    // --- the monthly policy ------------------------------------------------
+    const policy = require('../utils/passwordPolicy');
+    check('a freshly-set password reads as active', policy.statusFor(afterReset).state === 'reset_completed',
+      policy.statusFor(afterReset).state);
+    check('one past its month reads as reset required',
+      policy.statusFor({ password: 'x', passwordChangedAt: Date.now() - 40 * 86400_000 }).state === 'reset_required');
+    check('one nearly there reads as expiring soon',
+      policy.statusFor({ password: 'x', passwordChangedAt: Date.now() - 27 * 86400_000 }).state === 'expiring_soon');
+    check('a Google-only account is exempt',
+      policy.statusFor({ password: null, googleId: 'g' }).state === 'no_password');
+
+    // The gate. An account whose password has expired keeps its session and
+    // loses the app, which is not the same thing as being signed out.
+    await db.update('users', clientId, { passwordResetRequired: true });
+    const gated = makeClient(base);
+    let login = await gated.req('POST', '/api/auth/login', { email: 'qa.client@example.com', password: 'Quiet-Harbour-Lantern-4' });
+    gated.setCsrf(login.data.csrfToken);
+    const gatedLogs = (await admin.req('GET', '/api/auth/otp-logs')).data.logs || [];
+    const gatedRow = gatedLogs.filter((l) => l.email === 'qa.client@example.com')[0];
+    const gatedCode = (await admin.req('POST', `/api/auth/otp-logs/${gatedRow.id}/reveal`)).data.code;
+    login = await gated.req('POST', '/api/auth/verify-otp', { code: gatedCode });
+    gated.setCsrf(login.data.csrfToken);
+    check('an expired password does not stop the sign-in itself', login.status === 200, `${login.status}`);
+
+    r = await gated.req('GET', '/api/tickets');
+    check('but it does close the rest of the app',
+      r.status === 403 && r.data.passwordResetRequired === true, `${r.status} ${r.text.slice(0, 160)}`);
+    r = await gated.req('GET', '/api/auth/me');
+    check('who-am-I still answers, so the browser can explain why', r.status === 200, `${r.status}`);
+    check('and says the password needs replacing',
+      r.data.user?.passwordStatus?.resetRequired === true, JSON.stringify(r.data.user?.passwordStatus));
+
+    r = await gated.req('PUT', '/api/users/me', { password: 'weak', currentPassword: 'Quiet-Harbour-Lantern-4' });
+    check('the way out still enforces the policy', r.status === 422, `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await gated.req('PUT', '/api/users/me', {
+      password: 'Copper-Meadow-Signal-2', currentPassword: 'Quiet-Harbour-Lantern-4',
+    });
+    check('changing the password is allowed through the gate', r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+
+    r = await gated.req('GET', '/api/tickets');
+    check('and lifts it', r.status === 200, `${r.status} ${r.text.slice(0, 160)}`);
+
+    // --- authorization on the new surface ----------------------------------
+    r = await client.req('GET', '/api/credentials');
+    check('a client cannot read the credential delivery list', r.status === 403 || r.status === 401, `${r.status}`);
+    r = await client.req('POST', `/api/credentials/${clientId}`, { scheduledAt: Date.now() });
+    check('nor schedule one for themselves', r.status === 403 || r.status === 401, `${r.status}`);
+
+    const stranger = makeClient(base);
+    for (const path of ['/api/credentials', '/api/users/me/profile', '/api/users/me/avatar']) {
+      r = await stranger.req('GET', path);
+      check(`a stranger is refused ${path}`, r.status === 401, `${r.status}`);
+    }
+
+    // Resetting a password destroys every session that account had, which is
+    // the whole point of a reset -- and it means the `client` session the rest
+    // of this file signs its requests with is now dead. Put it back on a live
+    // one, with the password the account actually ended up holding.
+    const back = await signIn(client, 'qa.client@example.com', 'Copper-Meadow-Signal-2');
+    check('the client can sign back in on the password they set',
+      back.status === 200, `${back.status} ${String(back.text || '').slice(0, 160)}`);
+  }
+
+  // --- profile pictures ----------------------------------------------------
+  {
+    const png = pngBytes(96, 96);
+
+    r = await admin.upload('/api/users/me/avatar', {}, null);
+    check('an upload with no image is refused', r.status === 400, `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await admin.uploadField('/api/users/me/avatar', 'avatar', { bytes: png, type: 'image/png', name: 'me.png' });
+    check('an admin can upload their own picture',
+      r.status === 201 && r.data.avatar?.width === 96 && r.data.avatar?.height === 96,
+      `${r.status} ${r.text.slice(0, 200)}`);
+
+    const fetched = await admin.raw('/api/users/me/avatar');
+    check('the picture comes back byte for byte', fetched.status === 200 && fetched.buf.length === png.length,
+      `${fetched.status} ${fetched.buf.length}/${png.length}`);
+    check('served as the type the server decided, not the one claimed',
+      fetched.headers.get('content-type') === 'image/png', String(fetched.headers.get('content-type')));
+    check('and never in a shared cache',
+      String(fetched.headers.get('cache-control')).includes('private'), String(fetched.headers.get('cache-control')));
+
+    // The uploader's word is worth nothing: these all claim to be PNGs.
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    r = await admin.uploadField('/api/users/me/avatar', 'avatar', { bytes: svg, type: 'image/png', name: 'evil.png' });
+    check('an SVG named .png is refused on its contents', r.status === 415, `${r.status} ${r.text.slice(0, 160)}`);
+
+    const html = Buffer.from('<!doctype html><script>alert(1)</script>');
+    r = await admin.uploadField('/api/users/me/avatar', 'avatar', { bytes: html, type: 'image/jpeg', name: 'x.jpg' });
+    check('an HTML file announced as a JPEG is refused', r.status === 415, `${r.status} ${r.text.slice(0, 160)}`);
+
+    const tiny = pngBytes(8, 8);
+    r = await admin.uploadField('/api/users/me/avatar', 'avatar', { bytes: tiny, type: 'image/png', name: 't.png' });
+    check('an image below the minimum size is refused', r.status === 422, `${r.status} ${r.text.slice(0, 160)}`);
+
+    const huge = Buffer.concat([png, Buffer.alloc(3 * 1024 * 1024)]);
+    r = await admin.uploadField('/api/users/me/avatar', 'avatar', { bytes: huge, type: 'image/png', name: 'big.png' });
+    check('an oversized upload is refused with a size error, not a 500', r.status === 413, `${r.status} ${r.text.slice(0, 160)}`);
+
+    // Replacing keeps exactly one row and moves the cache-busting stamp.
+    const replacement = pngBytes(128, 128);
+    const before = (await admin.req('GET', '/api/auth/me')).data.user.avatarUpdatedAt;
+    r = await admin.uploadField('/api/users/me/avatar', 'avatar', { bytes: replacement, type: 'image/png', name: 'new.png' });
+    check('a picture can be replaced', r.status === 201 && r.data.avatar?.width === 128, `${r.status} ${r.text.slice(0, 160)}`);
+    check('and the stamp moves so browsers stop showing the old one',
+      r.data.avatarUpdatedAt !== before, `${before} -> ${r.data.avatarUpdatedAt}`);
+
+    r = await admin.req('GET', '/api/users');
+    const self = (r.data.users || []).find((u) => u.email === 'admin@ethixweb.local');
+    check('the user list says who has a picture', self?.hasAvatar === true, JSON.stringify(self?.hasAvatar));
+    check('and still never carries a hash', !('password' in (self || {})));
+
+    r = await client.uploadField(`/api/users/${(await admin.req('GET', '/api/auth/me')).data.user.id}/avatar`, 'avatar',
+      { bytes: png, type: 'image/png', name: 'x.png' });
+    check("a client cannot replace an admin's picture", r.status === 403, `${r.status} ${r.text.slice(0, 160)}`);
+
+    r = await admin.req('DELETE', '/api/users/me/avatar');
+    check('a picture can be removed', r.status === 200 && r.data.removed === true, `${r.status} ${r.text.slice(0, 160)}`);
+    const gone = await admin.raw('/api/users/me/avatar');
+    check('and is gone afterwards', gone.status === 404, String(gone.status));
+    check('the fallback is initials, so nothing breaks',
+      (await admin.req('GET', '/api/auth/me')).data.user.hasAvatar === false);
+  }
+
+  // --- the profile page's data --------------------------------------------
+  {
+    r = await admin.req('GET', '/api/users/me/profile');
+    check('the profile bundle loads', r.status === 200 && Boolean(r.data.user), `${r.status} ${r.text.slice(0, 200)}`);
+    check('it lists this account\'s sessions and marks the current one',
+      Array.isArray(r.data.sessions) && r.data.sessions.some((s) => s.current), JSON.stringify(r.data.sessions));
+    check('it carries password standing', Boolean(r.data.passwordStatus?.state), JSON.stringify(r.data.passwordStatus));
+    check('it never carries a password hash', !JSON.stringify(r.data).includes('$2a$') && !JSON.stringify(r.data).includes('$2b$'));
+    check('activity never names a colleague',
+      (r.data.activity || []).every((a) => ['You', 'An administrator', 'The system'].includes(a.actor)),
+      JSON.stringify(r.data.activity || []).slice(0, 200));
+
+    r = await admin.req('DELETE', '/api/users/me/sessions');
+    check('other devices can be signed out', r.status === 200 && typeof r.data.revoked === 'number', `${r.status} ${r.text.slice(0, 160)}`);
+    r = await admin.req('GET', '/api/auth/me');
+    check('and the current one survives it', r.status === 200, `${r.status}`);
+  }
 
   // --- the two page lists agree --------------------------------------------
   // The browser keeps its own copy of the client page keys, because it also

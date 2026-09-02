@@ -223,6 +223,19 @@ export const IconTeam: EthixIcon = (p) => (
   </Icon>
 );
 
+/**
+ * One person rather than the pair on IconTeam: a head as the accent node, and
+ * the shoulders as a single rounded bar. Deliberately close to IconTeam so
+ * "Team" and "Your profile" read as the same family, and deliberately not
+ * identical -- one figure, centred, is the whole difference.
+ */
+export const IconProfile: EthixIcon = (p) => (
+  <Icon {...p}>
+    <Node cx={12} cy={8.2} r={3.1} />
+    <path d="M5.2 19.4c0-3.4 3-5.8 6.8-5.8s6.8 2.4 6.8 5.8" />
+  </Icon>
+);
+
 /** A guard with a single way through it. */
 export const IconClientAccess: EthixIcon = (p) => (
   <Icon {...p}>

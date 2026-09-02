@@ -99,6 +99,20 @@ function warnIfUnset() {
     '[appUrl] APP_BASE_URL is not set. Absolute links in email (one-tap sign-in, the wordmark) ' +
       'will be omitted rather than guessed from request headers. Set APP_BASE_URL in .env.',
   );
+  // Two features do not degrade here, they stop: an activation link and a
+  // password-reset link ARE the email, so there is nothing to send without an
+  // address to point them at. Said separately and in those words, because the
+  // line above reads like a cosmetic warning about a logo and this is not one.
+  console.warn(
+    '[appUrl] Until it is set, scheduled credential deliveries will FAIL and monthly password-reset ' +
+      'emails cannot be sent -- both carry a link to this app, and there is no address to build one from.',
+  );
+  if (!String(process.env.CORS_ORIGINS || '').trim()) {
+    console.warn(
+      '[appUrl] Neither APP_BASE_URL nor CORS_ORIGINS is set, so the origin cannot be learned from a ' +
+        'request either (see allowedOrigins: a header is not allowed to nominate a new one).',
+    );
+  }
 }
 
 /** Configured value first, then whatever the app learned from traffic. */

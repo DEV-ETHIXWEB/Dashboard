@@ -32,6 +32,8 @@ const Notifications = lazy(ROUTE_CHUNKS.notifications);
 const Approvals = lazy(ROUTE_CHUNKS.approvals);
 const AuditLog = lazy(ROUTE_CHUNKS.audit);
 const Security = lazy(ROUTE_CHUNKS.security);
+const Profile = lazy(ROUTE_CHUNKS.profile);
+const SetPassword = lazy(ROUTE_CHUNKS.setPassword);
 
 function RouteFallback() {
   return (
@@ -269,6 +271,8 @@ function App() {
             }
           />
           <Route path="/portal/notifications" element={<RoleRoute><Notifications /></RoleRoute>} />
+          {/* Everybody has one, so it carries no role list. */}
+          <Route path="/portal/profile" element={<RoleRoute><Profile /></RoleRoute>} />
           {/* Backup sign-in codes. Admin-only, and the API refuses everyone else too. */}
           <Route
             path="/portal/security"
@@ -298,6 +302,12 @@ function App() {
               </RoleRoute>
             }
           />
+
+          {/* Deliberately outside every guard. The people who open this are
+              either not signed in or signed in as somebody whose password has
+              expired -- and both would be bounced away from a protected route,
+              which is the one thing this page must not do. */}
+          <Route path="/set-password" element={<SetPassword />} />
 
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />

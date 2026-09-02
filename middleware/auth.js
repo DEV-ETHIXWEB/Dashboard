@@ -17,7 +17,16 @@ function sessionTtlFor(user) {
   return user?.role === 'client' ? CLIENT_SESSION_TTL_MS : SESSION_TTL_MS;
 }
 
-async function createSession(userId, { pending = false, ttlMs = SESSION_TTL_MS } = {}) {
+/**
+ * Open a session, remembering enough to name it later.
+ *
+ * `req` is optional so nothing that already called this breaks, but every real
+ * sign-in passes it: without the user agent, the session list on a person's own
+ * profile can only say "another device" about every row, which is useless for
+ * the one thing that list is for -- noticing a session you do not recognise.
+ */
+async function createSession(userId, { pending = false, ttlMs = SESSION_TTL_MS, req = null } = {}) {
+  const { storableUserAgent } = require('../utils/userAgent');
   const session = {
     id: uuidv4(),
     userId,
@@ -25,6 +34,8 @@ async function createSession(userId, { pending = false, ttlMs = SESSION_TTL_MS }
     createdAt: Date.now(),
     expiresAt: Date.now() + (pending ? 10 * 60 * 1000 : ttlMs), // pending sessions expire in 10 min
     pending,
+    userAgent: req ? storableUserAgent(req.get('user-agent')) : null,
+    ipAddress: req ? normalizeIp(req.ip) : null,
   };
   await db.insert('sessions', session);
   return session;
@@ -53,7 +64,13 @@ async function destroySession(req) {
 
 function safeUser(user) {
   if (!user) return null;
+  // Derived before the hash is stripped, because "does this account have a
+  // password at all" is one of the questions the status answers -- a
+  // Google-only account has nothing to rotate. Never exposes the hash itself.
+  const passwordStatus = require('../utils/passwordPolicy').statusFor(user);
   const { password, demoPassword, ...rest } = user;
+  rest.passwordStatus = passwordStatus;
+  rest.hasAvatar = Boolean(user.avatarUpdatedAt);
   // Stored as JSON text on Postgres, as an array on Firestore -- callers always
   // get an array, or null meaning "no page restrictions".
   rest.allowedPages = parseAllowedPages(rest.allowedPages);
@@ -63,6 +80,32 @@ function safeUser(user) {
   rest.isSuperAdmin = roles.isSuperAdmin(user);
   rest.adminTrusted = roles.isTrustedAdmin(user);
   return rest;
+}
+
+/**
+ * The few endpoints that still answer while a password reset is outstanding.
+ *
+ * Kept as short as it can be and still leave a way out: who am I, sign me out,
+ * change my password, and the live stream that tells the tab when the state
+ * moved. Anything that reads or writes real work is behind the reset, which is
+ * the entire point -- a policy that can be ignored until it is convenient is a
+ * suggestion.
+ *
+ * Matched on the full path with the query string removed, so a caller cannot
+ * dress an ordinary endpoint up as an allowed one by appending to it.
+ */
+const PASSWORD_CHANGE_PATHS = new Set([
+  '/api/auth/me',
+  '/api/auth/logout',
+  '/api/config',
+  '/api/events',
+  '/api/users/me',
+  '/api/users/me/profile',
+]);
+
+function isPasswordChangePath(req) {
+  const path = String(req.originalUrl || req.url || '').split('?')[0].replace(/\/+$/, '') || '/';
+  return PASSWORD_CHANGE_PATHS.has(path);
 }
 
 async function requireAuth(req, res, next) {
@@ -79,6 +122,20 @@ async function requireAuth(req, res, next) {
 
     req.session = session;
     req.user = user;
+
+    // A password past its month is a different thing from an expired account,
+    // and gets a different answer. The account above is finished -- the session
+    // is destroyed and there is nothing the holder can do about it. This person
+    // is still entitled to be here; they just cannot get on with anything until
+    // they have picked a new password. So the session stands and the door to
+    // the rest of the app is what closes.
+    if (require('../utils/passwordPolicy').isResetRequired(user) && !isPasswordChangePath(req)) {
+      return res.status(403).json({
+        error: 'Your password has expired. Set a new one to carry on.',
+        passwordResetRequired: true,
+      });
+    }
+
     next();
   } catch (err) {
     next(err);
@@ -100,6 +157,20 @@ function requireCSRF(req, res, next) {
     return res.status(403).json({ error: 'Invalid or missing CSRF token' });
   }
   next();
+}
+
+/**
+ * An address a person can read.
+ *
+ * Node reports an IPv4 client on a dual-stack socket as `::ffff:127.0.0.1`.
+ * That prefix means nothing to whoever is reading "was this you?" in an email
+ * or an audit row, so it comes off. Shared from here because both the auth
+ * routes and the profile routes put an address in front of a person, and the
+ * two were formatting it differently.
+ */
+function normalizeIp(ip) {
+  if (!ip) return ip;
+  return String(ip).startsWith('::ffff:') ? String(ip).slice(7) : ip;
 }
 
 async function audit(actorId, action, entity, entityId, meta) {
@@ -140,5 +211,5 @@ module.exports = {
   SESSION_COOKIE,
   createSession, getSession, destroySession, promoteSession, safeUser, sessionTtlFor,
   requireAuth, requireRole, requireCSRF,
-  audit, notify, refreshSession, PORTAL_PATH,
+  audit, notify, refreshSession, normalizeIp, PORTAL_PATH,
 };

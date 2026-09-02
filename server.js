@@ -191,6 +191,7 @@ app.use('/api/integrations', require('./routes/integrations'));
 app.use('/api/mail', require('./routes/mail'));
 app.use('/api/client', require('./routes/client'));
 app.use('/api/approvals', require('./routes/approvals'));
+app.use('/api/credentials', require('./routes/credentials'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -211,6 +212,15 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`EthixWeb CRM running at http://localhost:${PORT}`);
+    // A real process is alive here, so the scheduled work can have a real
+    // timer. Deliberately only in this branch: importing the app -- which is
+    // what the serverless entrypoint and the test suites do -- must never
+    // start a timer nobody is going to stop. On a platform with no long-lived
+    // process the same sweeps still run, driven by traffic and by the Mail
+    // page's run button. Both timers are unref'd, so neither holds the process
+    // open on its own.
+    require('./utils/credentialScheduler').startTimer();
+    require('./utils/passwordWatch').startTimer();
     // Sign-in codes go out by email. With no transport configured, a client
     // cannot sign in without an admin reading a code out of the Login Codes
     // page -- which is the fallback, not the plan. Say so loudly at boot

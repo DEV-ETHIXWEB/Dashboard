@@ -19,7 +19,18 @@ function getPublicConfig() {
 
   const driveEnabled = Boolean(process.env.GOOGLE_SERVICE_ACCOUNT_JSON && process.env.GOOGLE_DRIVE_FOLDER_ID);
 
+  // The password rules the browser needs in order to say what they are before
+  // somebody types something that gets refused. Rules only -- the server checks
+  // every one of them again, so a stale or edited copy buys nothing.
+  const policy = require('./utils/passwordPolicy').config();
+
   return {
+    passwordPolicy: {
+      enabled: policy.enabled,
+      minLength: policy.minLength,
+      maxAgeDays: policy.maxAgeDays,
+      warnDays: policy.warnDays,
+    },
     googleSignInEnabled: Boolean(googleClientId),
     googleClientId,
     firebaseEnabled: Boolean(firebaseConfig),

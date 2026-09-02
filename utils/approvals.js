@@ -113,7 +113,13 @@ const ACTIONS = {
       let temporaryPassword = null;
       if (payload.regeneratePassword) {
         temporaryPassword = provisioning.generatePassword();
-        patch.password = bcrypt.hashSync(temporaryPassword, 10);
+        // Minted after sanitizePatch has run, so it carries its own age stamp
+        // rather than inheriting one. A password set here without it would read
+        // as never-changed and be demanded again by the next monthly sweep.
+        Object.assign(
+          patch,
+          require('./passwordPolicy').stampChange({ password: bcrypt.hashSync(temporaryPassword, 10) }),
+        );
       }
 
       const updated = await db.update('users', payload.userId, patch);

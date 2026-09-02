@@ -277,9 +277,21 @@ async function main() {
 
   r = await superAdmin.req('PUT', `/api/users/${trustedId}`, { regeneratePassword: true, sendEmail: false });
   check('AUTHORIZED: a super admin can still reset an administrator\'s password',
-    r.status === 200 && Boolean(r.data.temporaryPassword), `${r.status} ${r.text.slice(0, 200)}`);
-  const trustedPassword = r.data.temporaryPassword;
-  // Put the trusted admin back on a known session for the rest of the suite.
+    r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+  // The password is emailed to its owner and withheld from the screen, even
+  // here. An administrator who could read a peer's new password off their own
+  // response would have the account: reset, read, sign in, and the log shows a
+  // routine password change. See the closing note on PUT /:id in routes/users.js.
+  check('EXPLOIT BLOCKED: not even a super admin gets to read the new password',
+    !r.data.temporaryPassword && r.data.passwordSentToOwner === true, r.text.slice(0, 200));
+
+  // Which means this suite cannot know it either. Setting one explicitly is
+  // the supported way to hand an account back to a person, and it puts the
+  // trusted admin on a known session for the rest of the run.
+  const trustedPassword = 'Regression-Suite-Admin-1';
+  r = await superAdmin.req('PUT', `/api/users/${trustedId}`, { password: trustedPassword });
+  check('AUTHORIZED: a super admin can set an administrator password explicitly',
+    r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
   login = await loginAs(trusted, 'trusted.admin@ethixweb.local', trustedPassword);
   check('AUTHORIZED: the reset administrator can sign in with the new password', login.ok);
 

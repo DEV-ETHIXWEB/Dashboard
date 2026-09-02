@@ -117,12 +117,17 @@ async function createUserRecord({
   // Required lazily, the way utils/mailer.js does it, so importing this file
   // never opens a database connection on its own.
   const { db } = require('../db/setup');
+  const policy = require('./passwordPolicy');
   return db.insert('users', {
     name,
     email,
     role,
     company: company || null,
     password: bcrypt.hashSync(plaintextPassword, 10),
+    // The password's clock starts now. Without this the account reads as
+    // "never changed", which the monthly policy would have to treat as either
+    // ancient or unknown -- and neither is true of a password made a second ago.
+    ...policy.stampChange(),
     passwordExpiresAt: passwordExpiresAt != null ? Number(passwordExpiresAt) : null,
     allowedPages: allowedPages === undefined ? null : allowedPages,
     // Only a client has a channel; staff reach all of Slack through the

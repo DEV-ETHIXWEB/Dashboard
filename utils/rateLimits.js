@@ -51,4 +51,45 @@ const recoveryCodeLimiter = rateLimit({
   message: { error: 'Too many backup-code requests from this address. Try again in a few minutes.' },
 });
 
-module.exports = { sensitiveAdminLimiter, credentialIssueLimiter, recoveryCodeLimiter };
+/**
+ * Asking for a password reset link, and redeeming one.
+ *
+ * Both halves are unauthenticated, which makes them the only endpoints in the
+ * app a stranger can reach in bulk. The request side is the enumeration
+ * surface -- it takes an email address and, without a limit, would let someone
+ * walk a list of addresses to find out which ones have accounts (the reply is
+ * identical either way, but the *timing* and the sheer ability to keep asking
+ * are not). The redeem side is the guessing surface. Ten in fifteen minutes is
+ * far more than a person who has forgotten their password will ever need, and
+ * far less than a script needs to learn anything.
+ */
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many password reset requests from this address. Try again in a few minutes.' },
+});
+
+/**
+ * Uploading a profile picture.
+ *
+ * Not a security boundary so much as a storage one: every upload writes a
+ * couple of megabytes into a row, and nothing else in the app lets an ordinary
+ * account do that repeatedly.
+ */
+const avatarUploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many picture uploads from this address. Try again in a few minutes.' },
+});
+
+module.exports = {
+  sensitiveAdminLimiter,
+  credentialIssueLimiter,
+  recoveryCodeLimiter,
+  passwordResetLimiter,
+  avatarUploadLimiter,
+};

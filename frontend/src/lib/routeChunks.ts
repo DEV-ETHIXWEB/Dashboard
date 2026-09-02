@@ -41,6 +41,8 @@ export const ROUTE_CHUNKS = {
   approvals: () => import("@/pages/Approvals"),
   audit: () => import("@/pages/AuditLog"),
   security: () => import("@/pages/Security"),
+  profile: () => import("@/pages/Profile"),
+  setPassword: () => import("@/pages/SetPassword"),
 } satisfies Record<string, ChunkLoader>;
 
 /** Which chunk sits behind a nav destination. */
@@ -68,6 +70,7 @@ const BY_PATH: Record<string, ChunkLoader> = {
   "/portal/approvals": ROUTE_CHUNKS.approvals,
   "/portal/audit": ROUTE_CHUNKS.audit,
   "/portal/security": ROUTE_CHUNKS.security,
+  "/portal/profile": ROUTE_CHUNKS.profile,
 };
 
 /** Asked for once each; a resolved import is already cached by the browser. */

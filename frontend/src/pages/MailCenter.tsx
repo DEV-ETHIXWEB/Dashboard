@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
-  AlertTriangle, CheckCircle2, Clock, Eye, Inbox, Loader2, Mail, MailCheck, MailX,
+  AlertTriangle, CheckCircle2, Clock, Eye, Inbox, KeyRound, Loader2, Mail, MailCheck, MailX,
   PlugZap, RefreshCw, Send, ShieldCheck, Trash2, Users, Globe,
 } from "lucide-react";
 import {
   useDeleteMailLog, useMailLog, useMailLogEntry, useMailPreview, useMailStatus, useMailTemplates,
   useRunDomainSweep, useRunSlaSweep, useSendTestEmail, useVerifyTransport,
 } from "@/hooks/useMail";
+import { useRunCredentialSweep } from "@/hooks/useCredentials";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
@@ -67,7 +68,8 @@ export default function MailCenter() {
         actions={
           <>
             <DeadlineCheckButton />
-      <DomainCheckButton />
+            <DomainCheckButton />
+            <CredentialSweepButton />
             <TestEmailDialog configured={status.data?.configured ?? false} />
           </>
         }
@@ -244,6 +246,47 @@ function DomainCheckButton() {
     >
       {sweep.isPending ? <Loader2 className="size-4 animate-spin" /> : <Globe className="size-4" />}
       Check domains
+    </Button>
+  );
+}
+
+/**
+ * The two scheduled jobs, run on demand.
+ *
+ * They normally run on a timer where the process stays alive, and on traffic
+ * where it does not -- so on a serverless deployment with a quiet night this is
+ * how a delivery booked for 3am actually goes out before somebody signs in.
+ * Also the fastest way to prove the whole chain works after configuring mail,
+ * rather than waiting an hour to find out it does not.
+ */
+function CredentialSweepButton() {
+  const sweep = useRunCredentialSweep();
+  return (
+    <Button
+      variant="outline"
+      className="h-10 gap-2 px-4 font-medium"
+      disabled={sweep.isPending}
+      onClick={() =>
+        sweep.mutate(undefined, {
+          onSuccess: (r) => {
+            const parts = [
+              r.credentials.sent > 0 ? `sent ${r.credentials.sent} login email${r.credentials.sent === 1 ? "" : "s"}` : null,
+              r.credentials.failed > 0 ? `${r.credentials.failed} failed` : null,
+              r.passwords.warned > 0 ? `warned ${r.passwords.warned} about an expiring password` : null,
+              r.passwords.required > 0 ? `${r.passwords.required} now need a reset` : null,
+            ].filter(Boolean);
+            toast.success(
+              parts.length > 0
+                ? `Ran the checks: ${parts.join(", ")}.`
+                : "Nothing was due. Every scheduled delivery and password is up to date.",
+            );
+          },
+          onError: (err) => toast.error(err instanceof Error ? err.message : "Could not run the check"),
+        })
+      }
+    >
+      {sweep.isPending ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+      Check credentials
     </Button>
   );
 }

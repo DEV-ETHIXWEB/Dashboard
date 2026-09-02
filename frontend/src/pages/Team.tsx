@@ -39,9 +39,9 @@ import {
   DialogTrigger,
   DialogClose,
 } from "@/components/ui/dialog";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { PasswordStatusBadge } from "@/components/PasswordStatusBadge";
 import { SummaryCard } from "@/components/SummaryCard";
-import { initials } from "@/lib/format";
 import { describeAccess } from "@/lib/permissions";
 import { impactFeedback } from "@/lib/haptics";
 import type { UserRecord } from "@/lib/entities";
@@ -465,11 +465,11 @@ export default function Team() {
               className="group flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/80 p-4 shadow-xs transition-all duration-150 hover:border-border"
             >
               <div className="flex min-w-0 items-center gap-3">
-                <Avatar className="size-11 shrink-0 ring-1 ring-border/80 shadow-xs">
-                  <AvatarFallback className="bg-muted text-xs font-semibold text-foreground border border-border/40">
-                    {initials(u.name)}
-                  </AvatarFallback>
-                </Avatar>
+                <UserAvatar
+                  user={u}
+                  className="size-11 ring-1 ring-border/80 shadow-xs"
+                  fallbackClassName="bg-muted text-xs text-foreground border border-border/40"
+                />
 
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -503,6 +503,13 @@ export default function Team() {
                         Needs approval
                       </span>
                     )}
+
+                    {/* Where this account stands on the monthly password
+                        policy. Silent for an account with no password to
+                        rotate, and for the whole roster when the workspace has
+                        rotation switched off -- there is no point telling an
+                        admin the same non-fact on every row. */}
+                    <PasswordStatusBadge status={u.passwordStatus} />
                   </div>
 
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">

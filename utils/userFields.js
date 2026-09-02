@@ -68,6 +68,14 @@ function sanitizePatch(patch) {
     // `password` arrives here already hashed, from the route that hashed it.
     else if (key === 'password') out[key] = value;
   }
+  // The age stamp is not a field anybody may set; it is a fact about the write
+  // happening right now, so it is added here rather than accepted from the
+  // caller. Doing it at the filter means a password cannot reach a row without
+  // its clock being reset -- including down the approval path, where the patch
+  // was written days earlier by a different process.
+  if (out.password) {
+    Object.assign(out, require('./passwordPolicy').stampChange());
+  }
   return out;
 }
 

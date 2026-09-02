@@ -1,4 +1,4 @@
-import type { ClientPageKey, Role } from "./types";
+import type { ClientPageKey, CredentialDelivery, PasswordStatus, Role } from "./types";
 
 export interface UserRecord {
   id: string;
@@ -12,6 +12,12 @@ export interface UserRecord {
   /** Admin standing. See utils/roles.js -- a super admin is a flagged admin. */
   isSuperAdmin?: boolean;
   adminTrusted?: boolean;
+  /** Monthly password policy standing, sent with every admin-visible user. */
+  passwordStatus?: PasswordStatus;
+  /** The delivery still owed to this account, if one is booked. */
+  credentialDelivery?: CredentialDelivery | null;
+  hasAvatar?: boolean;
+  avatarUpdatedAt?: number | null;
 }
 
 export interface Project {

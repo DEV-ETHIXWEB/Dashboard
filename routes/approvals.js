@@ -93,6 +93,10 @@ router.get('/audit-log', handle(async (req, res) => {
         actorName: actor?.name || (row.actorId ? 'Removed account' : 'System'),
         actorRole: actor?.role || null,
         actorIsSuperAdmin: actor ? roles.isSuperAdmin(actor) : false,
+        // Whether this actor has a picture, and the stamp that versions its
+        // URL. Sent so the log can draw faces without asking for one per row
+        // and collecting a 404 for everybody who has not uploaded anything.
+        actorAvatarUpdatedAt: actor?.avatarUpdatedAt ? Number(actor.avatarUpdatedAt) : null,
       };
     });
 

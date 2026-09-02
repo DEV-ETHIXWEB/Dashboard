@@ -16,9 +16,8 @@ import { PullToRefresh } from "@/components/mobile/PullToRefresh";
 import { TopBar } from "@/components/mobile/TopBar";
 import { NotificationBell } from "@/components/NotificationBell";
 import { InstallCard } from "@/components/mobile/InstallCard";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/UserAvatar";
 import { Button } from "@/components/ui/button";
-import { initials } from "@/lib/format";
 import { isClientNav, navFor, type NavGroup, type NavItem } from "@/lib/nav";
 import { clearOfflineCaches } from "@/lib/pwa";
 import { cn } from "@/lib/utils";
@@ -335,15 +334,21 @@ function SidebarContent({
 
       <div className="skeu-seam relative z-10 shrink-0 p-3">
         <div className="skeu-plate flex items-center gap-2.5 rounded-xl px-2.5 py-2">
-          <Avatar className="size-8 shrink-0">
-            <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-              {user ? initials(user.name) : "?"}
-            </AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-sidebar-foreground">{user?.name}</div>
-            <div className="truncate text-xs text-muted-foreground">{user?.email}</div>
-          </div>
+          {/* The plate is now the way to your own profile. It was the one part
+              of the sidebar that showed your account and did nothing when you
+              clicked it, which is the first place people look for it. */}
+          <NavLink
+            to="/portal/profile"
+            onPointerEnter={() => prefetchRoute("/portal/profile")}
+            onFocus={() => prefetchRoute("/portal/profile")}
+            className="focus-clear -m-1 flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-1 transition-colors hover:bg-sidebar-accent/40"
+          >
+            <UserAvatar user={user} className="size-8" fallbackClassName="text-xs" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-sidebar-foreground">{user?.name}</div>
+              <div className="truncate text-xs text-muted-foreground">{user?.email}</div>
+            </div>
+          </NavLink>
           <Button
             variant="ghost"
             size="icon"

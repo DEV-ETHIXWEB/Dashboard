@@ -78,6 +78,35 @@ export default function Login() {
   const [now, setNow] = useState(() => Date.now());
   const codeRefs = useRef<(HTMLInputElement | null)[]>([]);
 
+  // Forgotten password. Kept on this page rather than given a route of its own:
+  // it is one field and one button, and a whole screen for that is a navigation
+  // somebody has to come back from.
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+
+  async function requestReset(e: React.FormEvent) {
+    e.preventDefault();
+    if (!forgotEmail.trim()) return;
+    setForgotBusy(true);
+    try {
+      await api<{ ok: boolean; message: string }>("POST", "/auth/password/forgot", {
+        email: forgotEmail.trim(),
+      });
+      // The server answers identically whether or not that address has an
+      // account, and so does this screen. Saying "no such user" here would turn
+      // the form into a way of finding out who has a login.
+      setForgotSent(true);
+    } catch {
+      // Even a failure is reported as success, for the same reason. A genuine
+      // outage shows up in the mail log, where somebody can act on it.
+      setForgotSent(true);
+    } finally {
+      setForgotBusy(false);
+    }
+  }
+
   useEffect(() => {
     const reason = searchParams.get("linkError");
     if (!reason) return;
@@ -493,7 +522,19 @@ export default function Login() {
                         </div>
                       </div>
                       <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="password" className="t-label tracking-wider text-muted-foreground">Password</Label>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <Label htmlFor="password" className="t-label tracking-wider text-muted-foreground">Password</Label>
+                          {/* Beside the field it is about, which is where
+                              somebody who has just failed to remember one is
+                              already looking. */}
+                          <button
+                            type="button"
+                            onClick={() => setForgotOpen(true)}
+                            className="focus-clear cursor-pointer rounded text-[11px] font-medium text-muted-foreground transition-colors hover:text-primary"
+                          >
+                            Forgot password?
+                          </button>
+                        </div>
                         <div className="relative">
                           <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground/70 pointer-events-none" />
                           <Input
@@ -545,6 +586,70 @@ export default function Login() {
                         Sign in
                       </Button>
                     </form>
+
+                    {/* Opens in place, under the form it belongs to. A nested
+                        <form> is not legal HTML, so this sits after the sign-in
+                        form rather than inside it. */}
+                    {forgotOpen && (
+                      <div className="mt-4 rounded-xl border border-border/60 bg-muted/20 p-4">
+                        {forgotSent ? (
+                          <div className="flex flex-col gap-2">
+                            <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                              <Check aria-hidden className="size-3.5 shrink-0 text-success" />
+                              Check your inbox
+                            </span>
+                            <p className="text-[11px] leading-relaxed text-muted-foreground">
+                              If that address has an account, a link to set a new password is on its way. It
+                              works once and expires shortly. We never email you a password.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setForgotOpen(false);
+                                setForgotSent(false);
+                                setForgotEmail("");
+                              }}
+                              className="focus-clear w-fit cursor-pointer rounded text-[11px] font-medium text-primary hover:underline"
+                            >
+                              Back to sign in
+                            </button>
+                          </div>
+                        ) : (
+                          <form onSubmit={requestReset} className="flex flex-col gap-2.5">
+                            <Label htmlFor="forgot-email" className="t-label tracking-wider text-muted-foreground">
+                              Reset your password
+                            </Label>
+                            <div className="relative">
+                              <Mail className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground/70" />
+                              <Input
+                                id="forgot-email"
+                                type="email"
+                                autoComplete="username"
+                                placeholder="you@company.com"
+                                value={forgotEmail}
+                                onChange={(e) => setForgotEmail(e.target.value)}
+                                className="h-10 bg-background pr-3.5 pl-10 text-sm"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button type="submit" size="sm" disabled={forgotBusy || !forgotEmail.trim()} className="cursor-pointer gap-1.5">
+                                {forgotBusy && <Loader2 className="size-3.5 animate-spin" />}
+                                Send reset link
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="cursor-pointer text-muted-foreground"
+                                onClick={() => setForgotOpen(false)}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </form>
+                        )}
+                      </div>
+                    )}
 
                     {/* The reassurance the side panel used to carry, kept where
                         a phone can still see it without scrolling past a pitch. */}

@@ -11,9 +11,12 @@ const { db } = require('../db/setup');
 const {
   SESSION_COOKIE, createSession, destroySession, safeUser,
   requireAuth, requireRole, requireCSRF, audit, notify, PORTAL_PATH, sessionTtlFor,
+  normalizeIp,
 } = require('../middleware/auth');
 const roles = require('../utils/roles');
-const { sensitiveAdminLimiter } = require('../utils/rateLimits');
+const { sensitiveAdminLimiter, passwordResetLimiter } = require('../utils/rateLimits');
+const passwordTokens = require('../utils/passwordTokens');
+const passwordPolicy = require('../utils/passwordPolicy');
 const recoveryCodes = require('../utils/recoveryCodes');
 const admins = require('../utils/admins');
 const { isGoogleSignInConfigured, verifyGoogleIdToken } = require('../utils/googleAuth');
@@ -50,11 +53,6 @@ const COOKIE_OPTS = {
   path: '/',
 };
 
-function normalizeIp(ip) {
-  if (!ip) return ip;
-  return ip.startsWith('::ffff:') ? ip.slice(7) : ip;
-}
-
 async function finishLogin(req, res, user) {
   if (user.passwordExpiresAt && Number(user.passwordExpiresAt) < Date.now()) {
     return res.status(403).json({ error: 'This access has expired. Ask your admin to issue you new credentials.', passwordExpired: true });
@@ -68,7 +66,7 @@ async function finishLogin(req, res, user) {
   // session, everybody else got "we emailed you a code" -- so anyone testing
   // passwords could pick out the accounts with no second step. One path now,
   // one reply shape.
-  const pendingSession = await createSession(user.id, { pending: true });
+  const pendingSession = await createSession(user.id, { pending: true, req });
   res.cookie(SESSION_COOKIE, pendingSession.id, COOKIE_OPTS);
 
   await db.pruneExpiredOtps();
@@ -281,7 +279,7 @@ router.get('/magic-link/verify', async (req, res, next) => {
     if (!claimed) return fail('used');
 
     const ttlMs = sessionTtlFor(user);
-    const session = await createSession(user.id, { ttlMs });
+    const session = await createSession(user.id, { ttlMs, req });
     res.cookie(SESSION_COOKIE, session.id, { ...COOKIE_OPTS, maxAge: ttlMs });
     // Name the admin who minted the link. Without it the log shows the client
     // signing themselves in, which is exactly what an admin walking in through
@@ -332,7 +330,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
       await db.invalidateUserOtps(user.id);
 
       const ttlMs = sessionTtlFor(user);
-      const recovered = await createSession(user.id, { ttlMs });
+      const recovered = await createSession(user.id, { ttlMs, req });
       await db.remove('sessions', session.id);
       res.cookie(SESSION_COOKIE, recovered.id, { ...COOKIE_OPTS, maxAge: ttlMs });
 
@@ -378,7 +376,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
     // existed while this person was still a stranger. The pending session is
     // destroyed rather than upgraded, so anything that knew the old value --
     // including whoever might have planted it -- holds a dead cookie.
-    const session2 = await createSession(user.id, { ttlMs });
+    const session2 = await createSession(user.id, { ttlMs, req });
     await db.remove('sessions', session.id);
     res.cookie(SESSION_COOKIE, session2.id, { ...COOKIE_OPTS, maxAge: ttlMs });
 
@@ -495,6 +493,223 @@ router.post(
     }
   },
 );
+
+/**
+ * Password reset, from the outside.
+ *
+ * These three are the only unauthenticated endpoints in the app besides
+ * sign-in, so each one is written assuming the caller is hostile.
+ *
+ * The shape of the answers is the important part. `forgot` says the same thing
+ * whether or not the address belongs to anybody, because a reply that differs
+ * turns the form into a directory of who works here -- and this workspace has
+ * clients in it, so that list is commercially sensitive as well as a phishing
+ * target. `verify` and `reset` collapse every failure into three coarse
+ * reasons, so guessing at token ids teaches nothing about which ids exist.
+ *
+ * Nothing in here logs a token, and nothing in here has ever seen a password
+ * that was not just typed by its owner.
+ */
+
+/** Where a set-password link points, or null when the app has no public address. */
+function setPasswordUrl(path) {
+  const base = baseUrl();
+  return base ? `${base}${path}` : null;
+}
+
+/**
+ * Ask for a reset link.
+ *
+ * Answers 200 with the same body every time. An address with no account, an
+ * account that signs in with Google, a malformed string -- all indistinguishable
+ * from success, because the difference between them is exactly what an attacker
+ * came here to learn.
+ */
+router.post('/password/forgot', passwordResetLimiter, async (req, res, next) => {
+  // Composed once and returned from every branch below, so a future edit cannot
+  // accidentally make one path answer differently from another.
+  const sameAnswer = () => res.json({
+    ok: true,
+    message: 'If that address has an account, a reset link is on its way. Check your inbox.',
+  });
+
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!email || !email.includes('@')) return sameAnswer();
+
+    const users = await db.filter('users', (u) => String(u.email).toLowerCase() === email);
+    const user = users[0];
+
+    // Nothing to reset: no such account, or one whose password lives at Google.
+    if (!user || !user.password) return sameAnswer();
+
+    const link = await passwordTokens.issueFor(user, {
+      purpose: 'reset',
+      ipAddress: normalizeIp(req.ip),
+    });
+    const url = setPasswordUrl(link.path);
+
+    if (url) {
+      await mailer.sendTemplate({
+        to: user.email,
+        message: messages.passwordReset({
+          user,
+          resetUrl: url,
+          expiresAt: link.expiresAt,
+          ipAddress: normalizeIp(req.ip),
+        }),
+        template: 'password_reset',
+        entity: 'user',
+        entityId: user.id,
+      });
+    } else {
+      console.warn('[auth] A reset was requested but APP_BASE_URL is unset, so no link could be built.');
+    }
+
+    // The address is deliberately absent from the audit row: this endpoint is
+    // reachable by anyone, and writing every address somebody types into it
+    // would turn the log into the harvest it was built to prevent. The account
+    // it belongs to is identified by id, which is the useful half anyway.
+    await audit(null, 'password_reset_requested', 'user', user.id, {
+      via: 'forgot_form',
+      ip: normalizeIp(req.ip),
+    });
+
+    return sameAnswer();
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Is this link still good?
+ *
+ * The page behind a reset link calls this before showing a form, so somebody
+ * with a dead link is told why instead of typing a new password into something
+ * that cannot work. Answers with a reason and the account's name -- never the
+ * email address, which would make a leaked link into an address disclosure on
+ * top of everything else.
+ */
+router.post('/password/verify', passwordResetLimiter, async (req, res, next) => {
+  try {
+    const result = await passwordTokens.inspect(req.body?.token);
+    if (!result.ok) return res.status(400).json({ ok: false, reason: result.reason });
+
+    return res.json({
+      ok: true,
+      purpose: result.row.purpose,
+      name: result.user.name,
+      // Enough to say "you are setting the password for the account we emailed",
+      // without printing the address itself back to whoever holds the link.
+      emailHint: maskEmail(result.user.email),
+      expiresAt: Number(result.row.expiresAt),
+      policy: {
+        minLength: passwordPolicy.config().minLength,
+        maxAgeDays: passwordPolicy.config().maxAgeDays,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Redeem a link and set the password.
+ *
+ * The order here is the whole security of the endpoint:
+ *
+ *   1. spend the token -- atomically, so a second submission loses the race
+ *   2. check the new password against the policy
+ *   3. hash it and write it, stamping the age so the month starts now
+ *   4. destroy every session this account had, including the one that did this
+ *   5. retire every other outstanding link and sign-in code for the account
+ *
+ * Four is the step people leave out. A password reset that leaves the old
+ * sessions alive resets nothing: whoever the reset was protecting against is
+ * still signed in.
+ */
+router.post('/password/reset', passwordResetLimiter, async (req, res, next) => {
+  try {
+    const { token, password } = req.body || {};
+    if (!token || !password) {
+      return res.status(400).json({ error: 'A link and a new password are both required.' });
+    }
+
+    // Validated before the token is spent, so a password that was going to be
+    // refused anyway does not burn the person's only link.
+    const preflight = await passwordTokens.inspect(token);
+    if (!preflight.ok) {
+      return res.status(400).json({ error: linkFailureMessage(preflight.reason), reason: preflight.reason });
+    }
+    const rejection = passwordPolicy.rejectionFor(password, {
+      email: preflight.user.email,
+      name: preflight.user.name,
+    });
+    if (rejection) return res.status(422).json({ error: rejection });
+
+    const claimed = await passwordTokens.consume(token);
+    if (!claimed.ok) {
+      return res.status(400).json({ error: linkFailureMessage(claimed.reason), reason: claimed.reason });
+    }
+
+    const user = claimed.user;
+    await db.update('users', user.id, passwordPolicy.stampChange(
+      { password: bcrypt.hashSync(password, 10) },
+      { viaReset: true },
+    ));
+
+    // Everything that could still be used as this person, gone: every session,
+    // every unused link, every live sign-in code.
+    await db.removeWhere('sessions', (s) => s.userId === user.id);
+    await passwordTokens.revokeAllFor(user.id);
+    await db.invalidateUserOtps(user.id);
+    await db.invalidateUserLoginLinks(user.id);
+
+    // The cookie in this browser now names a session that no longer exists.
+    res.clearCookie(SESSION_COOKIE, { path: '/' });
+
+    await audit(user.id, 'password_reset', 'user', user.id, {
+      via: claimed.row.purpose,
+      // Field names and outcomes only. Never the token, never the password.
+      sessionsRevoked: true,
+    });
+
+    // A password that moves without the owner hearing about it is how a
+    // takeover stays quiet. Best-effort -- a dead mail transport must not undo
+    // a reset that has already succeeded.
+    try {
+      await mailer.sendTemplate({
+        to: user.email,
+        message: messages.passwordChanged({
+          user,
+          at: Date.now(),
+          ipAddress: normalizeIp(req.ip),
+          via: 'reset',
+        }),
+        template: 'password_changed',
+        entity: 'user',
+        entityId: user.id,
+      });
+    } catch (err) {
+      console.error('Could not send the password-changed confirmation:', err.message);
+    }
+
+    res.json({
+      ok: true,
+      message: 'Your password is set. Sign in with it now.',
+      redirect: '/login',
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** The three ways a link can be no good, in words the holder can act on. */
+function linkFailureMessage(reason) {
+  if (reason === 'expired') return 'That link has expired. Ask for a new one.';
+  if (reason === 'used') return 'That link has already been used. Ask for a new one.';
+  return 'That link is not valid. Ask for a new one.';
+}
 
 router.post('/logout', requireAuth, async (req, res, next) => {
   try {

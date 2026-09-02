@@ -6,8 +6,8 @@ import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatDateTime, formatRelativeTime, initials } from "@/lib/format";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { formatDateTime, formatRelativeTime } from "@/lib/format";
+import { UserAvatar } from "@/components/UserAvatar";
 import { tapFeedback } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 import type { AuditEntry } from "@/lib/types";
@@ -136,11 +136,23 @@ function LogRow({ entry, first }: { entry: AuditEntry; first: boolean }) {
 
   return (
     <div className={cn("flex items-center gap-3 px-3 py-3 sm:px-4", !first && "border-t border-row-border")}>
-      <Avatar className="size-9 shrink-0">
-        <AvatarFallback className="bg-secondary text-[11px] font-semibold text-muted-foreground">
-          {initials(entry.actorName)}
-        </AvatarFallback>
-      </Avatar>
+      {/* A picture where the actor is a real account that has one. The stamp
+          comes down with the row, so a log full of people who never uploaded
+          anything asks for no images at all rather than collecting a 404 each.
+          A row written by a scheduled job has no actor, and keeps initials. */}
+      <UserAvatar
+        user={
+          entry.actorId
+            ? {
+              id: entry.actorId,
+              name: entry.actorName,
+              avatarUpdatedAt: entry.actorAvatarUpdatedAt ?? null,
+            }
+            : null
+        }
+        className="size-9"
+        fallbackClassName="bg-secondary text-[11px] text-muted-foreground"
+      />
 
       <div className="min-w-0 flex-1">
         <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">

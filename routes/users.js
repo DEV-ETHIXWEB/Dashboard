@@ -6,7 +6,9 @@ const crypto = require('crypto');
 const router = express.Router();
 
 const { db } = require('../db/setup');
-const { requireAuth, requireRole, requireCSRF, safeUser, audit, notify, refreshSession } = require('../middleware/auth');
+const {
+  requireAuth, requireRole, requireCSRF, safeUser, audit, notify, refreshSession, normalizeIp,
+} = require('../middleware/auth');
 const roles = require('../utils/roles');
 const approvals = require('../utils/approvals');
 const { CLIENT_PAGES, normalizeAllowedPages, parseAllowedPages, allowedPagesFor } = require('../utils/clientPages');
@@ -16,9 +18,57 @@ const admins = require('../utils/admins');
 const loginLinks = require('../utils/loginLinks');
 const userFields = require('../utils/userFields');
 const provisioning = require('../utils/userProvisioning');
-const { sensitiveAdminLimiter, credentialIssueLimiter, recoveryCodeLimiter } = require('../utils/rateLimits');
+const {
+  sensitiveAdminLimiter, credentialIssueLimiter, recoveryCodeLimiter, avatarUploadLimiter,
+} = require('../utils/rateLimits');
 const recoveryCodes = require('../utils/recoveryCodes');
 const { baseUrl } = require('../utils/appUrl');
+const multer = require('multer');
+const passwordPolicy = require('../utils/passwordPolicy');
+const passwordTokens = require('../utils/passwordTokens');
+const passwordWatch = require('../utils/passwordWatch');
+const avatarStore = require('../utils/avatarStore');
+const imageValidation = require('../utils/imageValidation');
+const credentialDelivery = require('../utils/credentialDelivery');
+const { describeDevice, deviceKind } = require('../utils/userAgent');
+
+/**
+ * Held in memory, never on disk.
+ *
+ * Same choice routes/reports.js makes, for the same two reasons: the serverless
+ * target has no writable filesystem worth the name, and a file that never lands
+ * on disk cannot be left behind when a request fails halfway. The limit here is
+ * multer's own first line of defence -- utils/imageValidation.js checks the
+ * size again, because a limit enforced in one place is a limit that moves when
+ * somebody adds a second upload route.
+ */
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: imageValidation.MAX_BYTES, files: 1 },
+});
+
+/**
+ * Multer's own limits, translated into this API's error shape.
+ *
+ * Multer rejects an oversized file from inside its middleware, before the route
+ * handler exists to catch anything -- so a `try` in the handler never sees it
+ * and the blanket 500 in server.js answers "something went wrong on the server"
+ * to a request where nothing went wrong on the server at all. Running it as a
+ * nested call is what puts the failure back where it can be described properly.
+ */
+function acceptAvatarFile(req, res, next) {
+  avatarUpload.single('avatar')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      const mb = Math.round(imageValidation.MAX_BYTES / (1024 * 1024));
+      return res.status(413).json({ error: `That picture is larger than ${mb}MB. Crop it or save it smaller and try again.` });
+    }
+    if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({ error: 'Send one image, in a field named "avatar".' });
+    }
+    return next(err);
+  });
+}
 
 router.use(requireAuth);
 
@@ -181,7 +231,22 @@ router.put('/me', requireCSRF, async (req, res, next) => {
       if (!currentPassword || !bcrypt.compareSync(currentPassword, req.user.password)) {
         return res.status(403).json({ error: 'Your current password is not correct' });
       }
-      patch.password = bcrypt.hashSync(password, 10);
+      // The policy applies to a password somebody chose for themselves exactly
+      // as much as to one a link set. This is the screen people are pushed to
+      // when theirs expires, so a weak password accepted here would be a hole
+      // straight through the rotation it exists to serve.
+      const rejection = passwordPolicy.rejectionFor(password, {
+        email: patch.email || req.user.email,
+        name: patch.name || req.user.name,
+      });
+      if (rejection) return res.status(422).json({ error: rejection });
+      if (bcrypt.compareSync(password, req.user.password)) {
+        return res.status(422).json({ error: 'That is the password you already have. Choose a different one.' });
+      }
+
+      // Stamps the age and clears any outstanding "you must reset" flag, so
+      // changing it here is a real way out of the block in middleware/auth.js.
+      Object.assign(patch, passwordPolicy.stampChange({ password: bcrypt.hashSync(password, 10) }));
     }
 
     const updated = await db.update('users', req.user.id, patch);
@@ -189,10 +254,306 @@ router.put('/me', requireCSRF, async (req, res, next) => {
     // Any other session of this user dies with the old password.
     if (patch.password) {
       await db.removeWhere('sessions', (s) => s.userId === req.user.id && s.id !== req.session.id);
+      // And every link that could set it again. A reset email still sitting in
+      // an inbox is a second key to a lock that was just changed.
+      await passwordTokens.revokeAllFor(req.user.id);
+
+      // Best-effort: the password has already moved, and a mail transport that
+      // is down must not turn a successful change into an error.
+      try {
+        await mailer.sendTemplate({
+          to: updated.email,
+          message: messages.passwordChanged({ user: updated, at: Date.now(), ipAddress: normalizeIp(req.ip), via: 'self' }),
+          template: 'password_changed',
+          entity: 'user',
+          entityId: req.user.id,
+        });
+      } catch (err) {
+        console.error('Could not send the password-changed confirmation:', err.message);
+      }
     }
 
     await audit(req.user.id, 'update', 'user', req.user.id, { self: true, passwordChanged: Boolean(patch.password) });
     res.json({ user: safeUser(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Everything the profile page shows, in one read.
+ *
+ * Your own account and nothing else -- there is no `:id` form of this, on
+ * purpose. An admin who wants to know about somebody else's password standing
+ * gets it from the user list, which already carries the same status object and
+ * carries nothing this endpoint adds: sessions, device list, and the person's
+ * own activity are theirs.
+ *
+ * What is deliberately absent: role or standing details about anybody else,
+ * anything from the audit log that was not about this account, and any hint of
+ * a token or a hash.
+ */
+router.get('/me/profile', async (req, res, next) => {
+  try {
+    const [sessions, log] = await Promise.all([
+      db.filter('sessions', (s) => s.userId === req.user.id && !s.pending),
+      db.recent('activity_log', 400),
+    ]);
+
+    const mine = log.filter((row) => isOwnSecurityEvent(row, req.user.id));
+    const lastLogin = mine.find((row) => row.action === 'login' && row.actorId === req.user.id) || null;
+
+    const delivery = await credentialDelivery.pendingFor(req.user.id);
+
+    res.json({
+      user: safeUser(req.user),
+      passwordStatus: passwordPolicy.statusFor(req.user),
+      avatar: await avatarStore.metaFor(req.user.id),
+      lastLoginAt: lastLogin ? lastLogin.createdAt : null,
+      // Ordered newest first by db.recent already; the cap is what a person can
+      // actually read rather than a full history export.
+      activity: mine.slice(0, 25).map((row) => publicActivity(row, req.user.id)),
+      sessions: sessions
+        .sort((a, b) => Number(b.createdAt) - Number(a.createdAt))
+        .map((s) => ({
+          id: s.id,
+          createdAt: Number(s.createdAt),
+          expiresAt: Number(s.expiresAt),
+          // The only one of these the person is looking through right now.
+          current: s.id === req.session.id,
+          // Named so this list can do its job. A row nobody recognises is the
+          // entire reason the list exists, and "another device" describes the
+          // laptop in front of them and a stranger's phone equally well. The
+          // user agent is self-reported and never authorises anything -- see
+          // utils/userAgent.js -- and only its owner is ever shown it.
+          device: describeDevice(s.userAgent),
+          deviceKind: deviceKind(s.userAgent),
+          ipAddress: s.ipAddress || null,
+        })),
+      // Present so the page can say "a link is on its way on Tuesday" rather
+      // than leaving somebody wondering. Status only, never the link.
+      pendingDelivery: delivery ? credentialDelivery.publicDelivery(delivery) : null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Audit actions a person is entitled to see about their own account.
+ *
+ * An allowlist rather than a filter on what to hide, because the log grows and
+ * a deny-list quietly leaks whatever was added last. Everything here is either
+ * something they did or something done to their credentials -- which they
+ * should know about precisely so that an unfamiliar entry is alarming.
+ */
+const OWN_SECURITY_ACTIONS = new Set([
+  'login',
+  'logout',
+  'password_reset',
+  'password_reset_requested',
+  'password_expired',
+  'recovery_codes',
+  'avatar_updated',
+  'avatar_removed',
+  'issue_login_link',
+  'reveal_otp',
+  'credential_delivery_sent',
+  'credential_delivery_scheduled',
+  'credential_delivery_cancelled',
+]);
+
+function isOwnSecurityEvent(row, userId) {
+  if (!OWN_SECURITY_ACTIONS.has(row.action)) return false;
+  if (row.actorId === userId) return true;
+  // Done *to* this account by somebody else -- an admin scheduling credentials,
+  // reading a sign-in code, minting a link. Exactly the entries worth seeing.
+  return row.entity === 'user' && row.entityId === userId;
+}
+
+/**
+ * One activity row, stripped for its subject.
+ *
+ * The meta on an audit row is written for an administrator reading the full
+ * log, and can name other accounts, roles and internal fields. None of that is
+ * this person's business, so none of it travels: what is left is what happened,
+ * when, and whether they were the one who did it.
+ */
+function publicActivity(row, userId) {
+  return {
+    id: row.id,
+    action: row.action,
+    createdAt: row.createdAt,
+    bySelf: row.actorId === userId,
+    // Never a name or an id. "Somebody with administrative access did this" is
+    // the whole of what a non-admin needs, and naming the colleague turns the
+    // profile page into a partial staff directory.
+    actor: row.actorId === userId ? 'You' : row.actorId ? 'An administrator' : 'The system',
+  };
+}
+
+/**
+ * Sign out everywhere else.
+ *
+ * The session running this request survives, so the person is not thrown out
+ * of the page they clicked the button on -- which sounds like a nicety and is
+ * actually the difference between a control people use and one they avoid.
+ */
+router.delete('/me/sessions', requireCSRF, async (req, res, next) => {
+  try {
+    const others = await db.filter(
+      'sessions',
+      (s) => s.userId === req.user.id && s.id !== req.session.id,
+    );
+    for (const session of others) await db.remove('sessions', session.id);
+
+    await audit(req.user.id, 'sessions_revoked', 'user', req.user.id, { count: others.length, self: true });
+    res.json({ ok: true, revoked: others.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- profile pictures ------------------------------------------------------
+
+/** `me` is an alias for your own id, so the browser never has to look it up. */
+function resolveUserId(req) {
+  return req.params.id === 'me' ? req.user.id : req.params.id;
+}
+
+/**
+ * Who may change this picture: its owner, or an administrator.
+ *
+ * The admin case is not vanity -- somebody has to be able to take down a
+ * picture that should not be there, and the person who uploaded it is the last
+ * one who will. One administrator editing another's is left to super admins,
+ * matching every other admin-on-admin rule in this file.
+ */
+function avatarRefusal(actor, targetId, target) {
+  if (actor.id === targetId) return null;
+  if (!roles.isAdmin(actor)) return 'You can only change your own profile picture.';
+  if (target && target.role === 'admin' && !roles.canManageAdmins(actor)) {
+    return 'Only a super admin can change another administrator’s profile picture.';
+  }
+  return null;
+}
+
+/**
+ * The picture itself.
+ *
+ * Signed-in callers only: these are colleagues' and clients' faces, and an
+ * open endpoint would make them enumerable by user id from anywhere. The
+ * response is cached privately and briefly -- long enough that a table of
+ * thirty avatars is not thirty requests on every navigation, short enough that
+ * a replacement appears quickly. The URL carries `?v=<avatarUpdatedAt>`
+ * anyway, so a replaced picture is a different URL and the cache is bypassed
+ * entirely rather than waited out.
+ */
+router.get('/:id/avatar', async (req, res, next) => {
+  try {
+    const userId = resolveUserId(req);
+    const stored = await avatarStore.load(userId);
+    // Not an error: an account with no picture is the normal case, and the
+    // browser falls back to the initials the page already renders.
+    if (!stored) return res.status(404).json({ error: 'No profile picture' });
+
+    // Overrides the blanket `no-store` that server.js puts on every /api
+    // response. Private, so a shared proxy never holds one person's face.
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    // The type the validator decided when this was stored -- never one the
+    // uploader supplied. Paired with helmet's nosniff, that is what makes
+    // serving somebody else's bytes back to a browser safe.
+    res.setHeader('Content-Type', stored.mimeType);
+    res.setHeader('Content-Disposition', 'inline; filename="avatar"');
+    if (stored.checksum) res.setHeader('ETag', `"${stored.checksum}"`);
+    res.send(stored.buffer);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Upload or replace a picture.
+ *
+ * The browser has already scaled the image down (frontend/src/lib/avatar.ts),
+ * so what arrives is normally 256px and a few tens of kilobytes. Nothing here
+ * relies on that: the bytes are validated as if they had been posted by hand
+ * with curl, because they can be.
+ */
+router.post(
+  '/:id/avatar',
+  requireCSRF,
+  avatarUploadLimiter,
+  acceptAvatarFile,
+  async (req, res, next) => {
+    try {
+      const userId = resolveUserId(req);
+      const target = await db.find('users', userId);
+      if (!target) return res.status(404).json({ error: 'User not found' });
+
+      const refusal = avatarRefusal(req.user, userId, target);
+      if (refusal) return res.status(403).json({ error: refusal });
+
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: 'No image was uploaded.' });
+      }
+
+      // The filename and the declared type are both the uploader's choice, so
+      // neither is consulted. The bytes decide.
+      const verdict = imageValidation.validateAvatar(req.file.buffer);
+      if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.error });
+
+      const saved = await avatarStore.save(userId, {
+        buffer: req.file.buffer,
+        image: verdict.image,
+        actorId: req.user.id,
+      });
+
+      await audit(req.user.id, 'avatar_updated', 'user', userId, {
+        self: req.user.id === userId,
+        // Facts about the file, never the file.
+        format: verdict.image.format,
+        width: verdict.image.width,
+        height: verdict.image.height,
+        sizeBytes: req.file.size,
+      });
+
+      // Their other tabs, and every list showing them, redraw with the new face.
+      refreshSession(userId);
+
+      res.status(201).json({
+        avatar: {
+          userId,
+          mimeType: saved.mimeType,
+          width: saved.width,
+          height: saved.height,
+          sizeBytes: saved.sizeBytes,
+          updatedAt: saved.updatedAt,
+        },
+        avatarUpdatedAt: saved.avatarUpdatedAt,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/** Take the picture down. Falls back to initials, which never fail. */
+router.delete('/:id/avatar', requireCSRF, async (req, res, next) => {
+  try {
+    const userId = resolveUserId(req);
+    const target = await db.find('users', userId);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+
+    const refusal = avatarRefusal(req.user, userId, target);
+    if (refusal) return res.status(403).json({ error: refusal });
+
+    const removed = await avatarStore.remove(userId);
+    if (removed) {
+      await audit(req.user.id, 'avatar_removed', 'user', userId, { self: req.user.id === userId });
+      refreshSession(userId);
+    }
+    res.json({ ok: true, removed });
   } catch (err) {
     next(err);
   }
@@ -220,8 +581,33 @@ router.get('/', async (req, res, next) => {
     const users = await db.all('users');
 
     if (req.user.role === 'admin') {
+      // The people list is the busiest admin read in the app, which makes it
+      // the right place to hang the sweeps off: any admin looking at the
+      // workspace is enough to notice a password that aged out overnight or a
+      // delivery that came due. Both are throttled to one pass per interval and
+      // neither is awaited -- the same arrangement utils/slaWatch.js has always
+      // used, and for the same reason: nobody should wait on a mail server to
+      // see a table.
+      void passwordWatch.maybeSweep();
+      void require('../utils/credentialScheduler').maybeSweep();
+
+      // One query rather than one per row: the pending delivery for each
+      // account, so the list can show "scheduled for Tuesday" without the page
+      // making a second request per person.
+      const deliveries = await db.all('credential_deliveries');
+      const pendingByUser = new Map();
+      for (const row of deliveries) {
+        if (!['scheduled', 'sending'].includes(row.status)) continue;
+        const seen = pendingByUser.get(row.userId);
+        if (!seen || Number(row.scheduledAt) > Number(seen.scheduledAt)) pendingByUser.set(row.userId, row);
+      }
+
       return res.json({
-        users: users.map((u) => ({ ...safeUser(u), allowedPages: parseAllowedPages(u.allowedPages) })),
+        users: users.map((u) => ({
+          ...safeUser(u),
+          allowedPages: parseAllowedPages(u.allowedPages),
+          credentialDelivery: credentialDelivery.publicDelivery(pendingByUser.get(u.id) || null),
+        })),
       });
     }
 
@@ -440,7 +826,17 @@ router.put('/:id', requireCSRF, requireRole('admin'), credentialIssueLimiter, ha
 
   // An explicit password is hashed straight away -- the admin already knows it,
   // so nothing secret has to be parked anywhere.
-  if (body.password) patch.password = bcrypt.hashSync(body.password, 10);
+  if (body.password) {
+    // Held to the same policy as one somebody sets for themselves. An admin
+    // typing a four-character password for a colleague is the same weakness as
+    // the colleague typing it, and this is the path that used to allow it.
+    const rejection = passwordPolicy.rejectionFor(body.password, {
+      email: patch.email || before.email,
+      name: patch.name || before.name,
+    });
+    if (rejection) return res.status(422).json({ error: rejection });
+    Object.assign(patch, passwordPolicy.stampChange({ password: bcrypt.hashSync(body.password, 10) }));
+  }
 
   // A *generated* password is different: on the approval path the value would
   // have to survive in the queue until somebody signs it off, and a plaintext
@@ -451,7 +847,7 @@ router.put('/:id', requireCSRF, requireRole('admin'), credentialIssueLimiter, ha
   let temporaryPassword;
   if (wantsGeneratedPassword && !roles.needsApproval(req.user)) {
     temporaryPassword = provisioning.generatePassword();
-    patch.password = bcrypt.hashSync(temporaryPassword, 10);
+    Object.assign(patch, passwordPolicy.stampChange({ password: bcrypt.hashSync(temporaryPassword, 10) }));
   }
 
   // Who may touch the admin roster at all is a hard limit, separate from
@@ -462,7 +858,12 @@ router.put('/:id', requireCSRF, requireRole('admin'), credentialIssueLimiter, ha
     return res.status(403).json({ error: 'Only a super admin can add or remove an administrator.' });
   }
 
-  const changedFields = Object.keys(patch).filter((k) => k !== 'password');
+  // The audit row names the fields an administrator actually chose to change.
+  // The password and its age stamp are reported separately, as
+  // `passwordRegenerated`, because listing three bookkeeping columns beside
+  // "email" would bury the one that matters.
+  const PASSWORD_INTERNALS = ['password', 'passwordChangedAt', 'passwordResetRequired', 'passwordResetAt'];
+  const changedFields = Object.keys(patch).filter((k) => !PASSWORD_INTERNALS.includes(k));
 
   const gate = await approvals.gate(req, res, {
     action: 'user.update',

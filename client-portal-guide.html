@@ -1,0 +1,288 @@
+<title>Your EthixWeb Portal</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html{background:#e9e9e9}
+  body{
+    margin:0; color:#1a1a1a;
+    font:9.9px/1.37 Georgia, "Times New Roman", serif;
+  }
+
+  /* One A4 sheet per page. Fixed height so what you see is what prints. */
+  .sheet{
+    width:794px; height:1123px;
+    background:#ffffff;
+    margin:24px auto; padding:46px 52px 40px;
+    box-sizing:border-box; overflow:hidden;
+    box-shadow:0 1px 6px rgba(0,0,0,.22);
+  }
+
+  .cols{
+    column-count:2; column-gap:26px; column-fill:auto;
+    height:100%;
+  }
+  .cols.p2{column-fill:auto}
+
+  h1{font-size:23px;line-height:1.1;margin:0 0 4px;font-weight:normal;letter-spacing:-.01em}
+  .lede{color:#4a4a4a;font-size:10.6px;margin:0 0 9px;line-height:1.42}
+  .stamp{color:#555;font-size:9.2px;line-height:1.42;margin:0 0 12px;
+    border-top:1px solid #d5d5d5;border-bottom:1px solid #d5d5d5;padding:7px 0}
+
+  h2{font-size:12.6px;margin:0 0 5px;font-weight:normal;
+    border-bottom:1px solid #1a1a1a;padding-bottom:3px;
+    break-after:avoid; page-break-after:avoid}
+  h2 .n{font-size:10.4px;color:#777;margin-right:5px}
+  h3{font-size:10.2px;margin:8px 0 2px;font-weight:bold;break-after:avoid}
+  section{margin:0 0 11px; break-inside:auto}
+  p{margin:0 0 5.5px}
+  .lbl{font-weight:bold}
+
+  ul{margin:0 0 7px;padding-left:14px}
+  li{margin:0 0 3px}
+
+  table{width:100%;border-collapse:collapse;margin:0 0 7px;font-size:9.2px;line-height:1.32}
+  th,td{text-align:left;padding:3px 4.5px;border:1px solid #c8c8c8;vertical-align:top}
+  th{background:#f0f0f0;font-weight:bold}
+  td.k{font-weight:bold;white-space:nowrap;width:1%}
+  td.num{white-space:nowrap;font-variant-numeric:tabular-nums}
+
+  .box{border:1px solid #c8c8c8;background:#fafafa;padding:6px 8px;margin:0 0 8px}
+  .box p:last-child{margin-bottom:0}
+
+  .rule{border:none;border-top:1px solid #d5d5d5;margin:0 0 10px}
+
+  footer{border-top:1px solid #1a1a1a;padding-top:6px;color:#555;font-size:9px;line-height:1.4;margin-top:4px}
+
+  .kicker{font-size:9.4px;letter-spacing:.06em;text-transform:uppercase;color:#777;margin:0 0 4px}
+
+  /* Small sketch of the phone tab bar. */
+  .bar{display:table;width:100%;border:1px solid #c8c8c8;border-collapse:collapse;margin:0 0 4px;font-size:9px}
+  .bar b{display:table-cell;text-align:center;padding:5px 2px;border-right:1px solid #d5d5d5;font-weight:normal;color:#666}
+  .bar b:last-child{border-right:0}
+  .bar b.on{background:#f0f0f0;color:#1a1a1a;font-weight:bold}
+  .cap{font-size:9px;color:#777;margin:0 0 8px}
+
+  /* A4 at 96dpi is exactly 794 x 1123px, so the sheets above already are the
+     printed pages. Print with margin 0 and the sheet's own padding becomes the
+     page margin -- what is on screen is what comes out, two pages, no reflow. */
+  @media print{
+    html,body{background:#fff}
+    .sheet{
+      margin:0; box-shadow:none; height:1122px;
+      break-after:page; page-break-after:always;
+      -webkit-print-color-adjust:exact; print-color-adjust:exact;
+    }
+    .sheet:last-child{break-after:auto;page-break-after:auto}
+    @page{size:A4;margin:0}
+  }
+</style>
+
+<!-- ============================ PAGE ONE ============================ -->
+<div class="sheet">
+<div class="cols">
+
+  <h1>Your EthixWeb Portal</h1>
+  <p class="lede">What you see when you sign in, what every part of it means, what you can ask us for, and what arrives in your email without you doing anything.</p>
+
+  <div class="stamp">
+    For our clients. No technical knowledge is needed anywhere in this guide, and nothing you press can break or delete your work.<br>
+    If you are ever unsure, the answer is always the same: send us a request, and a real person reads it.
+  </div>
+
+  <section>
+  <h2><span class="n">1</span>The four things you can ask</h2>
+  <p>The portal opens on four tabs, because there are really only four questions worth asking. Everything else sits behind <b>More</b>.</p>
+  <table>
+    <tr><td class="k">Home</td><td>Where everything stands. Anything waiting on you sits at the top.</td></tr>
+    <tr><td class="k">Work</td><td>What we are building, moving as we move it.</td></tr>
+    <tr><td class="k">Requests</td><td>Ask us for something, then watch it travel.</td></tr>
+    <tr><td class="k">Money</td><td>Your plan, your payments, and the receipt for each one.</td></tr>
+    <tr><td class="k">More</td><td>Chat, Projects, Websites, Documents, Spending, Alerts.</td></tr>
+  </table>
+  </section>
+
+  <section>
+  <h2><span class="n">2</span>Signing in</h2>
+  <p>Two steps, every time. This means that even if somebody learned your password, they still could not open your account.</p>
+
+  <h3>The first time</h3>
+  <p>We set the account up and email you a message headed <i>Your client portal login</i>. It offers two ways in:</p>
+  <ul>
+    <li><b>Email address and password.</b> The password sits in a black box &mdash; tap it and it selects itself, ready to copy.</li>
+    <li><b>Or one tap.</b> Press the button and you are in, nothing to type. It works once, for 24 hours.</li>
+  </ul>
+  <p>We never choose your password and cannot read it back. If it is lost we issue a new one; nobody here can tell you the old one.</p>
+
+  <h3>Every time after that</h3>
+  <ul>
+    <li><b>Step one.</b> Your email address and password. A small eye symbol shows what you typed.</li>
+    <li><b>Step two.</b> We email a <b>6-digit code</b> and the screen turns into six little boxes. Type it in &mdash; the cursor jumps along by itself. Or copy the code and paste it into the first box; all six fill at once.</li>
+  </ul>
+  <p>A line underneath counts down. If the code runs out, press <i>Back to sign in</i> and a fresh one is sent immediately. Nothing is lost.</p>
+
+  <div class="box">
+  <p><span class="lbl">If the code does not arrive:</span> check the junk folder first. If it is genuinely not there, telephone or email us. Every message the system sends is logged on our side, so we can tell you whether it left and whether it was delivered.</p>
+  </div>
+
+  <p>Your access can carry an <b>end date</b>; if it passes the portal says so plainly, and your information is untouched. There is deliberately <b>no &quot;email me a link&quot; button</b>: only we can issue one, so nobody who merely knows your address can ask for it.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">3</span>The screen around you</h2>
+  <p>The same few things sit around the edge of every page. Learn these once and the rest is just pages.</p>
+
+  <h3>On a phone</h3>
+  <p>Five buttons along the bottom. Four take you somewhere; <i>More</i> slides a panel up with everything else.</p>
+  <div class="bar"><b class="on">Home</b><b>Work</b><b>Requests</b><b>Money</b><b>More</b></div>
+  <p class="cap">The tab you are on is shaded and its name is in bold.</p>
+
+  <p>Along the top: our name, the name of the page you are on, and on the right &mdash;</p>
+  <ul>
+    <li>A <b>small green dot</b>. The page is listening to our office and changing itself as we work. You never need to refresh. If it turns amber you have lost connection and are seeing the last thing that loaded.</li>
+    <li>A <b>bell</b>, carrying a number when something new has happened.</li>
+    <li>A <b>door</b> to sign out. It asks you to confirm, because it sits close to the bell.</li>
+  </ul>
+  <p>Two extra touches: <b>pull the page down</b> and let go to reload it; and after your third visit a card offers to put the portal <b>on your home screen</b>, where it opens like an app with its own icon. Dismiss it once and it never returns.</p>
+
+  <h3>On a computer</h3>
+  <p>Instead of the bottom bar, a <b>list down the left</b> with the same destinations all visible at once, and the bell in the top right. Everything else is identical.</p>
+
+  <h3>Light or dark</h3>
+  <p>The portal follows your device. You can override it &mdash; light, dark or automatic &mdash; from the sign-in page or the <i>More</i> panel.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">4</span>Home &mdash; everything at a glance</h2>
+  <p>You land here, greeted by your first name. It answers &quot;is anything wrong, and is anything waiting on me?&quot; without your reading a single number closely.</p>
+
+  <h3>Warnings, if there are any</h3>
+  <p>Anything needing you sits in a coloured panel at the top, with a button straight to it. There are two:</p>
+  <ul>
+    <li><b>&quot;We could not take your last payment.&quot;</b> Your card was declined &mdash; usually a bank being careful. It says plainly that your money is safe and nothing is deleted, and offers to update the card. About a minute&rsquo;s work.</li>
+    <li><b>&quot;A website address needs renewing.&quot;</b> Appears when a renewal is less than 45 days away, and names the address.</li>
+  </ul>
+  <p>When neither is true there is no panel at all. A quiet top of the page means there is genuinely nothing to worry about.</p>
+
+  <h3>Then, in order</h3>
+  <ul>
+    <li><b>Four counters</b>, each a button: Projects running, Requests still with us, Websites, Documents &mdash; each with a short line under it such as &quot;Nothing waiting&quot; or &quot;2 renewing soon&quot;.</li>
+    <li><b>The money you have paid us</b>, in large type, with the date of the latest payment, what it went on, and your five most recent payments.</li>
+    <li><b>Short summaries</b> of work in progress, your requests, your addresses and your documents, each linking to its full page. Anything empty does not appear.</li>
+  </ul>
+
+  <div class="box">
+  <p><span class="lbl">Where that money figure comes from:</span> every figure is read from Stripe, the company that actually takes the payment &mdash; not typed in by us. Each payment carries its own Stripe receipt you can open and check against your bank statement. Our screen and the payment company cannot quietly disagree.</p>
+  </div>
+  </section>
+
+  <section>
+  <h2><span class="n">5</span>Work &mdash; built as you watch</h2>
+  <p>Not a summary somebody retypes once a week: a window onto the real board our team works from, moving when they move.</p>
+  <p>Four figures across the top &mdash; <b>requests in flight</b>, <b>average progress</b>, <b>next reply due</b> (red if we have run past it; the system chases <i>us</i> about that automatically) and <b>finished</b> &mdash; then a strip saying honestly whether the task board and the team chat are connected. Below that, each job is a card with its name, who holds it, a bar that fills, and the stage it has reached:</p>
+  <table>
+    <tr><td class="k">Triage</td><td>We have it and are working out what it needs.</td></tr>
+    <tr><td class="k">In progress</td><td>Being built.</td></tr>
+    <tr><td class="k">Waiting on client</td><td>We need something from you.</td></tr>
+    <tr><td class="k">Review</td><td>Being checked before you see it.</td></tr>
+    <tr><td class="k">Done</td><td>Finished.</td></tr>
+  </table>
+  <p>Press <b>View updates</b> and the whole story opens: notes from the team with names and times, comments from the board, their chat about it, and a box to type back &mdash; what you write reaches all three at once. You need no other account; we fetch it all for you.</p>
+  </section>
+
+</div>
+</div>
+
+<!-- ============================ PAGE TWO ============================ -->
+<div class="sheet">
+<div class="cols p2">
+
+  <section>
+  <h2><span class="n">6</span>Requests &mdash; asking us for things</h2>
+  <p>Anything you want starts here: a fault, a change, a question, an idea, a query about an invoice. Once raised it is tracked and cannot be forgotten.</p>
+  <p>Press <b>New request</b>. The form asks four things and only the first is compulsory: <b>what it is about</b> (with four suggested phrasings if you want a start), <b>more detail</b> if you have it, a <b>category</b> (Website, Mobile App, Marketing, Billing, Other), and <b>how urgent</b> it is. That last one is not decoration &mdash; it sets the deadline for our first reply, and our own system alerts the team as one falls due:</p>
+  <table>
+    <tr><th>You choose</th><th>First reply</th><th>Sensible for</th></tr>
+    <tr><td class="k">Urgent</td><td class="num">1 hour</td><td>Something is down; customers cannot buy</td></tr>
+    <tr><td class="k">High</td><td class="num">4 hours</td><td>Visibly wrong, but still working</td></tr>
+    <tr><td class="k">Normal</td><td class="num">8 hours</td><td>Most things</td></tr>
+    <tr><td class="k">Low</td><td class="num">24 hours</td><td>Tidy-ups and &quot;when you get a moment&quot;</td></tr>
+  </table>
+  <p>Send it, and two things happen at once: the screen confirms the team has been alerted, and an email arrives with a reference such as <i>ticket-1042</i>, the person it went to, and when your reply is due.</p>
+  <p>Afterwards the list holds every request you have ever sent, most urgent first, with buttons for <b>Still open</b>, <b>Closed</b> and <b>Everything</b> (each showing a count) and a search box. Each row carries how urgent it is, a clock on the first-reply deadline &mdash; which turns red if we missed it, because we do not hide that &mdash; and where it has got to.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">7</span>Money</h2>
+  <p>Your plan, then one sentence in ordinary words: <i>&quot;Everything is up to date&quot;</i>, <i>&quot;You are on a free trial&quot;</i>, <i>&quot;We could not take your last payment&quot;</i>, <i>&quot;Your plan has been cancelled&quot;</i>, or <i>&quot;Nothing is being charged to you&quot;</i>. Beneath it the amount and how often, the next payment date, and the last four digits of the card. Anything we do not know is left out rather than guessed.</p>
+  <p>Then a short list of every possible charge, with <b>no joining fee, no card surcharge and no cost to change or cancel</b>, ending &quot;That is the complete list.&quot; Then every payment, one per line &mdash; Paid, Refunded, Failed or Not paid yet &mdash; with the date, invoice number, card, and a <b>Receipt</b> link that opens the payment company&rsquo;s own document, not something we printed.</p>
+  <div class="box">
+  <p><span class="lbl">About your card:</span> card numbers are typed on Stripe&rsquo;s own secure pages and never touch our computers. Pressing <i>Manage payment method</i> takes you to Stripe and brings you back. We could not store your card details even if we wanted to.</p>
+  </div>
+  </section>
+
+  <section>
+  <h2><span class="n">8</span>Behind &quot;More&quot;</h2>
+  <table>
+    <tr><td class="k">Chat</td><td>A written line to your project team in your own private room. Replies appear within seconds, and everything said is on the record and findable later.</td></tr>
+    <tr><td class="k">Projects</td><td>The bigger pieces of work, split into In progress and Finished, each with a status and a percentage.</td></tr>
+    <tr><td class="k">Websites</td><td>Every address we look after, soonest renewal first: security certificate, who hosts it, renewal date, days remaining.</td></tr>
+    <tr><td class="k">Documents</td><td>Reports we have prepared. <b>Open</b> reads it here; <b>Download</b> saves a copy. Nothing expires.</td></tr>
+    <tr><td class="k">Spending</td><td>What the budget went on, by category and by month.</td></tr>
+    <tr><td class="k">Alerts</td><td>Everything that changed, newest first, grouped Today / Yesterday / This week / Earlier. Press one to jump to the thing that moved.</td></tr>
+  </table>
+  </section>
+
+  <section>
+  <h2><span class="n">9</span>Emails you will get</h2>
+  <p>You do not have to sign in to stay informed. These arrive on their own, from our own verified address, each with a button straight to the right page.</p>
+  <table>
+    <tr><td class="k">You raise a request</td><td>Confirmation with the reference, who holds it, and when your first reply is due.</td></tr>
+    <tr><td class="k">Someone replies</td><td>The update in full, with who wrote it and how far the job has moved.</td></tr>
+    <tr><td class="k">It is resolved</td><td>What was done, and that it is closed.</td></tr>
+    <tr><td class="k">Periodically</td><td>Where all your work stands: in flight, finished, active projects.</td></tr>
+    <tr><td class="k">Payment taken</td><td>Your receipt: amount, date, invoice, card, and what it covers.</td></tr>
+    <tr><td class="k">Payment failed</td><td>What failed, what it does <i>not</i> affect, and the one button that fixes it.</td></tr>
+    <tr><td class="k">Renewal due</td><td>Which address, the date, and what happens if it lapses &mdash; in good time, not the week it expires.</td></tr>
+    <tr><td class="k">You sign in</td><td>Your 6-digit code, and a warning not to type it if it was not you.</td></tr>
+  </table>
+  </section>
+
+  <section>
+  <h2><span class="n">10</span>What you choose, and what you cannot</h2>
+  <p><b>You decide:</b> what the lists show (still open, closed, everything; one month or all; unread alerts only); how urgent a request is, which sets our deadline; light or dark; whether the portal lives on your home screen; whether a document opens here or downloads; and which alerts to clear.</p>
+  <p><b>You cannot</b> edit our record of your work, delete a request, or change a payment figure. That is the point: what you are reading is the same record we work from. If something is wrong, tell us and we correct it properly, with a note of who changed what and when.</p>
+  <p><b>If a section described here is missing</b>, that is deliberate, not a fault. We switch sections on or off per client so you are not handed pages that have nothing to do with our arrangement. When one is off, its tab disappears completely and the next moves up &mdash; you will never meet a dead link or a &quot;no permission&quot; screen. Ask us and we will switch it on.</p>
+  </section>
+
+  <section>
+  <h2><span class="n">11</span>Safety, briefly</h2>
+  <ul>
+    <li><b>Two steps for everyone.</b> Our own staff sign in exactly as you do. No exceptions for administrators.</li>
+    <li><b>Your password is unreadable</b> &mdash; by us, and by anyone with access to the database. It is stored scrambled, one way.</li>
+    <li><b>Card details never reach our computers.</b></li>
+    <li><b>Signing out clears the device</b>, so nothing is left on a shared or borrowed phone.</li>
+    <li><b>You only ever see your own account.</b> Which account you are is taken from your sign-in, so there is nothing to fiddle with.</li>
+    <li><b>Every change is recorded</b> &mdash; who, what, when &mdash; and sensitive changes need a second person here to approve them.</li>
+    <li><b>We never sell your information</b>, and you can ask us to delete it at any time.</li>
+  </ul>
+  </section>
+
+  <section>
+  <h2><span class="n">12</span>Words we use</h2>
+  <table>
+    <tr><td class="k">Request / ticket</td><td>Anything you have asked us for. It gets a reference such as <i>ticket-1042</i> and is tracked until it is finished.</td></tr>
+    <tr><td class="k">Stage</td><td>How far along a job is: Triage, In progress, Waiting on client, Review, Done.</td></tr>
+    <tr><td class="k">In flight</td><td>Started, and not yet finished.</td></tr>
+    <tr><td class="k">First reply due</td><td>The deadline we have given ourselves to answer you, set by the urgency you chose.</td></tr>
+    <tr><td class="k">The board</td><td>The list our team actually works from each day. Your Work page reads from it directly.</td></tr>
+    <tr><td class="k">Certificate</td><td>What puts the padlock on your website and keeps visitors&rsquo; details private. We watch its date.</td></tr>
+    <tr><td class="k">Registrar</td><td>The company your web address is registered with, and which renews it.</td></tr>
+    <tr><td class="k">Live</td><td>The green dot: the page is updating itself as things change. You never need to refresh.</td></tr>
+  </table>
+  </section>
+
+  <footer>
+  If anything here is unclear, or a page does not behave as this guide describes, raise a request from the portal or email <b>support@ethixweb.com</b>. We are here Monday to Friday, 9am to 6pm, and a person reads every message.
+  </footer>
+
+</div>
+</div>

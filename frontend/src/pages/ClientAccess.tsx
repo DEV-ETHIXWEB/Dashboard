@@ -19,6 +19,7 @@ import {
   LayoutGrid,
   Check,
   Link2,
+  Send,
 } from "lucide-react";
 import { useUsers, useCreateUser, useUpdateUser, useDeleteUser } from "@/hooks/useData";
 import { api, ApiError } from "@/lib/api";
@@ -30,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/ui/date-picker";
+import { DateTimePicker } from "@/components/ui/date-time-picker";
 import {
   Dialog,
   DialogContent,
@@ -40,9 +42,14 @@ import {
   DialogClose,
   DialogHeader,
 } from "@/components/ui/dialog";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { PasswordStatusBadge } from "@/components/PasswordStatusBadge";
 import { SummaryCard } from "@/components/SummaryCard";
-import { initials, toLocalISO, parseLocalISO } from "@/lib/format";
+import { formatRelativeTime, toLocalISO, parseLocalISO } from "@/lib/format";
+import { DELIVERY_LABEL, DELIVERY_TONE, describeDelivery } from "@/lib/password";
+import {
+  useCancelDelivery, useCredentialDeliveries, useRetryDelivery, useScheduleDelivery,
+} from "@/hooks/useCredentials";
 import { impactFeedback } from "@/lib/haptics";
 import { CLIENT_PAGES, CLIENT_PAGE_KEYS, describeAccess } from "@/lib/permissions";
 import { LINK_LIFETIMES } from "@/lib/types";
@@ -50,7 +57,7 @@ import { useSlackChannels } from "@/hooks/useIntegrations";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { UserRecord } from "@/lib/entities";
-import type { ClientPageKey, LoginLinkResponse } from "@/lib/types";
+import type { ClientPageKey, CredentialDelivery, LoginLinkResponse } from "@/lib/types";
 
 const DAY_MS = 86_400_000;
 
@@ -132,6 +139,60 @@ function PageToggles({
   );
 }
 
+/**
+ * The status of a scheduled credential hand-over, as one pill.
+ *
+ * Nothing at all when there is no delivery on record, which is most rows most
+ * of the time -- a badge that says "none" on every line teaches people to stop
+ * reading the column.
+ */
+function DeliveryBadge({ delivery }: { delivery?: CredentialDelivery | null }) {
+  if (!delivery) return null;
+  const explanation = describeDelivery(delivery);
+  return (
+    <span
+      title={explanation ?? undefined}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-semibold ${DELIVERY_TONE[delivery.status]}`}
+    >
+      <Send aria-hidden className="size-2.5" />
+      {DELIVERY_LABEL[delivery.status]}
+      {delivery.status === "scheduled" && delivery.scheduledAt
+        ? ` ${formatRelativeTime(delivery.scheduledAt)}`
+        : ""}
+    </span>
+  );
+}
+
+/**
+ * The moments an admin reaches for most, so the common case is one tap.
+ *
+ * Nine in the morning rather than the current time of day: a credential email
+ * is something the recipient should find at the start of their day, not at
+ * 11pm when it was convenient to schedule it.
+ */
+const DELIVERY_PRESETS = [
+  { label: "In an hour", at: () => Date.now() + 60 * 60 * 1000 },
+  {
+    label: "Tomorrow, 9am",
+    at: () => {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      d.setHours(9, 0, 0, 0);
+      return d.getTime();
+    },
+  },
+  {
+    label: "Next Monday, 9am",
+    at: () => {
+      const d = new Date();
+      // 1 is Monday; the modulo lands on the next one even when today is Monday.
+      d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7));
+      d.setHours(9, 0, 0, 0);
+      return d.getTime();
+    },
+  },
+];
+
 function toDateInput(ts?: number | null) {
   return ts ? toLocalISO(new Date(ts)) : "";
 }
@@ -195,6 +256,13 @@ export default function ClientAccess() {
 
   const [accessTarget, setAccessTarget] = useState<UserRecord | null>(null);
   const [accessDraft, setAccessDraft] = useState<ClientPageKey[]>([]);
+
+  const [deliveryTarget, setDeliveryTarget] = useState<UserRecord | null>(null);
+  const [deliveryDraft, setDeliveryDraft] = useState<number | null>(null);
+  const deliveryConfig = useCredentialDeliveries();
+  const scheduleDelivery = useScheduleDelivery();
+  const cancelDelivery = useCancelDelivery();
+  const retryDelivery = useRetryDelivery();
 
   const [credential, setCredential] = useState<Credential | null>(null);
   const [signInLink, setSignInLink] = useState<SignInLink | null>(null);
@@ -362,6 +430,70 @@ export default function ClientAccess() {
   function openAccess(u: UserRecord) {
     setAccessTarget(u);
     setAccessDraft(u.allowedPages == null ? [...CLIENT_PAGE_KEYS] : [...u.allowedPages]);
+  }
+
+  function openDelivery(u: UserRecord) {
+    setDeliveryTarget(u);
+    // An existing schedule opens on its own moment, so "reschedule" starts
+    // from what was booked rather than from a blank field.
+    setDeliveryDraft(u.credentialDelivery?.scheduledAt ?? Date.now() + 60 * 60 * 1000);
+  }
+
+  async function saveDelivery() {
+    if (!deliveryTarget) return;
+    const scheduledAt = deliveryDraft;
+    if (!scheduledAt) {
+      toast.error("Pick a date and time");
+      return;
+    }
+    try {
+      const result = await scheduleDelivery.mutateAsync({ userId: deliveryTarget.id, scheduledAt });
+      setDeliveryTarget(null);
+      toast.success(
+        result.rescheduled
+          ? `Moved to ${new Date(scheduledAt).toLocaleString()}`
+          : `Scheduled for ${new Date(scheduledAt).toLocaleString()}`,
+      );
+      // Worth saying once, at the moment somebody books one: a schedule with no
+      // transport behind it fails silently later, which is the worst time to
+      // find out.
+      if (result.emailConfigured === false) {
+        toast.warning("No email transport is configured, so this will fail when it comes due.", {
+          duration: 9000,
+        });
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not schedule that");
+    }
+  }
+
+  async function callOffDelivery() {
+    if (!deliveryTarget) return;
+    if (!window.confirm(`Cancel the scheduled login email for ${deliveryTarget.name}?`)) return;
+    impactFeedback();
+    try {
+      await cancelDelivery.mutateAsync(deliveryTarget.id);
+      setDeliveryTarget(null);
+      toast.success("Delivery cancelled");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not cancel that");
+    }
+  }
+
+  async function sendAgain() {
+    const delivery = deliveryTarget?.credentialDelivery;
+    if (!delivery) return;
+    try {
+      const result = await retryDelivery.mutateAsync(delivery.id);
+      if (result.sent) {
+        setDeliveryTarget(null);
+        toast.success("Sent");
+      } else {
+        toast.error(result.error ?? "It failed again. Check the Mail page for the reason.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not retry that");
+    }
   }
 
   function saveAccess() {
@@ -638,11 +770,11 @@ export default function ClientAccess() {
                 style={busy ? { opacity: 0.55 } : undefined}
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <Avatar className="size-11 shrink-0 ring-1 ring-border/80 shadow-xs">
-                    <AvatarFallback className="bg-muted text-xs font-semibold text-foreground border border-border/40">
-                      {initials(u.name)}
-                    </AvatarFallback>
-                  </Avatar>
+                  <UserAvatar
+                    user={u}
+                    className="size-11 ring-1 ring-border/80 shadow-xs"
+                    fallbackClassName="bg-muted text-xs text-foreground border border-border/40"
+                  />
 
                   <div className="min-w-0 space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -653,6 +785,12 @@ export default function ClientAccess() {
                         <status.icon className="size-2.5" />
                         {status.label}
                       </span>
+                      {/* Two different clocks, side by side on purpose. The pill
+                          above is when the *account* lapses; this one is the age
+                          of the password. They answer different questions and an
+                          admin needs both. */}
+                      <PasswordStatusBadge status={u.passwordStatus} />
+                      <DeliveryBadge delivery={u.credentialDelivery} />
                     </div>
 
                     <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
@@ -729,6 +867,17 @@ export default function ClientAccess() {
                   </Button>
                   <Button
                     variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => openDelivery(u)}
+                    title="Schedule when this client is emailed a link to set their own password"
+                    className="h-8 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <Send className="size-3.5" />
+                    Delivery
+                  </Button>
+                  <Button
+                    variant="ghost"
                     size="icon-xs"
                     disabled={busy}
                     aria-label={`Revoke access for ${u.name}`}
@@ -744,6 +893,152 @@ export default function ClientAccess() {
           })}
         </div>
       )}
+
+      {/* Credential delivery: schedule, reschedule, cancel, retry -- and the
+          status of whatever is currently booked. Never shows a link or a
+          password, because the server never produces one for anybody to see:
+          what is scheduled is an email carrying a single-use link that the
+          client redeems to set a password nobody here will know. */}
+      <Dialog open={Boolean(deliveryTarget)} onOpenChange={(v) => !v && setDeliveryTarget(null)}>
+        <DialogContent
+          showCloseButton={false}
+          className="sm:max-w-md p-0 gap-0 overflow-hidden border border-border/60 shadow-2xl rounded-2xl bg-card"
+        >
+          <div className="relative p-6 pb-4 border-b border-border/40 bg-gradient-to-br from-primary/10 via-background to-background">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary border border-primary/20 shadow-xs">
+                  <Send className="size-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg font-semibold tracking-tight text-foreground">
+                    Credential delivery
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                    When {deliveryTarget?.name} is emailed a link to set their own password.
+                  </DialogDescription>
+                </div>
+              </div>
+              <DialogClose className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors">
+                <X className="size-4" />
+              </DialogClose>
+            </div>
+          </div>
+
+          <div className="space-y-4 p-6">
+            {/* A delivery needs two things the server may not have: something to
+                send with, and a public address to point the link at. Without
+                either, scheduling one books a failure for later -- so it is said
+                here, before the date is picked, rather than discovered when the
+                client never receives anything. */}
+            {deliveryConfig.data && !deliveryConfig.data.linkBaseConfigured && (
+              <div className="flex gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3">
+                <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0 text-destructive" />
+                <div className="min-w-0 text-xs leading-relaxed text-destructive">
+                  <strong className="font-semibold">This will fail.</strong> The server has no public address
+                  configured, so it cannot build the activation link. Set <code className="font-mono">APP_BASE_URL</code>
+                  {" "}in the environment and restart.
+                </div>
+              </div>
+            )}
+            {deliveryConfig.data && !deliveryConfig.data.emailConfigured && (
+              <div className="flex gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3">
+                <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0 text-warning" />
+                <div className="min-w-0 text-xs leading-relaxed text-warning">
+                  No email transport is configured, so nothing can actually be delivered. Check the Mail page.
+                </div>
+              </div>
+            )}
+
+            {deliveryTarget?.credentialDelivery && (
+              <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+                <div className="flex items-center gap-2">
+                  <DeliveryBadge delivery={deliveryTarget.credentialDelivery} />
+                  {deliveryTarget.credentialDelivery.attempts > 0 && (
+                    <span className="text-[11px] text-muted-foreground">
+                      {deliveryTarget.credentialDelivery.attempts}{" "}
+                      {deliveryTarget.credentialDelivery.attempts === 1 ? "attempt" : "attempts"}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  {describeDelivery(deliveryTarget.credentialDelivery)}
+                </p>
+                {deliveryTarget.credentialDelivery.canRetry && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2.5 h-8 gap-1.5 text-xs"
+                    disabled={retryDelivery.isPending}
+                    onClick={sendAgain}
+                  >
+                    {retryDelivery.isPending ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="size-3.5" />
+                    )}
+                    Send it now
+                  </Button>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="delivery-when" className="text-xs font-medium">
+                Send at
+              </Label>
+              <DateTimePicker
+                id="delivery-when"
+                value={deliveryDraft}
+                onChange={setDeliveryDraft}
+                minDate={new Date()}
+                presets={DELIVERY_PRESETS}
+              />
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Your own time zone. The email carries a single-use link that expires on its own — no password
+                is ever sent, and nobody here can see the one they choose.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="m-0 px-6 py-4 bg-muted/30 border-t border-border/40 flex flex-row items-center justify-between gap-2.5 rounded-b-2xl">
+            {deliveryTarget?.credentialDelivery?.status === "scheduled" ? (
+              <Button
+                variant="ghost"
+                className="h-9 px-3.5 text-xs text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                disabled={cancelDelivery.isPending}
+                onClick={callOffDelivery}
+              >
+                {cancelDelivery.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Cancel delivery"}
+              </Button>
+            ) : (
+              <span />
+            )}
+
+            <span className="flex items-center gap-2.5">
+              <DialogClose render={<Button variant="ghost" className="h-9 text-xs px-3.5 text-muted-foreground hover:text-foreground" />}>
+                Close
+              </DialogClose>
+              <Button
+                onClick={saveDelivery}
+                disabled={scheduleDelivery.isPending || !deliveryDraft}
+                className="h-9 px-4 text-xs font-medium gap-1.5 shadow-xs"
+              >
+                {scheduleDelivery.isPending ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Saving…
+                  </>
+                ) : deliveryTarget?.credentialDelivery?.status === "scheduled" ? (
+                  "Reschedule"
+                ) : (
+                  "Schedule"
+                )}
+              </Button>
+            </span>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(accessTarget)} onOpenChange={(v) => !v && setAccessTarget(null)}>
         <DialogContent
