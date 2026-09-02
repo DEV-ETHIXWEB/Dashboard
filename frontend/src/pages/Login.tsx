@@ -37,6 +37,51 @@ const LINK_ERRORS: Record<string, string> = {
   access_expired: "This access has expired. Ask your admin to issue you new credentials.",
 };
 
+/** Firebase's own words for "the person closed the window". Not failures. */
+const CANCELLED_POPUP = new Set([
+  "auth/popup-closed-by-user",
+  "auth/cancelled-popup-request",
+  "auth/user-cancelled",
+]);
+
+/** The `code` off a Firebase error, or "" for anything else. */
+function errorCode(err: unknown): string {
+  return typeof err === "object" && err !== null && "code" in err
+    ? String((err as { code: unknown }).code)
+    : "";
+}
+
+/**
+ * A sentence a person can act on, instead of the code Firebase throws.
+ *
+ * `signInWithPopup` rejects with messages written for a console --
+ * "Firebase: Error (auth/popup-blocked)." -- and this screen used to print them
+ * verbatim. Every case below is something the reader can actually do something
+ * about; anything else falls back to a plain sentence that points at the
+ * password form, which always works. Our own thrown messages are already
+ * written for people, so they are passed through untouched.
+ */
+function friendlyGoogleError(err: unknown, code: string): string {
+  switch (code) {
+    case "auth/popup-blocked":
+      return "Your browser blocked the Google sign-in window. Allow pop-ups for this site, then try again.";
+    case "auth/network-request-failed":
+      return "Could not reach Google. Check your connection and try again.";
+    case "auth/unauthorized-domain":
+      return "This site is not approved for Google sign-in yet. Ask your admin to add it in Firebase.";
+    case "auth/account-exists-with-different-credential":
+      return "That address already signs in here with a password. Use the email and password form below.";
+    default:
+      break;
+  }
+  if (code.startsWith("auth/")) {
+    return "Google sign-in did not finish. Try again, or sign in with your email and password below.";
+  }
+  return err instanceof Error && err.message && !err.message.startsWith("Firebase:")
+    ? err.message
+    : "Google sign-in failed. Try your email and password instead.";
+}
+
 export default function Login() {
   const navigate = useNavigate();
   const { config, setSession } = useAuth();
@@ -157,15 +202,24 @@ export default function Login() {
       const d = await api<LoginResponse>("POST", "/auth/google", { idToken });
       await handleLoginResponse(d);
     } catch (err) {
-      if (config?.googleSignInEnabled) {
-        const google = (window as any).google;
-        if (google) {
-          google.accounts.id.prompt();
-        }
-      } else {
-        setError("Google sign-in requires Firebase or Google OAuth configuration in .env.");
+      const code = errorCode(err);
+
+      // Closing the popup is a decision, not a failure. Firebase reports it as
+      // an error all the same, so this used to answer somebody who simply
+      // changed their mind with "Firebase: Error (auth/popup-closed-by-user)."
+      // on the sign-in screen. Say nothing and leave the form as it was.
+      if (CANCELLED_POPUP.has(code)) return;
+
+      // Google Identity is a real second chance rather than a consolation, so
+      // when it is configured, open it and stay quiet. The old code opened this
+      // prompt and then wrote an error over the top of it.
+      const google = config?.googleSignInEnabled ? (window as any).google : null;
+      if (google) {
+        google.accounts.id.prompt();
+        return;
       }
-      setError(err instanceof Error ? err.message : "Google sign-in failed");
+
+      setError(friendlyGoogleError(err, code));
       errorFeedback();
     } finally {
       setBusy(false);

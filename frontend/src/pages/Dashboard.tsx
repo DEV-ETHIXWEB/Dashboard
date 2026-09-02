@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
 import { money, monthKey, plainMonth, plainDate, describeChange } from "@/lib/money";
 import { formatBytes } from "@/lib/format";
 import { apiUrl } from "@/lib/api";
-import { canSeePage } from "@/lib/permissions";
+import { canOpenBudget, canSeePage } from "@/lib/permissions";
 import type { Billing, BudgetItem } from "@/lib/entities";
 import type { ClientPageKey } from "@/lib/types";
 
@@ -308,7 +308,11 @@ export default function Dashboard() {
                       <MoneyPanel
                         title={paid ? "Ad and project spend" : "Where your money went"}
                         subtitle={plainMonth(latest.key)}
-                        action={<PanelLink to="/portal/budget">See all spending</PanelLink>}
+                        action={
+                          canOpenBudget(user) ? (
+                            <PanelLink to="/portal/budget">See all spending</PanelLink>
+                          ) : undefined
+                        }
                       >
                         <SpendBreakdown categories={categories} total={latest.total} />
                       </MoneyPanel>
