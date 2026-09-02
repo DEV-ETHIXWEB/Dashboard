@@ -4,6 +4,7 @@ import { api, ApiError, setCsrfToken } from "@/lib/api";
 import { clearOfflineCaches } from "@/lib/pwa";
 import { clearPersistedCache } from "@/lib/queryPersist";
 import { prefetchHome } from "@/lib/routeChunks";
+import { clearSessionHint, rememberSessionHint } from "@/lib/sessionHint";
 import { NO_CAPABILITIES, type Capabilities, type PublicConfig, type User } from "@/lib/types";
 
 interface AuthContextValue {
@@ -38,8 +39,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setCsrfToken(res.csrfToken);
         setUser(res.user);
         setCan(res.capabilities ?? NO_CAPABILITIES);
+        rememberSessionHint();
       } catch (err) {
-        if (!(err instanceof ApiError && err.status === 401)) console.error(err);
+        // A 401 is the server saying there is no session on this browser, which
+        // is the one thing that can retire the hint honestly. Anything else --
+        // the API being down, a network that dropped -- says nothing about
+        // whether this person is signed in, so the hint stands.
+        if (err instanceof ApiError && err.status === 401) clearSessionHint();
+        else console.error(err);
       } finally {
         setReady(true);
       }
@@ -58,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setCsrfToken(null);
         setUser(null);
         setCan(NO_CAPABILITIES);
+        clearSessionHint();
         queryClient.clear();
         clearPersistedCache();
       }
@@ -67,6 +75,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function setSession(nextUser: User, csrfToken?: string) {
     if (csrfToken) setCsrfToken(csrfToken);
     setUser(nextUser);
+    // From here on this browser can be assumed to have had a session, which is
+    // what lets the next visit tell "probably signed in, hold for the answer"
+    // apart from "nobody has ever signed in here, show the form now".
+    rememberSessionHint();
     // The redirect to the portal is the next thing that happens, and the home
     // screen's code is a separate chunk. Start it now rather than after the
     // route swaps and finds it missing.
@@ -83,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setCsrfToken(null);
       setUser(null);
       setCan(NO_CAPABILITIES);
+      clearSessionHint();
       queryClient.clear();
       // `queryClient.clear()` empties this tab's memory; the session-storage
       // copy of the cacheable-by-policy answers has to be told separately.

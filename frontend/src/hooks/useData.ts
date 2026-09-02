@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiUpload } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import type { UserRecord, Project, Task, Ticket, Domain, Report, BudgetItem, Billing, Notification, PaymentSummary } from "@/lib/entities";
-import { canSeePage } from "@/lib/permissions";
+import { canReadBilling, canSeePage } from "@/lib/permissions";
 import type { ClientPageKey, OtpLogEntry, RecoveryCodeStatus } from "@/lib/types";
 
 /**
@@ -279,7 +279,10 @@ export function useBudget(clientId?: string) {
 }
 
 export function useBillingStatus() {
-  const allowed = useAllowedPage("billing");
+  const { user } = useAuth();
+  // Both checks, because both can refuse: a client can have Billing switched
+  // off for them, and a staff role can be refused billing outright.
+  const allowed = useAllowedPage("billing") && canReadBilling(user);
   return useQuery({
     queryKey: ["billing"],
     queryFn: () => api<{ enabled: boolean; billing: Billing | Billing[] }>("GET", "/billing/status"),
@@ -295,7 +298,8 @@ export function useBillingStatus() {
  * reconciled by hand.
  */
 export function usePayments(clientId?: string) {
-  const allowed = useAllowedPage("billing");
+  const { user } = useAuth();
+  const allowed = useAllowedPage("billing") && canReadBilling(user);
   return useQuery({
     queryKey: ["payments", clientId ?? "all"],
     queryFn: () =>
@@ -340,10 +344,15 @@ export interface StripeCustomer {
  */
 export function useStripeCustomers(enabled = true) {
   const { user } = useAuth();
+  // Shares a query key with the Billing page's own call, so this costs nothing.
+  // Without it the list was asked for whenever an admin opened Billing, and a
+  // deployment with no Stripe key answered 503 every time -- a failed request
+  // in the console on a page that was working perfectly well without it.
+  const { data: billing } = useBillingStatus();
   return useQuery({
     queryKey: ["stripe-customers"],
     queryFn: () => api<{ customers: StripeCustomer[] }>("GET", "/billing/customers").then((d) => d.customers),
-    enabled: enabled && user?.role === "admin",
+    enabled: enabled && user?.role === "admin" && billing?.enabled === true,
     staleTime: 60_000,
   });
 }

@@ -1,6 +1,7 @@
 'use strict';
 
 const { Pool } = require('pg');
+const { createHash } = require('crypto');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { SCHEMAS, toSnake, toCamel, isWritableField } = require('./schemas');
@@ -381,8 +382,6 @@ async function initPostgresSchema() {
       content_base64 TEXT, checksum TEXT, updated_at TEXT, updated_by TEXT
     )`,
   ];
-  for (const sql of statements) await p.query(sql);
-
   const alterations = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT FALSE`,
@@ -438,15 +437,59 @@ async function initPostgresSchema() {
     // person in the workspace on the morning this deploys. Their clock starts
     // now instead. Runs once in practice: after this, nothing writes a password
     // without stamping the time (see utils/passwordPolicy.js stampChange).
-    `UPDATE users SET password_changed_at = ${Date.now()} WHERE password_changed_at IS NULL AND password IS NOT NULL`,
+    `UPDATE users SET password_changed_at = :now WHERE password_changed_at IS NULL AND password IS NOT NULL`,
   ];
+  // Everything above describes the schema; none of it has run yet.
+  //
+  // This function used to fire all ~80 statements at the database on every
+  // boot, one await at a time. They are all `IF NOT EXISTS`, so on an
+  // established workspace every one of them was a network round trip to be
+  // told there was nothing to do -- and on a serverless platform, where a cold
+  // boot happens whenever nobody has visited for a few minutes, that landed in
+  // front of a real person waiting on the login screen. Measured against the
+  // production database, the boot it gated took the better part of fifteen
+  // seconds.
+  //
+  // The fingerprint is the schema itself, hashed. Add or change a statement
+  // and it stops matching, so the migrations run again on the next boot; leave
+  // the schema alone and the whole block costs two queries. Nothing has to be
+  // bumped by hand, which is the failure mode of a version number somebody has
+  // to remember to raise.
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify([statements, alterations]))
+    .digest('hex')
+    .slice(0, 32);
+
+  await p.query(`CREATE TABLE IF NOT EXISTS schema_state (
+    fingerprint TEXT PRIMARY KEY, applied_at TEXT NOT NULL
+  )`);
+  const applied = await p.query('SELECT 1 FROM schema_state WHERE fingerprint = $1', [fingerprint]);
+  if (applied.rowCount > 0) return;
+
+  for (const sql of statements) await p.query(sql);
+
+  // The stamp is substituted here rather than written into the statement text,
+  // which would change the fingerprint on every boot and defeat the guard.
+  const now = Date.now();
   for (const sql of alterations) {
+    const stmt = sql.replace(':now', String(now));
     try {
-      await p.query(sql);
+      await p.query(stmt);
     } catch (err) {
-      console.warn(`Schema migration skipped (${sql}): ${err.message}`);
+      console.warn(`Schema migration skipped (${stmt}): ${err.message}`);
     }
   }
+
+  // Written last, and only after a clean pass. A boot that threw part way
+  // through leaves no marker, so the next one runs the migrations again rather
+  // than assuming the schema is current. The alterations still swallow their
+  // own failures exactly as they always did: an `ALTER` that cannot apply is
+  // not a reason to re-run the other seventy-nine on every request forever.
+  await p.query(
+    `INSERT INTO schema_state (fingerprint, applied_at) VALUES ($1, $2)
+      ON CONFLICT (fingerprint) DO NOTHING`,
+    [fingerprint, new Date().toISOString()],
+  );
 }
 
 function daysFromNow(n) {
