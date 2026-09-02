@@ -125,11 +125,25 @@ export default function Login() {
 
   // Forgotten password. Kept on this page rather than given a route of its own:
   // it is one field and one button, and a whole screen for that is a navigation
-  // somebody has to come back from.
+  // somebody has to come back from. It is a step within the card instead --
+  // see the sliding track below.
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
+
+  // Put the cursor in the field once the slide has finished, so the step is
+  // ready to type into. Focusing mid-transition is what makes a browser scroll
+  // sideways to chase an element that is still translated off-screen, which is
+  // the lurch this transition exists to avoid -- hence the delay, and
+  // preventScroll as a second line of defence.
+  useEffect(() => {
+    if (!forgotOpen) return;
+    const timer = setTimeout(() => {
+      document.getElementById("forgot-email")?.focus({ preventScroll: true });
+    }, 320);
+    return () => clearTimeout(timer);
+  }, [forgotOpen]);
 
   async function requestReset(e: React.FormEvent) {
     e.preventDefault();
@@ -510,200 +524,221 @@ export default function Login() {
                       </span>
                     </div>
 
-                    <div>
-                      <h1 className="t-title text-foreground">Welcome back</h1>
-                      <p className="mt-1 max-w-[290px] text-sm leading-relaxed text-muted-foreground sm:text-xs">
-                        Sign in to manage projects, tasks, and client tickets.
-                      </p>
-                    </div>
-
-                    <div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={busy}
-                        onClick={handleGoogleSignIn}
-                        className="w-full h-10 py-2 px-4 flex items-center justify-center gap-2.5 border-border bg-background hover:bg-secondary/70 cursor-pointer transition-all shadow-sm text-sm font-medium text-foreground"
+                    {/* One question at a time. The sign-in stack and the reset stack
+                        sit side by side on a track that slides between them, so
+                        "Forgot password?" reads as going somewhere rather than as
+                        growing something onto the bottom of the form. Both stay
+                        mounted -- the track needs both widths to translate against
+                        -- and whichever is off-screen is inert, so it cannot be
+                        tabbed into or read out by a screen reader. */}
+                    {/* An explicit transform rather than a translate utility:
+                        the utility compiles to a `translate:` longhand whose
+                        custom property resolves to 0% here, so the track never
+                        actually moved -- the only thing putting the second panel
+                        on screen was the browser scrolling this clipped box to
+                        chase focus. That is a jump, not a transition, and it is
+                        the thing this is meant to replace. */}
+                    <div className="overflow-hidden">
+                      <div
+                        style={{ transform: forgotOpen ? "translateX(-50%)" : "translateX(0)" }}
+                        className="flex w-[200%] items-start transition-transform duration-300 ease-out motion-reduce:transition-none"
                       >
-                        {busy ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24">
-                            <path
-                              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                              fill="#4285F4"
-                            />
-                            <path
-                              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                              fill="#34A853"
-                            />
-                            <path
-                              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                              fill="#FBBC05"
-                            />
-                            <path
-                              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                              fill="#EA4335"
-                            />
-                          </svg>
-                        )}
-                        Sign in with Google
-                      </Button>
-
-                      {config?.googleSignInEnabled && <div ref={googleBtnRef} className="hidden" />}
-                    </div>
-
-                    <div className="flex items-center gap-3 text-xs uppercase tracking-wider font-semibold text-muted-foreground/60">
-                      <div className="h-[1px] flex-1 bg-gradient-to-r from-transparent to-border/70" />
-                      or sign in with email
-                      <div className="h-[1px] flex-1 bg-gradient-to-l from-transparent to-border/70" />
-                    </div>
-
-                    <form onSubmit={doLogin} className="flex flex-col gap-3.5">
-                      <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="email" className="t-label tracking-wider text-muted-foreground">Email</Label>
-                        <div className="relative">
-                          <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground/70 pointer-events-none" />
-                          <Input
-                            id="email"
-                            type="email"
-                            placeholder="you@company.com"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            autoComplete="username"
-                            className="h-10 pl-10 pr-3.5 bg-background border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all text-sm text-foreground placeholder:text-muted-foreground/50"
-                          />
+                        <div className="flex w-1/2 shrink-0 flex-col gap-5" inert={forgotOpen}>
+                        <div>
+                          <h1 className="t-title text-foreground">Welcome back</h1>
+                          <p className="mt-1 max-w-[290px] text-sm leading-relaxed text-muted-foreground sm:text-xs">
+                            Sign in to manage projects, tasks, and client tickets.
+                          </p>
                         </div>
-                      </div>
-                      <div className="flex flex-col gap-1.5">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <Label htmlFor="password" className="t-label tracking-wider text-muted-foreground">Password</Label>
-                          {/* Beside the field it is about, which is where
-                              somebody who has just failed to remember one is
-                              already looking. */}
-                          <button
+
+                        <div>
+                          <Button
                             type="button"
-                            onClick={() => setForgotOpen(true)}
-                            className="focus-clear cursor-pointer rounded text-[11px] font-medium text-muted-foreground transition-colors hover:text-primary"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={handleGoogleSignIn}
+                            className="w-full h-10 py-2 px-4 flex items-center justify-center gap-2.5 border-border bg-background hover:bg-secondary/70 cursor-pointer transition-all shadow-sm text-sm font-medium text-foreground"
                           >
-                            Forgot password?
-                          </button>
-                        </div>
-                        <div className="relative">
-                          <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground/70 pointer-events-none" />
-                          <Input
-                            id="password"
-                            type={showPassword ? "text" : "password"}
-                            placeholder="••••••••"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            autoComplete="current-password"
-                            className="h-10 pl-10 pr-10 bg-background border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all text-sm text-foreground placeholder:text-muted-foreground/50"
-                          />
-                          <button
-                            type="button"
-                            tabIndex={-1}
-                            aria-label={showPassword ? "Hide password" : "Show password"}
-                            onClick={() => setShowPassword((v) => !v)}
-                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-foreground cursor-pointer"
-                          >
-                            {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                          </button>
-                        </div>
-                      </div>
+                            {busy ? (
+                              <Loader2 className="size-4 animate-spin" />
+                            ) : (
+                              <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24">
+                                <path
+                                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                                  fill="#4285F4"
+                                />
+                                <path
+                                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                                  fill="#34A853"
+                                />
+                                <path
+                                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                                  fill="#FBBC05"
+                                />
+                                <path
+                                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                                  fill="#EA4335"
+                                />
+                              </svg>
+                            )}
+                            Sign in with Google
+                          </Button>
 
-                      {error && (
-                        <div
-                          className={cn(
-                            "rounded-md border px-3.5 py-2.5 text-xs font-medium",
-                            expiredAccess
-                              ? "bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400"
-                              : "bg-destructive/10 border-destructive/20 text-destructive",
-                          )}
-                        >
-                          {expiredAccess && (
-                            <span className="mb-1 flex items-center gap-1.5 font-semibold">
-                              <Clock className="size-3.5 shrink-0" />
-                              Access expired
-                            </span>
-                          )}
-                          {error}
+                          {config?.googleSignInEnabled && <div ref={googleBtnRef} className="hidden" />}
                         </div>
-                      )}
 
-                      <Button
-                        type="submit"
-                        disabled={busy}
-                        className="mt-1 h-12 cursor-pointer py-2 text-sm font-semibold shadow-md shadow-primary/20 transition-all sm:h-10"
-                      >
-                        {busy && <Loader2 className="size-4 animate-spin" />}
-                        Sign in
-                      </Button>
-                    </form>
+                        <div className="flex items-center gap-3 text-xs uppercase tracking-wider font-semibold text-muted-foreground/60">
+                          <div className="h-[1px] flex-1 bg-gradient-to-r from-transparent to-border/70" />
+                          or sign in with email
+                          <div className="h-[1px] flex-1 bg-gradient-to-l from-transparent to-border/70" />
+                        </div>
 
-                    {/* Opens in place, under the form it belongs to. A nested
-                        <form> is not legal HTML, so this sits after the sign-in
-                        form rather than inside it. */}
-                    {forgotOpen && (
-                      <div className="mt-4 rounded-xl border border-border/60 bg-muted/20 p-4">
-                        {forgotSent ? (
-                          <div className="flex flex-col gap-2">
-                            <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                              <Check aria-hidden className="size-3.5 shrink-0 text-success" />
-                              Check your inbox
-                            </span>
-                            <p className="text-[11px] leading-relaxed text-muted-foreground">
-                              If that address has an account, a link to set a new password is on its way. It
-                              works once and expires shortly. We never email you a password.
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setForgotOpen(false);
-                                setForgotSent(false);
-                                setForgotEmail("");
-                              }}
-                              className="focus-clear w-fit cursor-pointer rounded text-[11px] font-medium text-primary hover:underline"
-                            >
-                              Back to sign in
-                            </button>
-                          </div>
-                        ) : (
-                          <form onSubmit={requestReset} className="flex flex-col gap-2.5">
-                            <Label htmlFor="forgot-email" className="t-label tracking-wider text-muted-foreground">
-                              Reset your password
-                            </Label>
+                        <form onSubmit={doLogin} className="flex flex-col gap-3.5">
+                          <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="email" className="t-label tracking-wider text-muted-foreground">Email</Label>
                             <div className="relative">
-                              <Mail className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground/70" />
+                              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground/70 pointer-events-none" />
                               <Input
-                                id="forgot-email"
+                                id="email"
                                 type="email"
-                                autoComplete="username"
                                 placeholder="you@company.com"
-                                value={forgotEmail}
-                                onChange={(e) => setForgotEmail(e.target.value)}
-                                className="h-10 bg-background pr-3.5 pl-10 text-sm"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                autoComplete="username"
+                                className="h-10 pl-10 pr-3.5 bg-background border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all text-sm text-foreground placeholder:text-muted-foreground/50"
                               />
                             </div>
-                            <div className="flex items-center gap-2">
-                              <Button type="submit" size="sm" disabled={forgotBusy || !forgotEmail.trim()} className="cursor-pointer gap-1.5">
-                                {forgotBusy && <Loader2 className="size-3.5 animate-spin" />}
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <Label htmlFor="password" className="t-label tracking-wider text-muted-foreground">Password</Label>
+                              {/* Beside the field it is about, which is where
+                                  somebody who has just failed to remember one is
+                                  already looking. */}
+                              <button
+                                type="button"
+                                onClick={() => setForgotOpen(true)}
+                                className="focus-clear cursor-pointer rounded text-[11px] font-medium text-muted-foreground transition-colors hover:text-primary"
+                              >
+                                Forgot password?
+                              </button>
+                            </div>
+                            <div className="relative">
+                              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground/70 pointer-events-none" />
+                              <Input
+                                id="password"
+                                type={showPassword ? "text" : "password"}
+                                placeholder="••••••••"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                autoComplete="current-password"
+                                className="h-10 pl-10 pr-10 bg-background border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all text-sm text-foreground placeholder:text-muted-foreground/50"
+                              />
+                              <button
+                                type="button"
+                                tabIndex={-1}
+                                aria-label={showPassword ? "Hide password" : "Show password"}
+                                onClick={() => setShowPassword((v) => !v)}
+                                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-foreground cursor-pointer"
+                              >
+                                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                              </button>
+                            </div>
+                          </div>
+
+                          {error && (
+                            <div
+                              className={cn(
+                                "rounded-md border px-3.5 py-2.5 text-xs font-medium",
+                                expiredAccess
+                                  ? "bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400"
+                                  : "bg-destructive/10 border-destructive/20 text-destructive",
+                              )}
+                            >
+                              {expiredAccess && (
+                                <span className="mb-1 flex items-center gap-1.5 font-semibold">
+                                  <Clock className="size-3.5 shrink-0" />
+                                  Access expired
+                                </span>
+                              )}
+                              {error}
+                            </div>
+                          )}
+
+                          <Button
+                            type="submit"
+                            disabled={busy}
+                            className="mt-1 h-12 cursor-pointer py-2 text-sm font-semibold shadow-md shadow-primary/20 transition-all sm:h-10"
+                          >
+                            {busy && <Loader2 className="size-4 animate-spin" />}
+                            Sign in
+                          </Button>
+                        </form>
+                        </div>
+
+                        <div className="flex w-1/2 shrink-0 flex-col gap-5" inert={!forgotOpen}>
+                          <div>
+                            <h1 className="t-title text-foreground">Reset your password</h1>
+                            <p className="mt-1 max-w-[290px] text-sm leading-relaxed text-muted-foreground sm:text-xs">
+                              We will email you a link to set a new one. Nobody here can see what you pick.
+                            </p>
+                          </div>
+
+                          {forgotSent ? (
+                            <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-muted/20 p-4">
+                              <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                                <Check aria-hidden className="size-3.5 shrink-0 text-success" />
+                                Check your inbox
+                              </span>
+                              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                                If that address has an account, a link to set a new password is on its way. It
+                                works once and expires shortly. We never email you a password.
+                              </p>
+                            </div>
+                          ) : (
+                            <form onSubmit={requestReset} className="flex flex-col gap-3.5">
+                              <div className="flex flex-col gap-1.5">
+                                <Label htmlFor="forgot-email" className="t-label tracking-wider text-muted-foreground">
+                                  Email
+                                </Label>
+                                <div className="relative">
+                                  <Mail className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground/70" />
+                                  <Input
+                                    id="forgot-email"
+                                    type="email"
+                                    autoComplete="username"
+                                    placeholder="you@company.com"
+                                    value={forgotEmail}
+                                    onChange={(e) => setForgotEmail(e.target.value)}
+                                    className="h-10 border-input bg-background pr-3.5 pl-10 text-sm text-foreground transition-all placeholder:text-muted-foreground/50 hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
+                                  />
+                                </div>
+                              </div>
+                              <Button
+                                type="submit"
+                                disabled={forgotBusy || !forgotEmail.trim()}
+                                className="mt-1 h-12 cursor-pointer gap-1.5 py-2 text-sm font-semibold shadow-md shadow-primary/20 transition-all sm:h-10"
+                              >
+                                {forgotBusy && <Loader2 className="size-4 animate-spin" />}
                                 Send reset link
                               </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                className="cursor-pointer text-muted-foreground"
-                                onClick={() => setForgotOpen(false)}
-                              >
-                                Cancel
-                              </Button>
-                            </div>
-                          </form>
-                        )}
+                            </form>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setForgotOpen(false);
+                              setForgotSent(false);
+                              setForgotEmail("");
+                            }}
+                            className="focus-clear w-fit cursor-pointer rounded text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
+                          >
+                            &larr; Back to sign in
+                          </button>
+                        </div>
                       </div>
-                    )}
+                    </div>
 
                     {/* The reassurance the side panel used to carry, kept where
                         a phone can still see it without scrolling past a pitch. */}

@@ -1,15 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell } from "lucide-react";
-import { useAuth } from "@/context/AuthContext";
-import { useNotifications, useMarkNotificationRead } from "@/hooks/useData";
-import { formatRelativeTime } from "@/lib/format";
-import { kindOf, lookFor } from "@/lib/notifications";
+import { NotificationRows } from "@/components/NotificationList";
+import {
+  NOTIFICATIONS_ROUTE,
+  useNotificationPreview,
+  useOpenNotification,
+} from "@/hooks/useNotificationPanel";
 import { cn } from "@/lib/utils";
-import type { Notification } from "@/lib/entities";
-
-/** How many fit in the panel before "View all" is the better answer. */
-const PREVIEW = 6;
 
 /**
  * The bell in the desktop header.
@@ -18,26 +16,17 @@ const PREVIEW = 6;
  * see an alert was to notice a badge in the sidebar and change page for it.
  * This shows the latest few in place, so glancing at them costs one click and
  * keeps whatever you were reading on screen.
+ *
+ * The phone's equivalent is components/mobile/NotificationSheet.tsx. The list
+ * inside both comes from components/NotificationList.tsx.
  */
 export function NotificationBell() {
-  const { user } = useAuth();
-  const { data: notifications } = useNotifications();
-  const markRead = useMarkNotificationRead();
   const navigate = useNavigate();
+  const { unread, preview } = useNotificationPreview();
 
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
-
-  const items = notifications ?? [];
-  const unread = items.filter((n) => !n.read).length;
-  // Unread first, then newest: the panel is small, so what has not been seen
-  // has to be what is in it.
-  const preview = [...items]
-    .sort((a, b) => {
-      if (a.read !== b.read) return a.read ? 1 : -1;
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    })
-    .slice(0, PREVIEW);
+  const openItem = useOpenNotification(() => setOpen(false));
 
   // Click-away and Escape, the two ways anyone expects a popover to close.
   useEffect(() => {
@@ -55,13 +44,6 @@ export function NotificationBell() {
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
-
-  const openItem = (n: Notification) => {
-    if (!n.read) markRead.mutate(n.id);
-    const to = lookFor(kindOf(n.type), user?.role === "client").to;
-    setOpen(false);
-    navigate(to ?? "/portal/notifications");
-  };
 
   return (
     <div ref={wrapRef} className="relative">
@@ -97,46 +79,15 @@ export function NotificationBell() {
             </p>
           </div>
 
-          {preview.length === 0 ? (
-            <p className="px-3.5 py-6 text-center text-sm text-muted-foreground">
-              Nothing has happened yet.
-            </p>
-          ) : (
-            <ul className="max-h-[22rem] overflow-y-auto scrollbar-slim">
-              {preview.map((n) => {
-                const look = lookFor(kindOf(n.type), user?.role === "client");
-                const Icon = look.icon;
-                return (
-                  <li key={n.id}>
-                    <button
-                      type="button"
-                      onClick={() => openItem(n)}
-                      className="focus-clear flex w-full items-start gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-secondary/70"
-                    >
-                      <span className={cn("mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg", look.tone)}>
-                        <Icon aria-hidden className="size-3.5" />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className={cn("block text-[13px] leading-snug", n.read ? "text-muted-foreground" : "font-medium text-foreground")}>
-                          {n.message}
-                        </span>
-                        <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                          {formatRelativeTime(new Date(n.createdAt).getTime())}
-                        </span>
-                      </span>
-                      {!n.read && <span aria-hidden className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary" />}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+          <div className="max-h-[22rem] overflow-y-auto scrollbar-slim">
+            <NotificationRows preview={preview} onOpen={openItem} />
+          </div>
 
           <button
             type="button"
             onClick={() => {
               setOpen(false);
-              navigate("/portal/notifications");
+              navigate(NOTIFICATIONS_ROUTE);
             }}
             className="focus-clear w-full border-t border-border/70 px-3.5 py-2.5 text-center text-xs font-medium text-primary transition-colors hover:bg-secondary/70"
           >

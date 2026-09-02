@@ -106,8 +106,12 @@ export function useUploadAvatar() {
   const qc = useQueryClient();
   const { refreshUser } = useAuth();
   return useMutation({
-    mutationFn: async ({ userId, file }: { userId: string; file: File }) => {
-      const blob = await prepareAvatar(file);
+    // Either an already-framed blob from the editor, or a raw file for the
+    // centre-crop path. The editor is the only caller today; `file` stays so a
+    // caller with nothing to frame -- an import, a default -- still has a way in.
+    mutationFn: async ({ userId, file, blob: framed }: { userId: string; file?: File; blob?: Blob }) => {
+      const blob = framed ?? (file ? await prepareAvatar(file) : null);
+      if (!blob) throw new Error("No picture was given to upload.");
       const form = new FormData();
       // The filename is not trusted by the server -- it reads the bytes -- but
       // multipart wants one, and a stable name keeps the request tidy.

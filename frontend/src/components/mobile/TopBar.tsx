@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Bell, LogOut } from "lucide-react";
 import { LiveIndicator } from "@/components/LiveIndicator";
+import { NotificationSheet } from "@/components/mobile/NotificationSheet";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -34,6 +35,7 @@ export function TopBar({
 }) {
   const [raised, setRaised] = useState(false);
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
+  const [alertsOpen, setAlertsOpen] = useState(false);
   const { logout } = useAuth();
   const navigate = useNavigate();
 
@@ -117,9 +119,17 @@ export function TopBar({
           >
             <LogOut aria-hidden className="size-[19px]" strokeWidth={1.9} />
           </button>
-          <NavLink
-            to="/portal/notifications"
+          {/* A sheet, not a route. Glancing at alerts should not cost the page
+              you were on, and should not make "back" the way out of a glance. */}
+          <button
+            type="button"
             aria-label={unread > 0 ? `Alerts, ${unread} unread` : "Alerts"}
+            aria-haspopup="dialog"
+            aria-expanded={alertsOpen}
+            onClick={() => {
+              tapFeedback();
+              setAlertsOpen((v) => !v);
+            }}
             className="focus-clear relative -mr-1.5 inline-flex h-11 w-9 touch-manipulation items-center justify-center rounded-xl text-foreground active:bg-secondary"
           >
             <Bell aria-hidden className="size-[21px]" strokeWidth={1.9} />
@@ -128,9 +138,11 @@ export function TopBar({
                 {unread > 9 ? "9+" : unread}
               </span>
             )}
-          </NavLink>
+          </button>
         </div>
       </div>
+
+      <NotificationSheet open={alertsOpen} onClose={() => setAlertsOpen(false)} />
 
       {/* Cancel is the wide, plain one and sits first in the DOM, so on a phone
           -- where DialogFooter stacks column-reverse -- the destructive action
