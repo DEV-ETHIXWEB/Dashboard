@@ -28,6 +28,7 @@ const WorkProgress = lazy(ROUTE_CHUNKS.progress);
 const Messages = lazy(ROUTE_CHUNKS.messages);
 const MailCenter = lazy(ROUTE_CHUNKS.mail);
 const SlackMessages = lazy(ROUTE_CHUNKS.slack);
+const SmsInbox = lazy(ROUTE_CHUNKS.smsInbox);
 const Notifications = lazy(ROUTE_CHUNKS.notifications);
 const Approvals = lazy(ROUTE_CHUNKS.approvals);
 const AuditLog = lazy(ROUTE_CHUNKS.audit);
@@ -267,6 +268,16 @@ function App() {
             element={
               <RoleRoute roles={["admin"]}>
                 <SlackMessages />
+              </RoleRoute>
+            }
+          />
+          {/* Client texts. Staff only -- the API refuses everyone else, and the
+              live topic is in STAFF_ONLY for the same reason. */}
+          <Route
+            path="/portal/sms"
+            element={
+              <RoleRoute roles={["admin", "sales", "project_manager"]}>
+                <SmsInbox />
               </RoleRoute>
             }
           />

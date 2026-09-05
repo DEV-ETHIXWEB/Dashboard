@@ -1,7 +1,7 @@
 import {
   IconApprovals, IconAuditLog, IconBilling, IconBudget, IconClickUp, IconClientAccess, IconDashboard,
   IconDomains, IconEmblem, IconHome, IconLoginCodes, IconMail, IconMessages, IconNotifications,
-  IconProfile, IconProgress, IconProjects, IconReports, IconSlack, IconTasks, IconTeam, IconTickets,
+  IconProfile, IconProgress, IconProjects, IconReports, IconSlack, IconSms, IconTasks, IconTeam, IconTickets,
   type EthixIcon,
 } from "@/components/icons/ethix";
 import { canSeePage, pageKeyForPath } from "@/lib/permissions";
@@ -47,6 +47,8 @@ const STAFF_NAV: NavItem[] = [
   { to: "/portal/tickets", label: "Tickets", icon: IconTickets },
   { to: "/portal/messages", label: "Client messages", short: "Chat", icon: IconMessages,
     roles: ["admin", "sales", "project_manager"] },
+  { to: "/portal/sms", label: "Client texts", short: "Texts", icon: IconSms,
+    roles: ["admin", "sales", "project_manager"] },
   { to: "/portal/reports", label: "Reports", icon: IconReports, roles: ["admin", "sales", "project_manager"] },
   { to: "/portal/budget", label: "Budget", icon: IconBudget, roles: ["admin", "project_manager"] },
   { to: "/portal/billing", label: "Billing", icon: IconBilling, roles: ["admin"] },
@@ -66,7 +68,7 @@ const STAFF_NAV: NavItem[] = [
 
 const STAFF_GROUPS: { heading: string; labels: string[] }[] = [
   { heading: "Workspace", labels: ["Dashboard", "Projects", "Tasks", "Domains"] },
-  { heading: "Operations & Finance", labels: ["Work progress", "Tickets", "Client messages", "Reports", "Budget", "Billing"] },
+  { heading: "Operations & Finance", labels: ["Work progress", "Tickets", "Client messages", "Client texts", "Reports", "Budget", "Billing"] },
   { heading: "Integrations", labels: ["ClickUp", "Slack"] },
   { heading: "Administration", labels: ["Team", "Client Access", "Approvals", "Audit log", "Login Codes", "Mail"] },
   { heading: "Account", labels: ["Your profile", "Security", "Notifications"] },

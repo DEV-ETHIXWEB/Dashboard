@@ -3,6 +3,12 @@
 const SCHEMAS = {
   users: [
     'id', 'name', 'email', 'role', 'company', 'password', 'google_id',
+    // The mobile number this person texts us from, in E.164 (+14155551234).
+    // Deliberately not 'two_factor_contact': that is where a sign-in code goes
+    // and the account holder chooses it, whereas this is what an inbound text
+    // is matched against. Conflating them would let somebody redirect their own
+    // login codes by texting us from a new phone.
+    'phone',
     'two_factor_enabled', 'two_factor_contact', 'password_expires_at',
     // Password *age*, which is a different question from the line above.
     // `password_expires_at` is when this account's access lapses -- an admin
@@ -139,6 +145,28 @@ const SCHEMAS = {
   email_log: [
     'id', 'to_emails', 'subject', 'template', 'status', 'transport', 'error',
     'entity', 'entity_id', 'html', 'created_at',
+  ],
+  // One row per message a client texted in, before anybody has decided what it
+  // is. Deliberately not a ticket: most texts are a question, a nudge, or a
+  // thank-you, and giving every one of them an SLA clock would bury the ones
+  // that matter. Promotion to a ticket is a human's one-click decision -- see
+  // utils/smsIntake.js.
+  //
+  // 'provider_sid' is the id Twilio gave the message and carries a UNIQUE
+  // index. Twilio re-sends a webhook it believes failed, and that index is what
+  // stops one text from becoming two rows.
+  //
+  // Every 'ai_' column is a label for a person to read, never an instruction.
+  // The body is untrusted text from outside the workspace, so nothing derived
+  // from it may choose an assignee, move a status, or send anything outward.
+  sms_messages: [
+    'id', 'provider', 'provider_sid', 'channel', 'direction',
+    'from_number', 'to_number', 'body', 'num_media', 'media_json',
+    // Null until the number matches an account, or an admin links it by hand.
+    'client_id', 'status',
+    'ai_summary', 'ai_intent', 'ai_priority', 'ai_category', 'ai_at',
+    // Set once somebody promotes this message into a real ticket.
+    'ticket_id', 'created_at',
   ],
 };
 

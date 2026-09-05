@@ -27,6 +27,7 @@ const PATH_TOPICS = [
   [/^\/api\/billing\b/, ['billing']],
   [/^\/api\/domains\b/, ['domains']],
   [/^\/api\/notifications\b/, ['notifications']],
+  [/^\/api\/sms\b/, ['sms']],
   [/^\/api\/users\b/, ['users']],
   // Scheduling a delivery changes what the people list shows about that
   // account, so it rides the same topic rather than getting one of its own.

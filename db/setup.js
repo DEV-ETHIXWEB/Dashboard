@@ -381,6 +381,25 @@ async function initPostgresSchema() {
       mime_type TEXT NOT NULL, size_bytes BIGINT, width INTEGER, height INTEGER,
       content_base64 TEXT, checksum TEXT, updated_at TEXT, updated_by TEXT
     )`,
+    // Inbound client texts. `provider_sid` is UNIQUE because Twilio re-sends a
+    // webhook whenever it does not get a prompt 200, and without the database
+    // refusing the duplicate, one text would land in the inbox two or three
+    // times. The insert treats that rejection as success -- see routes/sms.js.
+    `CREATE TABLE IF NOT EXISTS sms_messages (
+      id TEXT PRIMARY KEY, provider TEXT NOT NULL DEFAULT 'twilio',
+      provider_sid TEXT UNIQUE, channel TEXT NOT NULL DEFAULT 'sms',
+      direction TEXT NOT NULL DEFAULT 'inbound',
+      from_number TEXT, to_number TEXT, body TEXT,
+      num_media INTEGER DEFAULT 0, media_json TEXT,
+      client_id TEXT, status TEXT NOT NULL DEFAULT 'new',
+      ai_summary TEXT, ai_intent TEXT, ai_priority TEXT, ai_category TEXT, ai_at BIGINT,
+      ticket_id TEXT, created_at TEXT
+    )`,
+    // The inbox is read newest-first and filtered by status; the number lookup
+    // is how an unlinked message finds its account once somebody adds a phone.
+    `CREATE INDEX IF NOT EXISTS idx_sms_messages_created_at ON sms_messages(created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_sms_messages_status ON sms_messages(status, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_sms_messages_from ON sms_messages(from_number)`,
   ];
   const alterations = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT`,
@@ -432,6 +451,10 @@ async function initPostgresSchema() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_required BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_at BIGINT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_updated_at BIGINT`,
+    // Where an inbound text is matched from. Nullable and unset for everyone
+    // until an admin fills it in: a client who has never texted us simply has
+    // no number here, and their messages arrive unlinked rather than not at all.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`,
     // Existing accounts have no recorded password age, and an unknown age must
     // not read as "older than a month" -- that would demand a reset from every
     // person in the workspace on the morning this deploys. Their clock starts

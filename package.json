@@ -19,6 +19,7 @@
     "test:security": "node --env-file-if-exists=.env.test -r ./scripts/dev-with-pgmem.js scripts/security-regression.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.6",

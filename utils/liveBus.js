@@ -40,10 +40,11 @@ const TOPIC_PAGE = {
   approvals: null,
   mail: null,
   otp: null,
+  sms: null,
 };
 
 /** Topics that exist for the people running the workspace, never for clients. */
-const STAFF_ONLY = ['users', 'approvals', 'mail', 'otp'];
+const STAFF_ONLY = ['users', 'approvals', 'mail', 'otp', 'sms'];
 
 const TOPICS = Object.keys(TOPIC_PAGE);
 

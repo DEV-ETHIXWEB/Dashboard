@@ -158,6 +158,15 @@ export const IconMessages: EthixIcon = (p) => (
   </Icon>
 );
 
+/** A handset, tilted the way a phone sits in a list row. */
+export const IconSms: EthixIcon = (p) => (
+  <Icon {...p}>
+    <rect x="6.4" y="2.6" width="11.2" height="18.8" rx="2.6" />
+    <path d="M10.4 5.4h3.2" />
+    <Node cx={12} cy={18.2} />
+  </Icon>
+);
+
 /** A sheet with its lines set as bars, shortest last. */
 export const IconReports: EthixIcon = (p) => (
   <Icon {...p}>

@@ -21,6 +21,7 @@ export const LIVE_TOPICS = [
   "mail",
   "otp",
   "approvals",
+  "sms",
   "session",
 ] as const;
 
@@ -50,6 +51,8 @@ const TOPIC_KEYS: Record<LiveTopic, string[][]> = {
   mail: [["mail"]],
   otp: [["otp-logs"]],
   approvals: [["approvals"], ["audit-log"]],
+  // A text can also become a ticket, so the ticket list is stale too.
+  sms: [["sms"], ["tickets"]],
   session: [], // handled separately: the account itself changed
 };
 

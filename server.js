@@ -77,7 +77,43 @@ app.use((req, res, next) => {
   next();
 });
 
+/**
+ * Nothing may touch the database until the schema exists and the first boot has
+ * finished. Defined here rather than mounted inline further down because the
+ * webhooks below need the same guarantee: on a serverless platform a cold boot
+ * can begin with a Twilio POST, and a handler that reads a table before this has
+ * run finds nothing there.
+ */
+let dbReadyPromise = null;
+function dbReady(req, res, next) {
+  if (!dbReadyPromise) {
+    dbReadyPromise = seed()
+      // A workspace with admins but no super admin has nobody who can appoint
+      // one, so the first boot after this feature shipped elects the
+      // longest-standing admin (or SUPER_ADMIN_EMAIL, when it is set).
+      .then(() => require('./utils/roles').ensureSuperAdmin())
+      // Watches client Slack channels and pushes changes down the live
+      // wire, so no browser has to poll Slack for itself.
+      .then(() => require('./utils/slackWatch').start())
+      .catch((err) => {
+        dbReadyPromise = null;
+        throw err;
+      });
+  }
+  dbReadyPromise.then(() => next(), next);
+}
+
 app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), require('./routes/billing').webhookHandler);
+
+// Twilio posts form-encoded, and signs the parsed fields -- so this needs its
+// own parser ahead of express.json(), for the same reason the Stripe line above
+// needs a raw one. Nothing may consume the body before the signature check.
+app.post(
+  '/api/sms/webhook',
+  express.urlencoded({ extended: false, limit: '256kb' }),
+  dbReady,
+  require('./routes/sms').webhookHandler,
+);
 
 app.use(express.json({ limit: '2mb' }));
 
@@ -152,24 +188,7 @@ app.use('/api', rateLimit({
   legacyHeaders: false,
 }));
 
-let dbReadyPromise = null;
-app.use((req, res, next) => {
-  if (!dbReadyPromise) {
-    dbReadyPromise = seed()
-      // A workspace with admins but no super admin has nobody who can appoint
-      // one, so the first boot after this feature shipped elects the
-      // longest-standing admin (or SUPER_ADMIN_EMAIL, when it is set).
-      .then(() => require('./utils/roles').ensureSuperAdmin())
-      // Watches client Slack channels and pushes changes down the live
-      // wire, so no browser has to poll Slack for itself.
-      .then(() => require('./utils/slackWatch').start())
-      .catch((err) => {
-        dbReadyPromise = null;
-        throw err;
-      });
-  }
-  dbReadyPromise.then(() => next(), next);
-});
+app.use(dbReady);
 
 // Every successful write nudges the open browsers on the live wire. Mounted
 // before the routers so the finish handler is in place when they reply.
@@ -183,6 +202,7 @@ app.use('/api/projects', require('./routes/projects'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/sms', require('./routes/sms'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/budget', require('./routes/budget'));
