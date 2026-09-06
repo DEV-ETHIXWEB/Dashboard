@@ -21,6 +21,12 @@ const appUrl = require('./appUrl');
 /** Roles that should hear about an inbound client text. */
 const NOTIFY_ROLES = ['admin', 'project_manager'];
 
+/**
+ * Below this, a text is short enough to read at a glance and the summary is
+ * shown in Slack only above it. Roughly two lines on a phone.
+ */
+const SUMMARY_MIN_LENGTH = 180;
+
 // --- who sent it -----------------------------------------------------------
 
 /**
@@ -76,25 +82,35 @@ async function postToSlack(message, client) {
   const channel = process.env.SMS_SLACK_CHANNEL || process.env.SLACK_NOTIFICATION_CHANNEL;
   if (!channel) return null;
 
-  const who = senderLabel(message, client);
-  const lines = [`📱 *New text from ${who}*`];
+  const who = client
+    ? [client.name, client.company].filter(Boolean).join(', ')
+    : 'Unknown sender';
 
-  if (message.aiSummary) {
-    const priority = message.aiPriority && message.aiPriority !== 'Normal' ? ` · *${message.aiPriority}*` : '';
-    const category = message.aiCategory ? ` · ${message.aiCategory}` : '';
-    lines.push(`_${message.aiSummary}_${priority}${category}`);
+  const lines = [`*${who}*`, message.fromNumber || '', ''];
+
+  // What they actually said comes first. A summary is a convenience for
+  // scanning; the words a client chose are what somebody needs before replying.
+  // Slack turns a leading > into a quote block, one line at a time.
+  const body = String(message.body || '').slice(0, 1200);
+  if (body) lines.push(body.split('\n').map((line) => `> ${line}`).join('\n'), '');
+
+  const meta = [];
+  if (message.aiPriority) meta.push(`Priority: ${message.aiPriority}`);
+  if (message.aiCategory) meta.push(`Category: ${message.aiCategory}`);
+  if (meta.length > 0) lines.push(meta.join(' | '));
+
+  // Only worth the room when the message is long enough that reading it whole
+  // is a chore. Under that, a summary of two sentences just says them again.
+  if (message.aiSummary && body.length > SUMMARY_MIN_LENGTH) {
+    lines.push(`Summary: ${message.aiSummary}`);
   }
 
-  // Slack renders a leading > as a quote block, so each line needs its own.
-  const body = String(message.body || '').slice(0, 1200);
-  if (body) lines.push(body.split('\n').map((line) => `> ${line}`).join('\n'));
-
-  if (!client) lines.push('_This number is not linked to a client yet._');
+  if (!client) lines.push('Not linked to a client yet.');
 
   const link = inboxUrl();
-  if (link) lines.push(link);
+  if (link) lines.push('', `View in dashboard: ${link}`);
 
-  return slack.notifySlack(lines.join('\n'), channel);
+  return slack.notifySlack(lines.join('\n').trim(), channel);
 }
 
 /** In-app bell for the people who run the workspace. */
