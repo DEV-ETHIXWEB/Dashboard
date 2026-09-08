@@ -1397,6 +1397,257 @@ async function main() {
   r = await client.req('GET', '/api/client/progress');
   check('page toggles gate the progress API', r.status === 403, `${r.status} ${r.text.slice(0, 160)}`);
 
+  // --- the SMS <-> Slack bridge ---------------------------------------------
+  // Twilio and Slack are both driven through a stubbed global.fetch here, on
+  // the same principle as the Stripe section above: the bridge is a pure
+  // function of the webhook/event bodies it receives, so its behaviour can be
+  // proven without a network call or a real credential. Only the two outbound
+  // HTTP calls this code ever makes -- Twilio's Messages API and Slack's
+  // chat.postMessage -- are intercepted; everything else (including this
+  // test's own requests to the local server) passes through untouched.
+  {
+    const crypto = require('crypto');
+    const { db } = require('../db/setup');
+
+    process.env.TWILIO_ACCOUNT_SID = 'ACtest0000000000000000000000000';
+    process.env.TWILIO_AUTH_TOKEN = 'test_auth_token';
+    process.env.TWILIO_NUMBER = '+15550001111';
+    process.env.TWILIO_WEBHOOK_URL = `${base}/api/sms/webhook`;
+    process.env.SMS_OUTBOUND_ENABLED = 'on';
+    process.env.SMS_SLACK_CHANNEL = 'CSMSBRIDGE';
+    process.env.SLACK_BOT_TOKEN = 'xoxb-test';
+    process.env.SLACK_SIGNING_SECRET = 'test_signing_secret';
+
+    let slackTsCounter = 0;
+    const twilioSends = [];
+    const slackPosts = [];
+    let twilioShouldFail = false;
+
+    const realFetch = global.fetch;
+    global.fetch = async (url, opts = {}) => {
+      const href = String(url);
+      if (href.startsWith('https://api.twilio.com/')) {
+        const params = new URLSearchParams(opts.body);
+        twilioSends.push({ to: params.get('To'), body: params.get('Body') });
+        if (twilioShouldFail) {
+          return { ok: false, status: 400, json: async () => ({ code: 21211, message: 'Invalid To number' }) };
+        }
+        return { ok: true, status: 201, json: async () => ({ sid: `SMFAKE${twilioSends.length}` }) };
+      }
+      if (href === 'https://slack.com/api/chat.postMessage') {
+        const payload = JSON.parse(opts.body);
+        slackTsCounter += 1;
+        const ts = `1700000000.${String(slackTsCounter).padStart(6, '0')}`;
+        slackPosts.push({ channel: payload.channel, thread_ts: payload.thread_ts || null, ts, text: payload.text });
+        return { ok: true, status: 200, json: async () => ({ ok: true, ts, channel: payload.channel }) };
+      }
+      return realFetch(url, opts);
+    };
+
+    function twilioSignature(url, params) {
+      let payload = url;
+      for (const key of Object.keys(params).sort()) payload += key + params[key];
+      return crypto.createHmac('sha1', process.env.TWILIO_AUTH_TOKEN).update(Buffer.from(payload, 'utf8')).digest('base64');
+    }
+
+    async function postTwilioWebhook(fields) {
+      const body = new URLSearchParams(fields).toString();
+      const sig = twilioSignature(process.env.TWILIO_WEBHOOK_URL, fields);
+      const res = await fetch(`${base}/api/sms/webhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': sig },
+        body,
+      });
+      return { status: res.status, text: await res.text() };
+    }
+
+    function slackSignature(rawBody, timestamp) {
+      const basestring = `v0:${timestamp}:${rawBody}`;
+      return `v0=${crypto.createHmac('sha256', process.env.SLACK_SIGNING_SECRET).update(basestring, 'utf8').digest('hex')}`;
+    }
+
+    async function postSlackEvent(payload) {
+      const raw = JSON.stringify(payload);
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const res = await fetch(`${base}/api/slack/events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Slack-Signature': slackSignature(raw, timestamp),
+          'X-Slack-Request-Timestamp': timestamp,
+        },
+        body: raw,
+      });
+      const text = await res.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch { data = text; }
+      return { status: res.status, data };
+    }
+
+    // Test 1 -- inbound Twilio SMS creates exactly one message
+    const customerA = '+15551230001';
+    const beforeCount = (await db.all('sms_messages')).length;
+    r = await postTwilioWebhook({
+      MessageSid: 'SMinboundA1', From: customerA, To: process.env.TWILIO_NUMBER,
+      Body: 'Hi, my invoice looks wrong', NumMedia: '0',
+    });
+    check('Twilio inbound webhook accepts a correctly signed request', r.status === 200, `${r.status} ${r.text.slice(0, 160)}`);
+    let allMessages = await db.all('sms_messages');
+    check('exactly one message was created', allMessages.length === beforeCount + 1, `${allMessages.length - beforeCount}`);
+    const rowA1 = allMessages.find((m) => m.providerSid === 'SMinboundA1');
+    check('it is stored inbound, from the customer\'s number', rowA1?.direction === 'inbound' && rowA1?.fromNumber === customerA);
+
+    // Test 3 -- routed into a Slack conversation, a fresh thread opened for it
+    const convoA = (await db.filter('sms_conversations', (c) => c.phoneNumber === customerA))[0];
+    check('a conversation record was opened for the new number', Boolean(convoA), JSON.stringify(convoA));
+    check('it is threaded into the configured SMS channel', convoA?.slackChannelId === 'CSMSBRIDGE', convoA?.slackChannelId);
+    check('exactly one new Slack thread was opened for it', slackPosts.filter((p) => !p.thread_ts).length === 1, slackPosts.length);
+
+    // Test 2 -- a replayed Twilio webhook (same MessageSid) does not duplicate it
+    r = await postTwilioWebhook({
+      MessageSid: 'SMinboundA1', From: customerA, To: process.env.TWILIO_NUMBER,
+      Body: 'Hi, my invoice looks wrong', NumMedia: '0',
+    });
+    check('a replayed Twilio webhook still answers 200', r.status === 200, r.status);
+    allMessages = await db.all('sms_messages');
+    check('the replay did not create a second message', allMessages.length === beforeCount + 1, `${allMessages.length - beforeCount}`);
+
+    // A second, distinct text from the same customer reuses the same thread.
+    r = await postTwilioWebhook({
+      MessageSid: 'SMinboundA2', From: customerA, To: process.env.TWILIO_NUMBER,
+      Body: 'Following up on that', NumMedia: '0',
+    });
+    check('a second text from the same customer is accepted', r.status === 200, r.status);
+    const convoA2 = (await db.filter('sms_conversations', (c) => c.phoneNumber === customerA))[0];
+    check('the same customer keeps one conversation record, not a second one',
+      convoA2?.id === convoA.id && convoA2?.slackThreadTs === convoA.slackThreadTs);
+    check('the second text replied inside the existing thread rather than opening a new one',
+      slackPosts.filter((p) => p.thread_ts === convoA.slackThreadTs).length === 1, slackPosts.length);
+
+    // Test 4 -- a brand-new, unknown customer is handled on its own
+    const customerB = '+15551230002';
+    r = await postTwilioWebhook({
+      MessageSid: 'SMinboundB1', From: customerB, To: process.env.TWILIO_NUMBER,
+      Body: 'Can someone call me back', NumMedia: '0',
+    });
+    check('an unknown customer\'s text is accepted', r.status === 200, r.status);
+    const rowB1 = (await db.all('sms_messages')).find((m) => m.providerSid === 'SMinboundB1');
+    check('an unknown number is stored with no client attached', rowB1 && rowB1.clientId === null, JSON.stringify(rowB1?.clientId));
+    const convoB = (await db.filter('sms_conversations', (c) => c.phoneNumber === customerB))[0];
+    check('it gets its own conversation, separate from customer A\'s', Boolean(convoB) && convoB.id !== convoA.id);
+    check('multiple customers stay on separate threads (Test 11)', convoB?.slackThreadTs !== convoA.slackThreadTs);
+
+    // Test 5 -- a genuine staff reply typed in the thread sends exactly one SMS
+    const sendsBeforeReply = twilioSends.length;
+    r = await postSlackEvent({
+      type: 'event_callback', event_id: 'EvReply1',
+      event: {
+        type: 'message', channel: 'CSMSBRIDGE', user: 'U_STAFF_1',
+        text: 'Thanks for flagging, looking into it now.',
+        ts: '1700000100.000100', thread_ts: convoA.slackThreadTs,
+      },
+    });
+    check('the Slack event is accepted', r.status === 200, JSON.stringify(r.data));
+    check('exactly one SMS was sent', twilioSends.length === sendsBeforeReply + 1, twilioSends.length);
+    check('it was sent to the customer that thread belongs to',
+      twilioSends[twilioSends.length - 1]?.to === customerA, twilioSends[twilioSends.length - 1]?.to);
+    let outboundRows = (await db.all('sms_messages')).filter((m) => m.direction === 'outbound');
+    const replyRow = outboundRows.find((m) => m.body?.includes('looking into it now'));
+    check('the reply was persisted as an outbound message', Boolean(replyRow));
+    check('and marked as successfully sent', replyRow?.deliveryStatus === 'sent', replyRow?.deliveryStatus);
+
+    // Test 6 -- a duplicate Slack event (a retry) does not send a second SMS
+    r = await postSlackEvent({
+      type: 'event_callback', event_id: 'EvReply1', // same event id: a Slack retry, not a new event
+      event: {
+        type: 'message', channel: 'CSMSBRIDGE', user: 'U_STAFF_1',
+        text: 'Thanks for flagging, looking into it now.',
+        ts: '1700000100.000100', thread_ts: convoA.slackThreadTs,
+      },
+    });
+    check('the replayed Slack event still answers 200', r.status === 200);
+    check('no second SMS was sent for the replayed event', twilioSends.length === sendsBeforeReply + 1, twilioSends.length);
+
+    // Test 7 -- a bot-authored message (our own forwarded text or reply echo)
+    // must never be read back as a staff reply.
+    const sendsBeforeBot = twilioSends.length;
+    r = await postSlackEvent({
+      type: 'event_callback', event_id: 'EvBot1',
+      event: {
+        type: 'message', channel: 'CSMSBRIDGE', bot_id: 'B0BOTOWN',
+        text: 'This is our own notification post, not a staff reply.',
+        ts: '1700000200.000200', thread_ts: convoA.slackThreadTs,
+      },
+    });
+    check('a bot-authored event is accepted without error', r.status === 200);
+    check('a bot message never triggers an SMS (loop prevention)', twilioSends.length === sendsBeforeBot, twilioSends.length);
+
+    // Test 8 -- a reply in a thread this bridge never opened sends nothing, to nobody
+    const sendsBeforeUnknown = twilioSends.length;
+    r = await postSlackEvent({
+      type: 'event_callback', event_id: 'EvUnknownThread1',
+      event: {
+        type: 'message', channel: 'CSMSBRIDGE', user: 'U_STAFF_1',
+        text: 'Reply typed in a thread this bridge never opened.',
+        ts: '1700000300.000300', thread_ts: '9999999999.000000',
+      },
+    });
+    check('an unrecognised thread is accepted without error', r.status === 200);
+    check('no SMS is sent for a thread with no matching conversation', twilioSends.length === sendsBeforeUnknown, twilioSends.length);
+
+    // Test 9 -- a genuine Twilio failure is persisted as failed, never silently dropped
+    twilioShouldFail = true;
+    const sendsBeforeFailure = twilioSends.length;
+    r = await postSlackEvent({
+      type: 'event_callback', event_id: 'EvReplyFail1',
+      event: {
+        type: 'message', channel: 'CSMSBRIDGE', user: 'U_STAFF_1',
+        text: 'This reply will fail to send.',
+        ts: '1700000400.000400', thread_ts: convoB.slackThreadTs,
+      },
+    });
+    twilioShouldFail = false;
+    check('the Slack event is still accepted even though the send failed', r.status === 200);
+    check('Twilio was actually attempted', twilioSends.length === sendsBeforeFailure + 1);
+    check('the failed attempt was addressed to customer B, never customer A (Test 8/11)',
+      twilioSends[twilioSends.length - 1]?.to === customerB, twilioSends[twilioSends.length - 1]?.to);
+    const failedRow = (await db.all('sms_messages'))
+      .filter((m) => m.direction === 'outbound' && m.toNumber === customerB)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+    check('the failed send was recorded, not lost', Boolean(failedRow), JSON.stringify(failedRow));
+    check('it is marked failed rather than reported as sent', failedRow?.deliveryStatus === 'failed', failedRow?.deliveryStatus);
+    check('and carries no Twilio SID, since none was ever issued', !failedRow?.providerSid, failedRow?.providerSid);
+
+    // Test 10 -- a Slack outage during inbound intake must not lose the SMS
+    const realNotifySlack = require('../utils/slack').notifySlack;
+    require('../utils/slack').notifySlack = async () => { throw new Error('Slack is down'); };
+    const beforeSlackDown = (await db.all('sms_messages')).length;
+    r = await postTwilioWebhook({
+      MessageSid: 'SMinboundC1', From: '+15551230003', To: process.env.TWILIO_NUMBER,
+      Body: 'Testing while Slack is unreachable', NumMedia: '0',
+    });
+    require('../utils/slack').notifySlack = realNotifySlack;
+    check('the webhook still answers cleanly while Slack is down', r.status === 200, r.status);
+    const afterSlackDown = await db.all('sms_messages');
+    check('the inbound text was still saved despite the Slack outage', afterSlackDown.length === beforeSlackDown + 1);
+    check('and it is exactly the message that came in', afterSlackDown.some((m) => m.providerSid === 'SMinboundC1'));
+
+    // A dashboard-typed reply is a second way to reply, and echoes into the
+    // same Slack thread a Slack-typed reply would use.
+    const postsBeforeDashboardReply = slackPosts.length;
+    r = await admin.req('POST', `/api/sms/${rowA1.id}/reply`, { body: 'Reply typed from the dashboard' });
+    check('a dashboard reply still sends and records normally', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+    check('a dashboard reply is echoed into the customer\'s Slack thread',
+      slackPosts.length === postsBeforeDashboardReply + 1 && slackPosts[slackPosts.length - 1].thread_ts === convoA.slackThreadTs);
+
+    global.fetch = realFetch;
+    for (const key of [
+      'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_NUMBER', 'TWILIO_WEBHOOK_URL',
+      'SMS_OUTBOUND_ENABLED', 'SMS_SLACK_CHANNEL', 'SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET',
+    ]) delete process.env[key];
+    void outboundRows;
+  }
+
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

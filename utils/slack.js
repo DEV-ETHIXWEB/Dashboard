@@ -9,6 +9,7 @@
 //
 // The bot only sees history for channels it has been invited to.
 
+const crypto = require('crypto');
 const { cached, mapWithLimit } = require('./integrationCache');
 
 const BASE = 'https://slack.com/api';
@@ -42,6 +43,53 @@ const FEED_CONCURRENCY = 4;
 
 function isEnabled() {
   return Boolean(process.env.SLACK_BOT_TOKEN);
+}
+
+// --- Events API signature verification --------------------------------
+
+/** Whether inbound Slack events can be verified at all. */
+function isEventsEnabled() {
+  return Boolean(process.env.SLACK_SIGNING_SECRET);
+}
+
+/** How old a signed request may be before it is refused as a replay. Slack's own recommendation. */
+const MAX_EVENT_AGE_SECONDS = 60 * 5;
+
+/**
+ * Whether this request really came from Slack.
+ *
+ * Same shape as Twilio's check in utils/twilio.js: HMAC over the exact bytes
+ * Slack sent, timing-safe compared. `req.body` must be the raw, unparsed
+ * buffer -- Slack signs the literal request body, and running it through
+ * express.json() first would change the bytes being signed out from under
+ * this check. See the route mount in server.js.
+ *
+ * A failure here means the payload is not to be trusted at all, so callers
+ * must read nothing out of it beyond this function's own return value.
+ */
+function verifyEventSignature(req) {
+  if (!isEventsEnabled()) return false;
+
+  const timestamp = req.get('x-slack-request-timestamp');
+  const signature = req.get('x-slack-signature');
+  if (!timestamp || !signature) return false;
+
+  // A signature computed minutes ago and replayed later must not still pass --
+  // otherwise a captured request could be resent to trigger the same send again.
+  const age = Math.abs(Date.now() / 1000 - Number(timestamp));
+  if (!Number.isFinite(age) || age > MAX_EVENT_AGE_SECONDS) return false;
+
+  const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body || '');
+  const basestring = `v0:${timestamp}:${raw}`;
+  const expected = `v0=${crypto
+    .createHmac('sha256', process.env.SLACK_SIGNING_SECRET)
+    .update(basestring, 'utf8')
+    .digest('hex')}`;
+
+  const a = Buffer.from(signature, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 class SlackError extends Error {
@@ -647,6 +695,8 @@ module.exports = {
   joinChannel,
   withChannelAccess,
   isEnabled,
+  isEventsEnabled,
+  verifyEventSignature,
   SlackError,
   CATEGORIES,
   fetchChannels,

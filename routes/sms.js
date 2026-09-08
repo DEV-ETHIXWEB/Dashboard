@@ -19,6 +19,8 @@ const { requireAuth, requireRole, requireCSRF, audit } = require('../middleware/
 const twilio = require('../utils/twilio');
 const intake = require('../utils/smsIntake');
 const live = require('../utils/liveBus');
+const slack = require('../utils/slack');
+const conversations = require('../utils/smsConversations');
 
 /** Who runs the inbox. Deliberately excludes clients and employees. */
 const STAFF = ['admin', 'sales', 'project_manager'];
@@ -146,9 +148,13 @@ function present(message, usersById) {
   return {
     id: message.id,
     channel: message.channel,
+    direction: message.direction,
     fromNumber: message.fromNumber,
+    toNumber: message.toNumber,
     body: message.body,
     status: message.status,
+    deliveryStatus: message.deliveryStatus || null,
+    deliveryError: message.deliveryError || null,
     createdAt: message.createdAt,
     clientId: message.clientId || null,
     clientName: client ? client.name : null,
@@ -189,6 +195,10 @@ router.get('/', async (req, res, next) => {
         outboundEnabled: twilio.outboundEnabled(),
         triageReady: require('../utils/smsTriage').isEnabled(),
         number: twilio.fromNumber() || null,
+        slackReady: slack.isEnabled(),
+        // Whether a staff reply typed in Slack can reach a customer at all --
+        // distinct from slackReady, which only covers posting *into* Slack.
+        slackReplyReady: slack.isEventsEnabled(),
       },
     });
   } catch (err) {
@@ -228,6 +238,11 @@ router.patch('/:id', requireCSRF, async (req, res, next) => {
           const normalized = twilio.normalizePhone(message.fromNumber);
           if (normalized) await db.update('users', client.id, { phone: normalized });
         }
+
+        // The Slack thread this number was already texting into (if any) must
+        // not be orphaned by linking it to an account after the fact.
+        const linkedNumber = twilio.normalizePhone(message.fromNumber);
+        if (linkedNumber) await conversations.getOrCreate({ phoneNumber: linkedNumber, clientId: client.id });
       }
     }
 
@@ -291,12 +306,13 @@ router.post('/:id/reply', requireCSRF, async (req, res, next) => {
     const body = typeof req.body.body === 'string' ? req.body.body.trim() : '';
     if (!body) return res.status(400).json({ error: 'A reply cannot be empty.' });
 
+    // Sent either way, and the row is kept either way: a Twilio failure must
+    // read as a failed message in the thread, never as a reply that vanished.
     const sid = await twilio.sendSms({ to: message.fromNumber, body });
-    if (!sid) return res.status(502).json({ error: 'Twilio would not accept the message. Check the server log.' });
 
     const sent = await db.insert('sms_messages', {
       provider: 'twilio',
-      providerSid: sid,
+      providerSid: sid || null,
       channel: message.channel,
       direction: 'outbound',
       fromNumber: twilio.fromNumber(),
@@ -305,13 +321,39 @@ router.post('/:id/reply', requireCSRF, async (req, res, next) => {
       numMedia: 0,
       clientId: message.clientId || null,
       status: 'read',
+      deliveryStatus: sid ? 'sent' : 'failed',
+      deliveryError: sid ? null : 'Twilio would not accept the message. Check the server log.',
       createdAt: new Date().toISOString(),
     });
 
-    await audit(req.user.id, 'sms.reply', 'sms_message', message.id, { sid });
+    // Keep the customer's Slack thread a complete record of the conversation
+    // regardless of which surface staff replied from -- best-effort, since a
+    // Slack outage must not undo a text that already went out.
+    if (sid) {
+      const normalized = twilio.normalizePhone(message.fromNumber);
+      const conversation = normalized ? await conversations.findByPhone(normalized) : null;
+      if (conversation?.slackChannelId && conversation?.slackThreadTs) {
+        try {
+          await slack.replyInThread({
+            channelId: conversation.slackChannelId,
+            threadTs: conversation.slackThreadTs,
+            text: `*Reply sent from the dashboard:*\n${body}`,
+          });
+        } catch (err) {
+          console.error(`Could not echo dashboard reply ${sent.id} into Slack:`, err.message);
+        }
+      }
+    }
+
+    await audit(req.user.id, 'sms.reply', 'sms_message', message.id, { sid: sid || null, delivered: Boolean(sid) });
 
     const linked = sent.clientId ? await db.find('users', sent.clientId) : null;
-    res.status(201).json({ message: present(sent, new Map(linked ? [[linked.id, linked]] : [])) });
+    const presented = present(sent, new Map(linked ? [[linked.id, linked]] : []));
+
+    if (!sid) {
+      return res.status(502).json({ error: 'Twilio would not accept the message. The attempt was recorded.', message: presented });
+    }
+    res.status(201).json({ message: presented });
   } catch (err) {
     next(err);
   }

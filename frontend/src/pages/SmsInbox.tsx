@@ -22,9 +22,13 @@ type Status = "new" | "read" | "archived";
 interface SmsMessage {
   id: string;
   channel: string;
+  direction: "inbound" | "outbound";
   fromNumber: string | null;
+  toNumber: string | null;
   body: string;
   status: Status;
+  deliveryStatus: "sent" | "failed" | null;
+  deliveryError: string | null;
   createdAt: string;
   clientId: string | null;
   clientName: string | null;
@@ -46,6 +50,8 @@ interface InboxResponse {
     outboundEnabled: boolean;
     triageReady: boolean;
     number: string | null;
+    slackReady: boolean;
+    slackReplyReady: boolean;
   };
 }
 
@@ -157,6 +163,15 @@ export default function SmsInbox() {
         </div>
       )}
 
+      {config?.twilioReady && config.slackReady && !config.slackReplyReady && (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+          Texts post to Slack, but a reply typed there can't reach the customer yet. Set
+          <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">SLACK_SIGNING_SECRET</code>
+          and point the Slack app's Event Subscriptions at this deployment's
+          <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">/api/slack/events</code>.
+        </div>
+      )}
+
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {(["all", "new", "read", "archived"] as const).map((key) => (
           <Button
@@ -201,6 +216,7 @@ export default function SmsInbox() {
             <header className="mb-2 flex flex-wrap items-center gap-2">
               {m.status === "new" && <span className="size-2 rounded-full bg-primary" aria-label="Unread" />}
               <h3 className="font-medium">
+                {m.direction === "outbound" && <span className="text-muted-foreground">You → </span>}
                 {m.clientName ?? "Unknown sender"}
                 {m.clientCompany && <span className="text-muted-foreground"> · {m.clientCompany}</span>}
               </h3>
@@ -208,6 +224,11 @@ export default function SmsInbox() {
                 <Pill className={PRIORITY_TONE[m.priority]}>{m.priority}</Pill>
               )}
               {m.category && <Pill className="bg-muted text-muted-foreground ring-border">{m.category}</Pill>}
+              {m.deliveryStatus === "failed" && (
+                <Pill className="bg-destructive/10 text-destructive ring-destructive/20">
+                  Delivery failed
+                </Pill>
+              )}
               <span className="ml-auto text-xs text-muted-foreground">
                 {formatRelativeTime(new Date(m.createdAt).getTime())}
               </span>
@@ -218,6 +239,10 @@ export default function SmsInbox() {
             )}
 
             <p className="whitespace-pre-wrap text-sm">{m.body}</p>
+
+            {m.deliveryStatus === "failed" && m.deliveryError && (
+              <p className="mt-1 text-xs text-destructive">{m.deliveryError}</p>
+            )}
 
             {m.mediaCount > 0 && (
               <p className="mt-2 text-xs text-muted-foreground">

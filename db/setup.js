@@ -400,6 +400,23 @@ async function initPostgresSchema() {
     `CREATE INDEX IF NOT EXISTS idx_sms_messages_created_at ON sms_messages(created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_sms_messages_status ON sms_messages(status, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_sms_messages_from ON sms_messages(from_number)`,
+    // Phone <-> Slack thread routing for the SMS bridge. UNIQUE on phone_number
+    // is the whole guarantee that two inbound texts from the same customer
+    // arriving at once still land in one conversation rather than two.
+    `CREATE TABLE IF NOT EXISTS sms_conversations (
+      id TEXT PRIMARY KEY, phone_number TEXT UNIQUE NOT NULL, client_id TEXT,
+      slack_channel_id TEXT, slack_thread_ts TEXT,
+      created_at TEXT, updated_at TEXT
+    )`,
+    // The reverse lookup a Slack event needs: given the channel and thread a
+    // reply was posted in, which conversation is it. Also doubles as the scope
+    // check that keeps a reply in an unrelated thread from sending anything.
+    `CREATE INDEX IF NOT EXISTS idx_sms_conversations_thread ON sms_conversations(slack_channel_id, slack_thread_ts)`,
+    // Slack event ids already delivered, so a retried delivery is recognised
+    // and dropped instead of sending a second SMS. Mirrors provider_sid above.
+    `CREATE TABLE IF NOT EXISTS slack_events (
+      id TEXT PRIMARY KEY, processed_at TEXT
+    )`,
   ];
   const alterations = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT`,
@@ -455,6 +472,12 @@ async function initPostgresSchema() {
     // until an admin fills it in: a client who has never texted us simply has
     // no number here, and their messages arrive unlinked rather than not at all.
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`,
+    // Twilio's own delivery outcome for an outbound send, added alongside the
+    // Slack-reply bridge so a failed send is a visible row instead of a silent
+    // 502 nobody can see again. Null on every row that predates this and on
+    // every inbound message, which is exactly the "unknown" this represents.
+    `ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS delivery_status TEXT`,
+    `ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS delivery_error TEXT`,
     // Existing accounts have no recorded password age, and an unknown age must
     // not read as "older than a month" -- that would demand a reset from every
     // person in the workspace on the morning this deploys. Their clock starts

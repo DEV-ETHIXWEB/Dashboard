@@ -17,6 +17,7 @@ const twilio = require('./twilio');
 const smsTriage = require('./smsTriage');
 const ticketIntake = require('./ticketIntake');
 const appUrl = require('./appUrl');
+const conversations = require('./smsConversations');
 
 /** Roles that should hear about an inbound client text. */
 const NOTIFY_ROLES = ['admin', 'project_manager'];
@@ -69,7 +70,11 @@ function inboxUrl() {
 // --- telling people --------------------------------------------------------
 
 /**
- * Post the message into the team's SMS channel.
+ * Post the message into the team's SMS channel -- inside that customer's own
+ * thread when one already exists, so a reply typed there routes back to them
+ * (see routes/slackEvents.js). The first message from a number opens the
+ * thread; the conversation record remembers where it is for every message
+ * after that, including a reply sent from the dashboard instead of Slack.
  *
  * The client's name leads, because that is what somebody scanning the channel
  * is looking for. The raw text is quoted underneath the summary rather than
@@ -81,6 +86,11 @@ async function postToSlack(message, client) {
 
   const channel = process.env.SMS_SLACK_CHANNEL || process.env.SLACK_NOTIFICATION_CHANNEL;
   if (!channel) return null;
+
+  const phoneNumber = twilio.normalizePhone(message.fromNumber);
+  const conversation = phoneNumber
+    ? await conversations.getOrCreate({ phoneNumber, clientId: client?.id || null })
+    : null;
 
   const who = client
     ? [client.name, client.company].filter(Boolean).join(', ')
@@ -110,7 +120,21 @@ async function postToSlack(message, client) {
   const link = inboxUrl();
   if (link) lines.push('', `View in dashboard: ${link}`);
 
-  return slack.notifySlack(lines.join('\n').trim(), channel);
+  const text = lines.join('\n').trim();
+
+  if (conversation?.slackChannelId && conversation?.slackThreadTs) {
+    return slack.replyInThread({
+      channelId: conversation.slackChannelId,
+      threadTs: conversation.slackThreadTs,
+      text,
+    });
+  }
+
+  const posted = await slack.notifySlack(text, channel);
+  if (posted && conversation) {
+    await conversations.attachThread(conversation.id, { channelId: posted.channelId, threadTs: posted.ts });
+  }
+  return posted;
 }
 
 /** In-app bell for the people who run the workspace. */

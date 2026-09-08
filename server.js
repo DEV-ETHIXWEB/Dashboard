@@ -115,6 +115,15 @@ app.post(
   require('./routes/sms').webhookHandler,
 );
 
+// Slack posts JSON and signs the exact bytes it sent, so this needs the raw
+// body too -- same reasoning as the two webhooks above, ahead of express.json().
+app.post(
+  '/api/slack/events',
+  express.raw({ type: 'application/json', limit: '256kb' }),
+  dbReady,
+  require('./routes/slackEvents').eventsHandler,
+);
+
 app.use(express.json({ limit: '2mb' }));
 
 // A body the parser could not read is a bad request, not a server fault. It

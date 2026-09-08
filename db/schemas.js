@@ -164,10 +164,28 @@ const SCHEMAS = {
     'from_number', 'to_number', 'body', 'num_media', 'media_json',
     // Null until the number matches an account, or an admin links it by hand.
     'client_id', 'status',
+    // Twilio's own outcome for an outbound send, distinct from `status` above
+    // (which is inbox triage state: new/read/archived). Null on inbound rows.
+    'delivery_status', 'delivery_error',
     'ai_summary', 'ai_intent', 'ai_priority', 'ai_category', 'ai_at',
     // Set once somebody promotes this message into a real ticket.
     'ticket_id', 'created_at',
   ],
+  // The routing table for the SMS <-> Slack bridge: which Slack thread a given
+  // phone number's conversation lives in, so a reply posted there can find its
+  // way back to the right customer. One shared channel, one thread per
+  // customer -- see utils/smsConversations.js. Keyed on phone number rather
+  // than client_id because a first-time text has no client yet.
+  sms_conversations: [
+    'id', 'phone_number', 'client_id',
+    'slack_channel_id', 'slack_thread_ts',
+    'created_at', 'updated_at',
+  ],
+  // Dedup ledger for the Slack Events API, the same role provider_sid plays
+  // for Twilio: Slack retries a delivery it did not get a fast 200 for, and
+  // the id is the only thing that tells two deliveries of the same event
+  // apart from two different events.
+  slack_events: ['id', 'processed_at'],
 };
 
 function toSnake(str) { return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`); }
