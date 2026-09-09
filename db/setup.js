@@ -417,6 +417,14 @@ async function initPostgresSchema() {
     `CREATE TABLE IF NOT EXISTS slack_events (
       id TEXT PRIMARY KEY, processed_at TEXT
     )`,
+    // The batch record for a "send this to a list of clients" broadcast. The
+    // sends themselves are ordinary sms_messages rows (broadcast_id links
+    // them back here); this table exists only so the batch itself -- who sent
+    // it, what it said, how many it went to -- has one place to live.
+    `CREATE TABLE IF NOT EXISTS sms_broadcasts (
+      id TEXT PRIMARY KEY, body TEXT NOT NULL, created_by TEXT,
+      recipient_count INTEGER NOT NULL DEFAULT 0, created_at TEXT
+    )`,
   ];
   const alterations = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT`,
@@ -478,6 +486,9 @@ async function initPostgresSchema() {
     // every inbound message, which is exactly the "unknown" this represents.
     `ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS delivery_status TEXT`,
     `ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS delivery_error TEXT`,
+    // Traces one broadcast send back to the batch it was part of. Null for
+    // every row that predates broadcast, and for every non-broadcast send.
+    `ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS broadcast_id TEXT`,
     // Existing accounts have no recorded password age, and an unknown age must
     // not read as "older than a month" -- that would demand a reset from every
     // person in the workspace on the morning this deploys. Their clock starts

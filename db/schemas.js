@@ -170,7 +170,14 @@ const SCHEMAS = {
     'ai_summary', 'ai_intent', 'ai_priority', 'ai_category', 'ai_at',
     // Set once somebody promotes this message into a real ticket.
     'ticket_id', 'created_at',
+    // Which broadcast batch this send belongs to, if any. Null for every
+    // ordinary inbound text and single reply.
+    'broadcast_id',
   ],
+  // One row per "send this to a list of clients" action. The individual sends
+  // themselves are ordinary rows in sms_messages (broadcast_id ties them back
+  // here) -- this table is just the batch record, not a second message store.
+  sms_broadcasts: ['id', 'body', 'created_by', 'recipient_count', 'created_at'],
   // The routing table for the SMS <-> Slack bridge: which Slack thread a given
   // phone number's conversation lives in, so a reply posted there can find its
   // way back to the right customer. One shared channel, one thread per

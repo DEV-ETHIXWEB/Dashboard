@@ -1422,14 +1422,18 @@ async function main() {
     const twilioSends = [];
     const slackPosts = [];
     let twilioShouldFail = false;
+    // Fails only sends to this one number, leaving the rest of a batch
+    // untouched -- for proving one bad recipient doesn't stop the others.
+    let twilioFailForNumber = null;
 
     const realFetch = global.fetch;
     global.fetch = async (url, opts = {}) => {
       const href = String(url);
       if (href.startsWith('https://api.twilio.com/')) {
         const params = new URLSearchParams(opts.body);
-        twilioSends.push({ to: params.get('To'), body: params.get('Body') });
-        if (twilioShouldFail) {
+        const to = params.get('To');
+        twilioSends.push({ to, body: params.get('Body') });
+        if (twilioShouldFail || to === twilioFailForNumber) {
           return { ok: false, status: 400, json: async () => ({ code: 21211, message: 'Invalid To number' }) };
         }
         return { ok: true, status: 201, json: async () => ({ sid: `SMFAKE${twilioSends.length}` }) };
@@ -1639,6 +1643,70 @@ async function main() {
     check('a dashboard reply still sends and records normally', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
     check('a dashboard reply is echoed into the customer\'s Slack thread',
       slackPosts.length === postsBeforeDashboardReply + 1 && slackPosts[slackPosts.length - 1].thread_ts === convoA.slackThreadTs);
+
+    // --- broadcast: one message, a chosen list of clients ------------------
+    {
+      async function makeClientWithPhone(name, email, phone) {
+        const created = await admin.req('POST', '/api/users', { name, email, role: 'client' });
+        const id = created.data.user.id;
+        // No API sets a client's phone directly (it is only ever backfilled by
+        // linking an inbound text) -- write it straight to the row, the same
+        // way the rest of this suite reaches state nothing exposes a route for.
+        if (phone) await db.update('users', id, { phone });
+        return id;
+      }
+
+      const bc1 = await makeClientWithPhone('Broadcast One', 'broadcast1@example.com', '+15559990001');
+      const bc2 = await makeClientWithPhone('Broadcast Two', 'broadcast2@example.com', '+15559990002');
+      const bc3 = await makeClientWithPhone('Broadcast Three (no phone)', 'broadcast3@example.com', null);
+
+      const messagesBeforeBroadcast = (await db.all('sms_messages')).length;
+      r = await admin.req('POST', '/api/sms/broadcast', {
+        body: 'Scheduled maintenance tonight, expect brief downtime.',
+        clientIds: [bc1, bc2, bc3],
+      });
+      check('the broadcast is accepted', r.status === 201, `${r.status} ${r.text.slice(0, 200)}`);
+      check('it reports one result per recipient', (r.data.results || []).length === 3, JSON.stringify(r.data.results));
+
+      const resultFor = (id) => (r.data.results || []).find((x) => x.clientId === id);
+      check('the two clients with phones are marked sent', resultFor(bc1)?.status === 'sent' && resultFor(bc2)?.status === 'sent');
+      check('the client with no phone is marked failed, not silently dropped', resultFor(bc3)?.status === 'failed');
+      check('and it says why', /phone/i.test(resultFor(bc3)?.error || ''), resultFor(bc3)?.error);
+
+      const messagesAfterBroadcast = await db.all('sms_messages');
+      check('exactly two outbound messages were created (the recipient with no phone sent nothing)',
+        messagesAfterBroadcast.length === messagesBeforeBroadcast + 2, `${messagesAfterBroadcast.length - messagesBeforeBroadcast}`);
+
+      const broadcastRows = messagesAfterBroadcast.filter((m) => m.broadcastId === r.data.broadcastId);
+      check('both sent messages are tagged with the same broadcast id', broadcastRows.length === 2, broadcastRows.length);
+      check('each is a normal outbound message, not a group text', broadcastRows.every((m) => m.direction === 'outbound' && m.channel === 'sms'));
+
+      const broadcastRow = (await db.filter('sms_broadcasts', (b) => b.id === r.data.broadcastId))[0];
+      check('the batch itself was recorded', Boolean(broadcastRow), JSON.stringify(broadcastRow));
+      check('with the full recipient count, including the one that failed', broadcastRow?.recipientCount === 3, broadcastRow?.recipientCount);
+
+      // A Twilio failure for one recipient must not stop the other from sending.
+      const bc4 = await makeClientWithPhone('Broadcast Four', 'broadcast4@example.com', '+15559990004');
+      const bc5 = await makeClientWithPhone('Broadcast Five (will fail)', 'broadcast5@example.com', '+15559990005');
+      twilioFailForNumber = '+15559990005';
+      r = await admin.req('POST', '/api/sms/broadcast', {
+        body: 'Second batch, one bad number in the middle of it.',
+        clientIds: [bc4, bc5],
+      });
+      twilioFailForNumber = null;
+      check('the batch with a failing recipient is still accepted', r.status === 201, r.status);
+      check('the good recipient still sent despite the other failing',
+        resultFor(bc4)?.status === 'sent', JSON.stringify(resultFor(bc4)));
+      check('the bad recipient is recorded as failed, not silently skipped',
+        resultFor(bc5)?.status === 'failed', JSON.stringify(resultFor(bc5)));
+      const failedBroadcastRow = (await db.all('sms_messages')).find((m) => m.toNumber === '+15559990005' && m.broadcastId === r.data.broadcastId);
+      check('the failed send is a real row with a failed delivery status, not missing',
+        failedBroadcastRow?.deliveryStatus === 'failed', JSON.stringify(failedBroadcastRow));
+
+      // Only admin/sales/project_manager may send one at all.
+      r = await client.req('POST', '/api/sms/broadcast', { body: 'Should never send.', clientIds: [bc1] });
+      check('a client account is refused', r.status === 403, `${r.status} ${r.text.slice(0, 160)}`);
+    }
 
     global.fetch = realFetch;
     for (const key of [

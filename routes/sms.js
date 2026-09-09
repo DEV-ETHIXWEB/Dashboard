@@ -359,5 +359,107 @@ router.post('/:id/reply', requireCSRF, async (req, res, next) => {
   }
 });
 
+/**
+ * Text the same message to a chosen list of clients.
+ *
+ * Deliberately an explicit list, never "all clients" -- a broadcast is the
+ * one action in this file that reaches more than one person per click, and
+ * the recipient list is the whole safeguard against sending to somebody by
+ * mistake.
+ *
+ * Sent one at a time, not in parallel: Twilio rate-limits a number's outbound
+ * traffic, and a batch racing itself against that limit is not worth the
+ * couple of seconds saved. One bad recipient (no phone on file, a Twilio
+ * failure) is recorded and skipped -- it never stops the rest of the list.
+ */
+router.post('/broadcast', requireCSRF, async (req, res, next) => {
+  try {
+    if (!twilio.outboundEnabled()) {
+      return res.status(503).json({
+        error: 'Sending SMS is switched off until the number is registered for A2P 10DLC.',
+        outboundDisabled: true,
+      });
+    }
+
+    const body = typeof req.body.body === 'string' ? req.body.body.trim() : '';
+    if (!body) return res.status(400).json({ error: 'A broadcast message cannot be empty.' });
+
+    const clientIds = Array.isArray(req.body.clientIds)
+      ? [...new Set(req.body.clientIds.filter((id) => typeof id === 'string' && id))]
+      : [];
+    if (clientIds.length === 0) return res.status(400).json({ error: 'Pick at least one recipient.' });
+
+    const broadcast = await db.insert('sms_broadcasts', {
+      body,
+      createdBy: req.user.id,
+      recipientCount: clientIds.length,
+      createdAt: new Date().toISOString(),
+    });
+
+    const results = [];
+    for (const clientId of clientIds) {
+      const client = await db.find('users', clientId);
+      if (!client || client.role !== 'client') {
+        results.push({ clientId, status: 'failed', error: 'Not a client account.' });
+        continue;
+      }
+
+      const to = twilio.normalizePhone(client.phone);
+      if (!to) {
+        results.push({ clientId, status: 'failed', error: 'No phone number on file.' });
+        continue;
+      }
+
+      const conversation = await conversations.getOrCreate({ phoneNumber: to, clientId: client.id });
+      const sid = await twilio.sendSms({ to, body });
+      const deliveryError = sid ? null : 'Twilio would not accept the message. Check the server log.';
+
+      const sent = await db.insert('sms_messages', {
+        provider: 'twilio',
+        providerSid: sid || null,
+        channel: 'sms',
+        direction: 'outbound',
+        fromNumber: twilio.fromNumber(),
+        toNumber: to,
+        body,
+        numMedia: 0,
+        clientId: client.id,
+        broadcastId: broadcast.id,
+        status: 'read',
+        deliveryStatus: sid ? 'sent' : 'failed',
+        deliveryError,
+        createdAt: new Date().toISOString(),
+      });
+
+      // Same best-effort echo as a single reply: only into a thread that
+      // already exists, never opening a new one for a broadcast.
+      if (sid && conversation?.slackChannelId && conversation?.slackThreadTs) {
+        try {
+          await slack.replyInThread({
+            channelId: conversation.slackChannelId,
+            threadTs: conversation.slackThreadTs,
+            text: `*Broadcast sent from the dashboard:*\n${body}`,
+          });
+        } catch (err) {
+          console.error(`Could not echo broadcast message ${sent.id} into Slack:`, err.message);
+        }
+      }
+
+      live.publish('sms');
+      results.push({ clientId, status: sid ? 'sent' : 'failed', error: deliveryError });
+    }
+
+    await audit(req.user.id, 'sms.broadcast', 'sms_broadcast', broadcast.id, {
+      recipientCount: clientIds.length,
+      sent: results.filter((r) => r.status === 'sent').length,
+      failed: results.filter((r) => r.status === 'failed').length,
+    });
+
+    res.status(201).json({ broadcastId: broadcast.id, results });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
 module.exports.webhookHandler = webhookHandler;
