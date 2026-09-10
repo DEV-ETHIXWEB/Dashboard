@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Link2, MessageSquareText, Archive, TicketPlus, Inbox, Megaphone, Check, X,
+  Link2, MessageSquareText, Archive, TicketPlus, Inbox, Megaphone, Check, X, Reply, Send,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
@@ -141,6 +141,31 @@ export default function SmsInbox() {
     setSelectedClientIds([]);
     setBroadcastResults(null);
   };
+
+  // --- reply: one text back to whoever sent this one -------------------------
+  // Scoped to a single message rather than a thread view: the row already shows
+  // what was said, and answering it is the one thing a person wants to do next.
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [replyBody, setReplyBody] = useState("");
+
+  const closeReply = () => {
+    setReplyingTo(null);
+    setReplyBody("");
+  };
+
+  const sendReply = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: string }) =>
+      api<{ message: SmsMessage }>("POST", `/sms/${id}/reply`, { body }),
+    onSuccess: () => {
+      closeReply();
+      qc.invalidateQueries({ queryKey: ["sms"] });
+      toast.success("Reply sent.");
+    },
+    // Covers both a refusal and the 502 the server returns when Twilio would not
+    // take the message -- the attempt is recorded either way, so the refetch
+    // above is deliberately skipped and the row shows it as failed on next load.
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Could not send that reply"),
+  });
 
   const link = useMutation({
     mutationFn: ({ id, clientId }: { id: string; clientId: string }) =>
@@ -443,6 +468,23 @@ export default function SmsInbox() {
               )}
 
               <div className="ml-auto flex items-center gap-2">
+                {/* Only inbound rows: the reply endpoint texts the message's
+                    sender, which on an outbound row is our own number. */}
+                {m.direction === "inbound" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      tapFeedback();
+                      if (replyingTo === m.id) closeReply();
+                      else { setReplyingTo(m.id); setReplyBody(""); }
+                    }}
+                  >
+                    <Reply className="mr-1.5 size-3.5" />
+                    {replyingTo === m.id ? "Cancel" : "Reply"}
+                  </Button>
+                )}
+
                 {m.ticketId ? (
                   <Button
                     variant="ghost"
@@ -480,6 +522,44 @@ export default function SmsInbox() {
                 )}
               </div>
             </footer>
+
+            {replyingTo === m.id && (
+              <div className="mt-3 space-y-2 border-t pt-3">
+                {config && !config.outboundEnabled && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                    Replying by SMS is switched off until the number is registered for A2P 10DLC. You
+                    can write the message, but Send stays disabled until then.
+                  </div>
+                )}
+
+                <Textarea
+                  autoFocus
+                  placeholder={`Reply to ${m.clientName ?? m.fromNumber ?? "this number"}`}
+                  value={replyBody}
+                  onChange={(e) => setReplyBody(e.target.value)}
+                  disabled={sendReply.isPending}
+                  className="min-h-20"
+                />
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={sendReply.isPending || !config?.outboundEnabled || !replyBody.trim()}
+                    onClick={() => { tapFeedback(); sendReply.mutate({ id: m.id, body: replyBody.trim() }); }}
+                  >
+                    <Send className="mr-1.5 size-3.5" />
+                    {sendReply.isPending ? "Sending…" : "Send"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => { tapFeedback(); closeReply(); }}>
+                    Cancel
+                  </Button>
+                  {/* Twilio truncates past 1600, so the count is a real limit. */}
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {replyBody.length}/1600
+                  </span>
+                </div>
+              </div>
+            )}
           </article>
         ))}
       </div>
