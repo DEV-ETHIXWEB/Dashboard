@@ -188,6 +188,25 @@ const SCHEMAS = {
     'slack_channel_id', 'slack_thread_ts',
     'created_at', 'updated_at',
   ],
+  // One tracked unit of work, born from a customer's text and worked inside a
+  // single Slack thread. Separate from sms_conversations because a conversation
+  // is permanent (a phone number and who it belongs to) while a task is not: a
+  // number that texts again after its last task closed starts a new one, with a
+  // new card and a new thread. The open task for a conversation is found by
+  // state, so there is no "current task" pointer to keep in sync.
+  sms_tasks: [
+    'id', 'conversation_id', 'phone_number', 'client_id',
+    'state', 'priority', 'summary', 'original_body',
+    // The card. slack_message_ts doubles as the thread_ts every command and
+    // follow-up text is posted under -- a Slack thread is named by its parent.
+    'slack_channel_id', 'slack_message_ts',
+    'accepted_by', 'accepted_at',
+    'owner_slack_id', 'assigned_at',
+    // The one outbound text this task is allowed, and when it went. Both stay
+    // null until @send succeeds, which is also how a second @send is refused.
+    'sent_body', 'sent_at',
+    'closed_at', 'created_at', 'updated_at',
+  ],
   // Dedup ledger for the Slack Events API, the same role provider_sid plays
   // for Twilio: Slack retries a delivery it did not get a fast 200 for, and
   // the id is the only thing that tells two deliveries of the same event

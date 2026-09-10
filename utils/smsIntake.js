@@ -16,17 +16,11 @@ const slack = require('./slack');
 const twilio = require('./twilio');
 const smsTriage = require('./smsTriage');
 const ticketIntake = require('./ticketIntake');
-const appUrl = require('./appUrl');
 const conversations = require('./smsConversations');
+const tasks = require('./smsTasks');
 
 /** Roles that should hear about an inbound client text. */
 const NOTIFY_ROLES = ['admin', 'project_manager'];
-
-/**
- * Below this, a text is short enough to read at a glance and the summary is
- * shown in Slack only above it. Roughly two lines on a phone.
- */
-const SUMMARY_MIN_LENGTH = 180;
 
 // --- who sent it -----------------------------------------------------------
 
@@ -62,24 +56,22 @@ function senderLabel(message, client) {
   return `Unknown sender ${message.fromNumber || ''}`.trim();
 }
 
-function inboxUrl() {
-  const base = appUrl.baseUrl();
-  return base ? `${base}/portal/sms` : null;
-}
-
 // --- telling people --------------------------------------------------------
 
 /**
- * Post the message into the team's SMS channel -- inside that customer's own
- * thread when one already exists, so a reply typed there routes back to them
- * (see routes/slackEvents.js). The first message from a number opens the
- * thread; the conversation record remembers where it is for every message
- * after that, including a reply sent from the dashboard instead of Slack.
+ * Put the message in front of the team as a task.
  *
- * The client's name leads, because that is what somebody scanning the channel
- * is looking for. The raw text is quoted underneath the summary rather than
- * replaced by it -- a summary is a convenience, and the actual words a client
- * used are the thing people need to be able to read.
+ * The first text from a number with no task open opens one: a card posted to
+ * the SMS channel, which is also the thread every command and every follow-up
+ * for that task is typed into (see utils/smsTasks.js and routes/slackEvents.js).
+ *
+ * A text that arrives while a task is already open is appended to that task's
+ * thread instead, and the card is repainted rather than replaced. A customer
+ * who sends three messages in a row has one problem, not three, and giving
+ * them three cards is how a worklist stops being one.
+ *
+ * Nothing here replies to the customer. The only outbound text in this whole
+ * flow is the one @send produces.
  */
 async function postToSlack(message, client) {
   if (!slack.isEnabled()) return null;
@@ -91,50 +83,45 @@ async function postToSlack(message, client) {
   const conversation = phoneNumber
     ? await conversations.getOrCreate({ phoneNumber, clientId: client?.id || null })
     : null;
+  if (!conversation) return null;
 
-  const who = client
-    ? [client.name, client.company].filter(Boolean).join(', ')
-    : 'Unknown sender';
+  const existing = await tasks.findOpen(conversation.id);
 
-  const lines = [`*${who}*`, message.fromNumber || '', ''];
+  if (existing) {
+    const body = String(message.body || '').slice(0, 1200);
+    const lines = ['*They texted again:*'];
+    if (body) lines.push(body.split('\n').map((line) => `> ${line}`).join('\n'));
 
-  // What they actually said comes first. A summary is a convenience for
-  // scanning; the words a client chose are what somebody needs before replying.
-  // Slack turns a leading > into a quote block, one line at a time.
-  const body = String(message.body || '').slice(0, 1200);
-  if (body) lines.push(body.split('\n').map((line) => `> ${line}`).join('\n'), '');
-
-  const meta = [];
-  if (message.aiPriority) meta.push(`Priority: ${message.aiPriority}`);
-  if (message.aiCategory) meta.push(`Category: ${message.aiCategory}`);
-  if (meta.length > 0) lines.push(meta.join(' | '));
-
-  // Only worth the room when the message is long enough that reading it whole
-  // is a chore. Under that, a summary of two sentences just says them again.
-  if (message.aiSummary && body.length > SUMMARY_MIN_LENGTH) {
-    lines.push(`Summary: ${message.aiSummary}`);
-  }
-
-  if (!client) lines.push('Not linked to a client yet.');
-
-  const link = inboxUrl();
-  if (link) lines.push('', `View in dashboard: ${link}`);
-
-  const text = lines.join('\n').trim();
-
-  if (conversation?.slackChannelId && conversation?.slackThreadTs) {
-    return slack.replyInThread({
-      channelId: conversation.slackChannelId,
-      threadTs: conversation.slackThreadTs,
-      text,
+    const posted = await slack.replyInThread({
+      channelId: existing.slackChannelId,
+      threadTs: existing.slackMessageTs,
+      text: lines.join('\n'),
     });
+
+    // Repaint so the time-open on the card is current for whoever reads it
+    // next. The card keeps the message that opened the task -- that is the
+    // task's identity, and the newer text is one scroll below it in the thread.
+    await tasks.refreshCard(existing, client);
+    return posted;
   }
 
-  const posted = await slack.notifySlack(text, channel);
-  if (posted && conversation) {
-    await conversations.attachThread(conversation.id, { channelId: posted.channelId, threadTs: posted.ts });
-  }
-  return posted;
+  const task = await tasks.open({
+    conversation,
+    client,
+    message,
+    priority: tasks.priorityFromTriage(message.aiPriority),
+    summary: message.aiSummary || null,
+  });
+  if (!task) return null;
+
+  // The conversation keeps pointing at the newest card, so a dashboard reply
+  // still echoes into the thread the team is actually looking at.
+  await conversations.attachThread(conversation.id, {
+    channelId: task.slackChannelId,
+    threadTs: task.slackMessageTs,
+  });
+
+  return { channelId: task.slackChannelId, ts: task.slackMessageTs };
 }
 
 /** In-app bell for the people who run the workspace. */

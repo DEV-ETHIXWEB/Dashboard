@@ -6,6 +6,7 @@
 //   channels:read, channels:history   (public channels)
 //   groups:read,   groups:history     (private channels the bot is in)
 //   users:read                        (resolve author names)
+//   chat:write                        (post, and edit its own messages)
 //
 // The bot only sees history for channels it has been invited to.
 
@@ -506,9 +507,16 @@ async function fetchChannelMessages(channelId, { limit = 50 } = {}) {
   }, TTL_MESSAGES, STALE_MESSAGES);
 }
 
-/** Fetch thread replies for a specific parent message. */
-async function fetchMessageReplies(channelId, threadTs) {
-  return cached(`slack:replies:${channelId}:${threadTs}`, async () => {
+/**
+ * Fetch thread replies for a specific parent message.
+ *
+ * `fresh` bypasses the cache. The feed can happily show a two-minute-old copy
+ * of a thread; the @send drafter cannot -- the notes it is about to summarise
+ * for a customer were usually typed seconds earlier, and a cached read would
+ * miss exactly the ones that matter.
+ */
+async function fetchMessageReplies(channelId, threadTs, { fresh = false } = {}) {
+  const read = async () => {
     const [channels, userMap] = await Promise.all([fetchChannels(), fetchUserMap()]);
     const channel = channels.find((c) => c.id === channelId);
     if (!channel) throw new SlackError(FRIENDLY_ERRORS.channel_not_found, 404, 'channel_not_found');
@@ -517,7 +525,10 @@ async function fetchMessageReplies(channelId, threadTs) {
     const data = await request('conversations.replies', { channel: channelId, ts: threadTs });
 
     return (data.messages || []).map((m) => normaliseMessage(m, channel, userMap, channelMap));
-  }, TTL_MESSAGES, STALE_MESSAGES);
+  };
+
+  if (fresh) return read();
+  return cached(`slack:replies:${channelId}:${threadTs}`, read, TTL_MESSAGES, STALE_MESSAGES);
 }
 
 /**
@@ -599,6 +610,23 @@ async function postMessage({ channelId, text, threadTs }) {
   }
   const data = await request('chat.postMessage', null, payload);
   return { ok: true, ts: data.ts, message: data.message };
+}
+
+/**
+ * Edit a message the bot already posted.
+ *
+ * Needs the `chat:write` scope the bot already has, and works only on the
+ * bot's own messages -- which is exactly the constraint the SMS task card is
+ * built around. Unlike `notifySlack` this throws, because a caller editing a
+ * card it believes exists wants to know when the edit did not land.
+ */
+async function updateMessage({ channelId, ts, text }) {
+  if (!isEnabled()) throw new SlackError('Slack is not connected. Set SLACK_BOT_TOKEN.', 503);
+  if (!channelId || !ts) throw new SlackError('A message to update needs a channel and a timestamp.', 400);
+  if (!text || !text.trim()) throw new SlackError('Message text cannot be empty.', 400);
+
+  const data = await request('chat.update', null, { channel: channelId, ts, text: text.trim() });
+  return { ok: true, ts: data.ts, channelId };
 }
 
 /**
@@ -705,6 +733,7 @@ module.exports = {
   fetchMessageReplies,
   fetchCategorisedFeed,
   postMessage,
+  updateMessage,
   notifySlack,
   replyInThread,
   resolveNotificationChannel,

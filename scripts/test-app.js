@@ -1421,6 +1421,11 @@ async function main() {
     let slackTsCounter = 0;
     const twilioSends = [];
     const slackPosts = [];
+    // Card edits are chat.update, not chat.postMessage. Kept apart because the
+    // whole point of the task card is that a state change edits one message
+    // rather than adding another -- a test that cannot tell them apart cannot
+    // prove that.
+    const slackUpdates = [];
     let twilioShouldFail = false;
     // Fails only sends to this one number, leaving the rest of a batch
     // untouched -- for proving one bad recipient doesn't stop the others.
@@ -1444,6 +1449,23 @@ async function main() {
         const ts = `1700000000.${String(slackTsCounter).padStart(6, '0')}`;
         slackPosts.push({ channel: payload.channel, thread_ts: payload.thread_ts || null, ts, text: payload.text });
         return { ok: true, status: 200, json: async () => ({ ok: true, ts, channel: payload.channel }) };
+      }
+      if (href === 'https://slack.com/api/chat.update') {
+        const payload = JSON.parse(opts.body);
+        slackUpdates.push({ channel: payload.channel, ts: payload.ts, text: payload.text });
+        return { ok: true, status: 200, json: async () => ({ ok: true, ts: payload.ts, channel: payload.channel }) };
+      }
+      // The directory and thread reads the completion drafter walks on its way
+      // to the notes. Stubbed rather than left to the real network so a bare
+      // `@send` is deterministic and offline.
+      if (href.startsWith('https://slack.com/api/conversations.list')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, channels: [{ id: 'CSMSBRIDGE', name: 'client-sms', is_member: true }] }) };
+      }
+      if (href.startsWith('https://slack.com/api/users.list')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, members: [] }) };
+      }
+      if (href.startsWith('https://slack.com/api/conversations.replies')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, messages: [] }) };
       }
       return realFetch(url, opts);
     };
@@ -1541,79 +1563,141 @@ async function main() {
     check('it gets its own conversation, separate from customer A\'s', Boolean(convoB) && convoB.id !== convoA.id);
     check('multiple customers stay on separate threads (Test 11)', convoB?.slackThreadTs !== convoA.slackThreadTs);
 
-    // Test 5 -- a genuine staff reply typed in the thread sends exactly one SMS
-    const sendsBeforeReply = twilioSends.length;
-    r = await postSlackEvent({
-      type: 'event_callback', event_id: 'EvReply1',
-      event: {
-        type: 'message', channel: 'CSMSBRIDGE', user: 'U_STAFF_1',
-        text: 'Thanks for flagging, looking into it now.',
-        ts: '1700000100.000100', thread_ts: convoA.slackThreadTs,
-      },
-    });
-    check('the Slack event is accepted', r.status === 200, JSON.stringify(r.data));
-    check('exactly one SMS was sent', twilioSends.length === sendsBeforeReply + 1, twilioSends.length);
-    check('it was sent to the customer that thread belongs to',
-      twilioSends[twilioSends.length - 1]?.to === customerA, twilioSends[twilioSends.length - 1]?.to);
-    let outboundRows = (await db.all('sms_messages')).filter((m) => m.direction === 'outbound');
-    const replyRow = outboundRows.find((m) => m.body?.includes('looking into it now'));
-    check('the reply was persisted as an outbound message', Boolean(replyRow));
-    check('and marked as successfully sent', replyRow?.deliveryStatus === 'sent', replyRow?.deliveryStatus);
+    // --- the task flow -----------------------------------------------------
+    // A thread is a workspace now, not a megaphone: people talk in it freely
+    // and exactly one message ever reaches the customer, from @send.
+
+    let evCounter = 0;
+    async function threadSay(threadTs, text, eventId, user = 'U_STAFF_1') {
+      evCounter += 1;
+      return postSlackEvent({
+        type: 'event_callback',
+        event_id: eventId,
+        event: {
+          type: 'message', channel: 'CSMSBRIDGE', user, text,
+          ts: `17000005${String(evCounter).padStart(2, '0')}.000100`,
+          thread_ts: threadTs,
+        },
+      });
+    }
+
+    async function taskFor(conversationId) {
+      const rows = await db.filter('sms_tasks', (t) => t.conversationId === conversationId);
+      rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+      return rows[0] || null;
+    }
+
+    const lastPost = () => slackPosts[slackPosts.length - 1];
+
+    // Test 5 -- the inbound text opened a task, and ordinary talk sends nothing
+    const taskA = await taskFor(convoA.id);
+    check('an inbound text opens a task', Boolean(taskA), JSON.stringify(taskA));
+    check('the task starts in NEW', taskA?.state === 'NEW', taskA?.state);
+    check('its card is the thread the bridge routes replies to',
+      taskA?.slackMessageTs === convoA.slackThreadTs, `${taskA?.slackMessageTs} vs ${convoA.slackThreadTs}`);
+    check('the second text did not open a second task',
+      (await db.filter('sms_tasks', (t) => t.conversationId === convoA.id)).length === 1);
+
+    const sendsBeforeChat = twilioSends.length;
+    r = await threadSay(convoA.slackThreadTs, 'Looking into this, might be the billing sync.', 'EvChat1');
+    check('ordinary talk in a task thread is accepted', r.status === 200, JSON.stringify(r.data));
+    check('and reaches the customer not at all', twilioSends.length === sendsBeforeChat, twilioSends.length);
+
+    // Test 5b -- @send is gated on the task having an owner
+    r = await threadSay(convoA.slackThreadTs, '@send', 'EvSendTooEarly');
+    check('@send on an unassigned task sends nothing', twilioSends.length === sendsBeforeChat, twilioSends.length);
+    check('and says why in the thread',
+      lastPost()?.thread_ts === convoA.slackThreadTs && /assign an owner/i.test(lastPost()?.text || ''), lastPost()?.text);
+
+    // Test 5c -- @accept claims it, and edits the card rather than posting again
+    const updatesBeforeAccept = slackUpdates.length;
+    const postsBeforeAccept = slackPosts.length;
+    r = await threadSay(convoA.slackThreadTs, '@accept', 'EvAccept1');
+    let taskA2 = await taskFor(convoA.id);
+    check('@accept moves the task to ACCEPTED', taskA2?.state === 'ACCEPTED', taskA2?.state);
+    check('and records who claimed it', taskA2?.acceptedBy === 'U_STAFF_1', taskA2?.acceptedBy);
+    check('the card was edited in place', slackUpdates.length === updatesBeforeAccept + 1, slackUpdates.length);
+    check('the edit targets the card itself', slackUpdates[slackUpdates.length - 1]?.ts === taskA.slackMessageTs);
+    check('and no follow-up message was posted for the state change',
+      slackPosts.length === postsBeforeAccept, slackPosts.length - postsBeforeAccept);
+    check('the card now shows the new state', /ACCEPTED/.test(slackUpdates[slackUpdates.length - 1]?.text || ''));
+
+    // Test 5d -- the state machine refuses a repeat
+    r = await threadSay(convoA.slackThreadTs, '@accept', 'EvAccept2');
+    check('a second @accept is refused with one line', /already/i.test(lastPost()?.text || ''), lastPost()?.text);
+    check('and the task is untouched', (await taskFor(convoA.id))?.state === 'ACCEPTED');
+
+    // Test 5e -- @assign names an owner
+    r = await threadSay(convoA.slackThreadTs, '@assign <@U0DEV0001>', 'EvAssign1');
+    taskA2 = await taskFor(convoA.id);
+    check('@assign moves the task to ASSIGNED', taskA2?.state === 'ASSIGNED', taskA2?.state);
+    check('and stores the owner', taskA2?.ownerSlackId === 'U0DEV0001', taskA2?.ownerSlackId);
+
+    r = await threadSay(convoA.slackThreadTs, '@assign', 'EvAssignNobody');
+    check('@assign with nobody named asks for a name', /name somebody/i.test(lastPost()?.text || ''), lastPost()?.text);
+    check('and leaves the existing owner alone', (await taskFor(convoA.id))?.ownerSlackId === 'U0DEV0001');
+
+    // Test 5f -- @send <text> sends those exact words, once, and closes the task
+    const exactWords = 'Your invoice has been corrected and resent.';
+    const sendsBeforeSend = twilioSends.length;
+    r = await threadSay(convoA.slackThreadTs, `@send ${exactWords}`, 'EvSend1');
+    check('@send sends exactly one SMS', twilioSends.length === sendsBeforeSend + 1, twilioSends.length);
+    check('to the customer that task belongs to', twilioSends[twilioSends.length - 1]?.to === customerA);
+    check('with the exact words given, not a rewrite', twilioSends[twilioSends.length - 1]?.body === exactWords,
+      twilioSends[twilioSends.length - 1]?.body);
+    taskA2 = await taskFor(convoA.id);
+    check('the task is CLOSED', taskA2?.state === 'CLOSED', taskA2?.state);
+    check('and remembers what was sent', taskA2?.sentBody === exactWords, taskA2?.sentBody);
+    check('the thread shows the exact text that was delivered', lastPost()?.text?.includes(exactWords), lastPost()?.text);
+    const sentRow = (await db.all('sms_messages'))
+      .filter((m) => m.direction === 'outbound' && m.toNumber === customerA)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+    check('the send was persisted as an outbound message', sentRow?.body === exactWords, sentRow?.body);
+    check('and marked as successfully sent', sentRow?.deliveryStatus === 'sent', sentRow?.deliveryStatus);
 
     // Test 6 -- a duplicate Slack event (a retry) does not send a second SMS
-    r = await postSlackEvent({
-      type: 'event_callback', event_id: 'EvReply1', // same event id: a Slack retry, not a new event
-      event: {
-        type: 'message', channel: 'CSMSBRIDGE', user: 'U_STAFF_1',
-        text: 'Thanks for flagging, looking into it now.',
-        ts: '1700000100.000100', thread_ts: convoA.slackThreadTs,
-      },
-    });
+    const sendsAfterSend = twilioSends.length;
+    r = await threadSay(convoA.slackThreadTs, `@send ${exactWords}`, 'EvSend1');
     check('the replayed Slack event still answers 200', r.status === 200);
-    check('no second SMS was sent for the replayed event', twilioSends.length === sendsBeforeReply + 1, twilioSends.length);
+    check('no second SMS was sent for the replayed event', twilioSends.length === sendsAfterSend, twilioSends.length);
 
-    // Test 7 -- a bot-authored message (our own forwarded text or reply echo)
-    // must never be read back as a staff reply.
+    // Test 6b -- a closed task refuses everything, quietly and once
+    r = await threadSay(convoA.slackThreadTs, '@accept', 'EvAfterClose');
+    check('a command on a closed task is refused', /closed/i.test(lastPost()?.text || ''), lastPost()?.text);
+    check('and sends nothing', twilioSends.length === sendsAfterSend, twilioSends.length);
+
+    // Test 7 -- a bot-authored message (our own card, draft, or confirmation)
+    // must never be read back as a command.
     const sendsBeforeBot = twilioSends.length;
     r = await postSlackEvent({
       type: 'event_callback', event_id: 'EvBot1',
       event: {
         type: 'message', channel: 'CSMSBRIDGE', bot_id: 'B0BOTOWN',
-        text: 'This is our own notification post, not a staff reply.',
+        text: '@send this looks like a command but we posted it ourselves',
         ts: '1700000200.000200', thread_ts: convoA.slackThreadTs,
       },
     });
     check('a bot-authored event is accepted without error', r.status === 200);
     check('a bot message never triggers an SMS (loop prevention)', twilioSends.length === sendsBeforeBot, twilioSends.length);
 
-    // Test 8 -- a reply in a thread this bridge never opened sends nothing, to nobody
+    // Test 8 -- a command in a thread this bridge never opened does nothing
     const sendsBeforeUnknown = twilioSends.length;
-    r = await postSlackEvent({
-      type: 'event_callback', event_id: 'EvUnknownThread1',
-      event: {
-        type: 'message', channel: 'CSMSBRIDGE', user: 'U_STAFF_1',
-        text: 'Reply typed in a thread this bridge never opened.',
-        ts: '1700000300.000300', thread_ts: '9999999999.000000',
-      },
-    });
+    r = await threadSay('9999999999.000000', '@accept', 'EvUnknownThread1');
     check('an unrecognised thread is accepted without error', r.status === 200);
-    check('no SMS is sent for a thread with no matching conversation', twilioSends.length === sendsBeforeUnknown, twilioSends.length);
+    check('no SMS is sent for a thread with no matching task', twilioSends.length === sendsBeforeUnknown, twilioSends.length);
 
-    // Test 9 -- a genuine Twilio failure is persisted as failed, never silently dropped
+    // Test 9 -- a Twilio failure leaves the task open, never silently closed
+    await threadSay(convoB.slackThreadTs, '@accept', 'EvBAccept');
+    await threadSay(convoB.slackThreadTs, '@assign <@U0DEV0002>', 'EvBAssign');
+    check('customer B has a task assigned and ready to send', (await taskFor(convoB.id))?.state === 'ASSIGNED');
+
     twilioShouldFail = true;
     const sendsBeforeFailure = twilioSends.length;
-    r = await postSlackEvent({
-      type: 'event_callback', event_id: 'EvReplyFail1',
-      event: {
-        type: 'message', channel: 'CSMSBRIDGE', user: 'U_STAFF_1',
-        text: 'This reply will fail to send.',
-        ts: '1700000400.000400', thread_ts: convoB.slackThreadTs,
-      },
-    });
+    r = await threadSay(convoB.slackThreadTs, '@send This one will fail to send.', 'EvBSend');
     twilioShouldFail = false;
     check('the Slack event is still accepted even though the send failed', r.status === 200);
-    check('Twilio was actually attempted', twilioSends.length === sendsBeforeFailure + 1);
-    check('the failed attempt was addressed to customer B, never customer A (Test 8/11)',
+    check('Twilio was actually attempted', twilioSends.length === sendsBeforeFailure + 1, twilioSends.length);
+    check('the failed attempt was addressed to customer B, never customer A',
       twilioSends[twilioSends.length - 1]?.to === customerB, twilioSends[twilioSends.length - 1]?.to);
     const failedRow = (await db.all('sms_messages'))
       .filter((m) => m.direction === 'outbound' && m.toNumber === customerB)
@@ -1621,6 +1705,23 @@ async function main() {
     check('the failed send was recorded, not lost', Boolean(failedRow), JSON.stringify(failedRow));
     check('it is marked failed rather than reported as sent', failedRow?.deliveryStatus === 'failed', failedRow?.deliveryStatus);
     check('and carries no Twilio SID, since none was ever issued', !failedRow?.providerSid, failedRow?.providerSid);
+    const taskBAfterFailure = await taskFor(convoB.id);
+    check('a task whose send failed stays open for somebody to notice',
+      taskBAfterFailure?.state === 'ASSIGNED', taskBAfterFailure?.state);
+    check('and the thread says so', /did not send/i.test(lastPost()?.text || ''), lastPost()?.text);
+
+    // Test 9b -- a bare @send with no drafting configured declines cleanly
+    // rather than inventing something to tell a customer.
+    const savedKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    const sendsBeforeDraft = twilioSends.length;
+    r = await threadSay(convoB.slackThreadTs, '@send', 'EvBDraft');
+    if (savedKey !== undefined) process.env.ANTHROPIC_API_KEY = savedKey;
+    check('a bare @send with no drafting available sends nothing',
+      twilioSends.length === sendsBeforeDraft, twilioSends.length);
+    check('and explains how to send your own words instead',
+      /@send <text>/.test(lastPost()?.text || ''), lastPost()?.text);
+    check('the task is still open after a declined draft', (await taskFor(convoB.id))?.state === 'ASSIGNED');
 
     // Test 10 -- a Slack outage during inbound intake must not lose the SMS
     const realNotifySlack = require('../utils/slack').notifySlack;
@@ -1713,7 +1814,6 @@ async function main() {
       'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_NUMBER', 'TWILIO_WEBHOOK_URL',
       'SMS_OUTBOUND_ENABLED', 'SMS_SLACK_CHANNEL', 'SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET',
     ]) delete process.env[key];
-    void outboundRows;
   }
 
   server.close();

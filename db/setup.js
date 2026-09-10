@@ -417,6 +417,24 @@ async function initPostgresSchema() {
     `CREATE TABLE IF NOT EXISTS slack_events (
       id TEXT PRIMARY KEY, processed_at TEXT
     )`,
+    // One task per unit of work. state is the whole state machine; the card's
+    // ts is the thread every command for that task is typed into, so the
+    // (channel, ts) index below is the lookup a Slack event does on every
+    // message it sees in the channel.
+    `CREATE TABLE IF NOT EXISTS sms_tasks (
+      id TEXT PRIMARY KEY, conversation_id TEXT, phone_number TEXT,
+      client_id TEXT, state TEXT NOT NULL DEFAULT 'NEW',
+      priority TEXT, summary TEXT, original_body TEXT,
+      slack_channel_id TEXT, slack_message_ts TEXT,
+      accepted_by TEXT, accepted_at TEXT,
+      owner_slack_id TEXT, assigned_at TEXT,
+      sent_body TEXT, sent_at TEXT,
+      closed_at TEXT, created_at TEXT, updated_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_sms_tasks_card ON sms_tasks(slack_channel_id, slack_message_ts)`,
+    // "Is there already an open task for this number" runs on every inbound
+    // text, and is the check that stops a chatty customer opening five cards.
+    `CREATE INDEX IF NOT EXISTS idx_sms_tasks_open ON sms_tasks(conversation_id, state)`,
     // The batch record for a "send this to a list of clients" broadcast. The
     // sends themselves are ordinary sms_messages rows (broadcast_id links
     // them back here); this table exists only so the batch itself -- who sent
