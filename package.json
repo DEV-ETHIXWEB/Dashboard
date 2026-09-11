@@ -10,6 +10,7 @@
     "dev:pgmem": "node --watch --env-file-if-exists=.env -r ./scripts/dev-with-pgmem.js server.js",
     "db:check": "node --env-file-if-exists=.env scripts/db-check.js",
     "admin:recovery": "node --env-file-if-exists=.env scripts/admin-recovery.js",
+    "offboard": "node --env-file-if-exists=.env scripts/offboard.js",
     "migrate": "node --env-file-if-exists=.env scripts/migrate-local-data.js",
     "build": "node scripts/build-frontend.js",
     "mail:optimize": "node scripts/optimize-mail-images.js",
