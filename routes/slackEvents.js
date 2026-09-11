@@ -159,10 +159,15 @@ async function say(task, text) {
 /**
  * Text the customer, and keep the record either way.
  *
- * Returns true only when Twilio accepted the message. A false here must leave
- * the task open -- a customer who never got the completion still has an open
- * problem, and closing the card would hide it from the only people who could
- * notice. Twilio failing is not this function failing; losing the attempt is.
+ * Returns Twilio's SID when Twilio accepted the message, null when it did not.
+ * A null here must leave the task open -- a customer who never got the
+ * completion still has an open problem, and closing the card would hide it from
+ * the only people who could notice. Twilio failing is not this function
+ * failing; losing the attempt is.
+ *
+ * Note the weight the SID carries now: "accepted" is not "delivered", and the
+ * status callback in routes/sms.js uses this SID to find its way back to the
+ * task when the carrier answers later and the answer is no.
  */
 async function sendToCustomer(task, text) {
   const base = {
@@ -185,32 +190,49 @@ async function sendToCustomer(task, text) {
       deliveryError: 'Replying by SMS is switched off until the number is registered for A2P 10DLC.',
     });
     live.publish('sms');
-    return false;
+    return null;
   }
 
   const sid = await twilio.sendSms({ to: task.phoneNumber, body: text });
   await db.insert('sms_messages', {
     ...base,
     providerSid: sid || null,
+    // 'sent' is Twilio's word, not the handset's. The status callback replaces
+    // this with what actually happened.
     deliveryStatus: sid ? 'sent' : 'failed',
     deliveryError: sid ? null : 'Twilio would not accept the message. Check the server log.',
   });
   live.publish('sms');
-  return Boolean(sid);
+  return sid || null;
 }
 
 // --- the state machine -----------------------------------------------------
+
+/**
+ * Say what just happened, but only when the card could not.
+ *
+ * A successful command is normally answered by the card rewriting itself, and
+ * that is the whole reason this channel stays readable -- a confirmation
+ * message per state change would undo it. But when the edit fails, the card is
+ * silent as well as stale, and the person who typed the command sees nothing
+ * at all and reasonably types it again. So: the card when it works, a line in
+ * the thread when it does not.
+ */
+async function confirm(task, result, text) {
+  if (result.cardUpdated) return null;
+  return say(task, `${text}\n_(The card above could not be updated -- Slack refused the edit. The task itself is fine.)_`);
+}
 
 async function handleAccept(task, event, client) {
   if (task.state !== 'NEW') {
     return say(task, `This task is already *${task.state}* -- \`@accept\` only works on a new one.`);
   }
-  await tasks.transition(task, {
+  const result = await tasks.transition(task, {
     state: 'ACCEPTED',
     acceptedBy: event.user,
     acceptedAt: new Date().toISOString(),
   }, client);
-  return null;
+  return confirm(task, result, `Claimed by <@${event.user}>.`);
 }
 
 async function handleAssign(task, command, event, client) {
@@ -220,12 +242,12 @@ async function handleAssign(task, command, event, client) {
   if (!command.userId) {
     return say(task, 'Name somebody to own this, like `@assign @alex`.');
   }
-  await tasks.transition(task, {
+  const result = await tasks.transition(task, {
     state: 'ASSIGNED',
     ownerSlackId: command.userId,
     assignedAt: new Date().toISOString(),
   }, client);
-  return null;
+  return confirm(task, result, `Assigned to <@${command.userId}>.`);
 }
 
 /**
@@ -301,9 +323,9 @@ async function handleSend(task, command, client) {
       await say(task, `*Draft:*\n> ${text}`);
     }
 
-    const delivered = await sendToCustomer(task, text);
+    const sid = await sendToCustomer(task, text);
 
-    if (!delivered) {
+    if (!sid) {
       // Deliberately still open, and still sendable. See sendToCustomer.
       await release();
       return say(task, '⚠️ That did not send -- the attempt is recorded in the dashboard and the task is still open. Check the delivery error there, then try `@send` again.');
@@ -313,6 +335,7 @@ async function handleSend(task, command, client) {
       state: 'CLOSED',
       sentBody: text,
       sentAt: new Date().toISOString(),
+      sentSid: sid,
       closedAt: new Date().toISOString(),
     }, client);
 

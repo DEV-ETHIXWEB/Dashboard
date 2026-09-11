@@ -1431,6 +1431,9 @@ async function main() {
     // prove that.
     const slackUpdates = [];
     let twilioShouldFail = false;
+    // Makes the card edit fail, which is the only acknowledgement most commands
+    // get -- so it is worth being able to prove what happens when it does not.
+    let slackUpdateShouldFail = false;
     // Fails only sends to this one number, leaving the rest of a batch
     // untouched -- for proving one bad recipient doesn't stop the others.
     let twilioFailForNumber = null;
@@ -1456,6 +1459,9 @@ async function main() {
       }
       if (href === 'https://slack.com/api/chat.update') {
         const payload = JSON.parse(opts.body);
+        if (slackUpdateShouldFail) {
+          return { ok: true, status: 200, json: async () => ({ ok: false, error: 'message_not_found' }) };
+        }
         slackUpdates.push({ channel: payload.channel, ts: payload.ts, text: payload.text });
         return { ok: true, status: 200, json: async () => ({ ok: true, ts: payload.ts, channel: payload.channel }) };
       }
@@ -2005,6 +2011,142 @@ async function main() {
       const postsBeforeChatter = slackPosts.length;
       await threadSay(nmConvo.slackThreadTs, '@priya can you take a look', 'EvChatter');
       check('but ordinary talk gets no reply at all', slackPosts.length === postsBeforeChatter);
+    }
+
+    // Test 9j -- Twilio accepting a message is not the handset receiving it.
+    //
+    // A carrier rejection lands seconds or minutes after @send has already
+    // closed the card. The work is done, the customer does not know, and the
+    // card is the only place anybody would find that out.
+    {
+      async function postStatus(fields) {
+        const url = `${base}/api/sms/status`;
+        const sig = twilioSignature(url, fields);
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': sig },
+          body: new URLSearchParams(fields).toString(),
+        });
+        return { status: res.status, text: await res.text() };
+      }
+
+      const customerG = '+15551230014';
+      r = await postTwilioWebhook({
+        MessageSid: 'SMinboundDelivery', From: customerG, To: process.env.TWILIO_NUMBER,
+        Body: 'Does the completion actually arrive?', NumMedia: '0',
+      });
+      const delConvo = (await db.filter('sms_conversations', (c) => c.phoneNumber === customerG))[0];
+
+      await threadSay(delConvo.slackThreadTs, '@accept', 'EvDelAccept');
+      await threadSay(delConvo.slackThreadTs, '@assign <@U0DEV0001>', 'EvDelAssign');
+      await threadSay(delConvo.slackThreadTs, '@send All sorted, thanks for waiting.', 'EvDelSend');
+
+      let delTask = await taskFor(delConvo.id);
+      check('the task closed on Twilio accepting the message', delTask?.state === 'CLOSED', delTask?.state);
+      check('and remembered which message it closed on', Boolean(delTask?.sentSid), delTask?.sentSid);
+
+      // An interim status is recorded and changes nothing else.
+      r = await postStatus({ MessageSid: delTask.sentSid, MessageStatus: 'sent' });
+      check('an interim status callback is accepted', r.status === 204, r.status);
+      check('and leaves the closed task alone', (await taskFor(delConvo.id))?.state === 'CLOSED');
+
+      // The carrier gives up. This is the case that used to vanish.
+      r = await postStatus({ MessageSid: delTask.sentSid, MessageStatus: 'undelivered', ErrorCode: '30005' });
+      check('a terminal failure callback is accepted', r.status === 204, r.status);
+
+      const outbound = (await db.filter('sms_messages', (m) => m.providerSid === delTask.sentSid))[0];
+      check('the message is no longer recorded as sent', outbound?.deliveryStatus === 'undelivered', outbound?.deliveryStatus);
+      check('and says why in words, not a code',
+        /number does not exist/i.test(outbound?.deliveryError || ''), outbound?.deliveryError);
+
+      delTask = await taskFor(delConvo.id);
+      check('the task is open again', delTask?.state === 'ASSIGNED', delTask?.state);
+      check('and can be sent again, because the claim went back', !delTask?.sentAt, delTask?.sentAt);
+      check('the thread says the customer never got it',
+        /never reached/i.test(lastPost()?.text || ''), lastPost()?.text);
+      check('and the card was repainted to say so',
+        /never reached them/i.test(slackUpdates[slackUpdates.length - 1]?.text || ''),
+        slackUpdates[slackUpdates.length - 1]?.text);
+
+      // Unsigned callbacks are somebody else's traffic.
+      const forged = await fetch(`${base}/api/sms/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': 'v0=nope' },
+        body: new URLSearchParams({ MessageSid: delTask.sentSid, MessageStatus: 'delivered' }).toString(),
+      });
+      check('an unsigned status callback is refused', forged.status === 403, forged.status);
+    }
+
+    // Test 9k -- a command whose card edit failed still says something.
+    //
+    // The card rewriting itself is the acknowledgement. When Slack refuses the
+    // edit the card is stale *and* silent, and the person who typed @accept sees
+    // nothing at all and types it again.
+    {
+      const customerH = '+15551230015';
+      r = await postTwilioWebhook({
+        MessageSid: 'SMinboundSilent', From: customerH, To: process.env.TWILIO_NUMBER,
+        Body: 'What happens when the card will not update?', NumMedia: '0',
+      });
+      const silentConvo = (await db.filter('sms_conversations', (c) => c.phoneNumber === customerH))[0];
+
+      slackUpdateShouldFail = true;
+      await threadSay(silentConvo.slackThreadTs, '@accept', 'EvSilentAccept');
+      slackUpdateShouldFail = false;
+
+      check('the task still changed state', (await taskFor(silentConvo.id))?.state === 'ACCEPTED');
+      check('and the thread says so instead of the card',
+        /claimed by/i.test(lastPost()?.text || ''), lastPost()?.text);
+      check('and admits the card is stale',
+        /could not be updated/i.test(lastPost()?.text || ''), lastPost()?.text);
+
+      // With the edit working again, a command says nothing: the card speaks.
+      const postsBeforeQuiet = slackPosts.length;
+      await threadSay(silentConvo.slackThreadTs, '@assign <@U0DEV0001>', 'EvSilentAssign');
+      check('a command whose card edit worked stays quiet',
+        slackPosts.length === postsBeforeQuiet, lastPost()?.text);
+      check('but still took effect', (await taskFor(silentConvo.id))?.state === 'ASSIGNED');
+    }
+
+    // Test 9l -- the bridge says whether it can actually do its job.
+    {
+      const preflight = require('../utils/smsBridgePreflight');
+      let report = await preflight.check();
+      check('the preflight runs and reports every part',
+        Array.isArray(report.checks) && report.checks.length >= 6, report.checks?.length);
+      // Not asserting report.ok: this suite deliberately runs without an
+      // Anthropic key, and the preflight is right to say so. What matters is
+      // that the parts that *are* configured come back healthy.
+      const named = (name) => report.checks.find((c) => c.name === name);
+      check('Slack is reported connected', named('Slack connection')?.ok === true);
+      check('the task channel is reported healthy', named('Task channel')?.ok === true,
+        named('Task channel')?.detail);
+      check('and it knows who may work a task', named('Who may work a task')?.ok === true,
+        named('Who may work a task')?.detail);
+      check('the missing drafting key is reported as a problem',
+        named('Drafting the completion')?.ok === false,
+        named('Drafting the completion')?.detail);
+
+      // The failure everybody actually hits: the bot is not in the channel.
+      const cache = require('../utils/integrationCache');
+      const savedChannel = process.env.SMS_SLACK_CHANNEL;
+      process.env.SMS_SLACK_CHANNEL = 'CNOTAMEMBER';
+      cache.invalidate('slack:');
+      report = await preflight.check();
+      check('a channel the bot cannot see is reported, not swallowed',
+        report.ok === false && report.problems.some((p) => p.name === 'Task channel'),
+        JSON.stringify(report.problems.map((p) => p.name)));
+      check('and the report says how to fix it',
+        report.problems.some((p) => /invite/i.test(p.fix || '') || /invite/i.test(p.detail || '')),
+        JSON.stringify(report.problems));
+
+      process.env.SMS_SLACK_CHANNEL = savedChannel;
+      cache.invalidate('slack:');
+
+      // And an admin can read the same report without going to the server log.
+      r = await admin.req('GET', '/api/integrations/sms-bridge/health');
+      check('an admin can read the bridge health', r.status === 200, `${r.status} ${r.text.slice(0, 160)}`);
+      check('and it comes back with the checks', Array.isArray(r.data.checks), r.text.slice(0, 160));
     }
 
     // Test 10 -- a Slack outage during inbound intake must not lose the SMS

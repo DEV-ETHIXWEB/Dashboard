@@ -59,8 +59,8 @@ function outboundEnabled() {
  * So TWILIO_WEBHOOK_URL is authoritative when set, and it is the supported way
  * to run this. The derived value below is a development convenience only.
  */
-function signedUrl(req) {
-  const configured = process.env.TWILIO_WEBHOOK_URL;
+function signedUrl(req, configuredOverride) {
+  const configured = configuredOverride || process.env.TWILIO_WEBHOOK_URL;
   if (configured) return configured.trim();
 
   const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
@@ -88,13 +88,16 @@ function expectedSignature(url, params) {
  * read nothing out of it -- the same rule the Stripe webhook already follows in
  * routes/billing.js.
  */
-function verifySignature(req) {
+function verifySignature(req, configuredOverride) {
   if (!isEnabled()) return false;
 
   const provided = req.get('x-twilio-signature');
   if (!provided) return false;
 
-  const expected = expectedSignature(signedUrl(req), req.body);
+  // The URL is part of what Twilio signed, so a second endpoint has to be
+  // checked against *its own* address -- the delivery status callback signs
+  // .../sms/status, and checking it against .../sms/webhook rejects every one.
+  const expected = expectedSignature(signedUrl(req, configuredOverride), req.body);
 
   // timingSafeEqual throws on a length mismatch rather than returning false,
   // and a wrong-length signature is exactly what a probe sends.
@@ -155,12 +158,39 @@ function phoneKey(raw) {
  * Returns the message SID on success, and null when sending is switched off,
  * unconfigured, or refused.
  */
+/**
+ * Where Twilio reports what became of a message it accepted.
+ *
+ * Accepting a message and delivering it are different events, sometimes minutes
+ * apart: a carrier rejection, an unreachable handset or an A2P block all happen
+ * *after* the API call returned a SID and said 'queued'. Without this callback
+ * the app's last word on every message is that optimistic first answer.
+ *
+ * Derived from TWILIO_WEBHOOK_URL when not set explicitly, since the two
+ * endpoints are siblings and getting one right usually means getting both
+ * right. Returns null when neither is configured, and then no callback is asked
+ * for at all -- rather than pointing Twilio at a URL that does not exist.
+ */
+function statusCallbackUrl() {
+  const explicit = process.env.TWILIO_STATUS_CALLBACK_URL;
+  if (explicit) return explicit.trim();
+
+  const inbound = process.env.TWILIO_WEBHOOK_URL;
+  if (!inbound) return null;
+
+  const derived = inbound.trim().replace(/\/webhook\/?$/, '/status');
+  return derived === inbound.trim() ? null : derived;
+}
+
 async function sendSms({ to, body }) {
   if (!outboundEnabled()) return null;
   if (!isEnabled() || !fromNumber()) return null;
   if (!to || !body || !body.trim()) return null;
 
   const form = new URLSearchParams({ To: to, From: fromNumber(), Body: body.trim().slice(0, 1600) });
+
+  const callback = statusCallbackUrl();
+  if (callback) form.set('StatusCallback', callback);
   const auth = Buffer.from(`${accountSid()}:${authToken()}`).toString('base64');
 
   try {
@@ -201,4 +231,5 @@ module.exports = {
   normalizePhone,
   phoneKey,
   sendSms,
+  statusCallbackUrl,
 };

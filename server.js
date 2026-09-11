@@ -95,6 +95,11 @@ function dbReady(req, res, next) {
       // Watches client Slack channels and pushes changes down the live
       // wire, so no browser has to poll Slack for itself.
       .then(() => require('./utils/slackWatch').start())
+      // Says out loud whether the SMS bridge can actually do its job -- a
+      // missing scope or an uninvited bot is otherwise completely silent, and
+      // looks identical to "no texts have come in yet". Never fatal: the rest
+      // of the app has no business failing to start over it.
+      .then(() => require('./utils/smsBridgePreflight').reportAtBoot().catch(() => null))
       .catch((err) => {
         dbReadyPromise = null;
         throw err;
@@ -113,6 +118,15 @@ app.post(
   express.urlencoded({ extended: false, limit: '256kb' }),
   dbReady,
   require('./routes/sms').webhookHandler,
+);
+
+// What became of a message we sent. Signed and parsed exactly like the line
+// above, but against its own URL -- Twilio signs the address it called.
+app.post(
+  '/api/sms/status',
+  express.urlencoded({ extended: false, limit: '256kb' }),
+  dbReady,
+  require('./routes/sms').statusHandler,
 );
 
 // Slack posts JSON and signs the exact bytes it sent, so this needs the raw

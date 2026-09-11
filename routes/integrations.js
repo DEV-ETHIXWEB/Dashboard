@@ -41,6 +41,17 @@ router.get('/status', (req, res) => {
   });
 });
 
+/**
+ * Whether the SMS bridge can actually do its job, part by part.
+ *
+ * The same report the server prints at boot. It lives behind a route as well
+ * because the person who can fix a missing Slack scope is usually looking at an
+ * admin screen, not at a server log from three days ago.
+ */
+router.get('/sms-bridge/health', handle(async (req, res) => {
+  res.json(await require('../utils/smsBridgePreflight').check());
+}));
+
 // --- ClickUp ---------------------------------------------------------------
 
 router.get('/clickup/overview', handle(async (req, res) => {

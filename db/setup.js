@@ -460,9 +460,12 @@ async function initPostgresSchema() {
       slack_channel_id TEXT, slack_message_ts TEXT,
       accepted_by TEXT, accepted_at TEXT,
       owner_slack_id TEXT, assigned_at TEXT,
-      sent_body TEXT, sent_at TEXT,
+      sent_body TEXT, sent_at TEXT, sent_sid TEXT,
       closed_at TEXT, created_at TEXT, updated_at TEXT
     )`,
+    `ALTER TABLE sms_tasks ADD COLUMN IF NOT EXISTS sent_sid TEXT`,
+    // How a delivery status callback finds the task it belongs to.
+    `CREATE INDEX IF NOT EXISTS idx_sms_tasks_sent_sid ON sms_tasks(sent_sid)`,
     `CREATE INDEX IF NOT EXISTS idx_sms_tasks_card ON sms_tasks(slack_channel_id, slack_message_ts)`,
     // "Is there already an open task for this number" runs on every inbound
     // text, and is the check that stops a chatty customer opening five cards.

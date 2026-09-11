@@ -21,6 +21,7 @@ const intake = require('../utils/smsIntake');
 const live = require('../utils/liveBus');
 const slack = require('../utils/slack');
 const conversations = require('../utils/smsConversations');
+const tasks = require('../utils/smsTasks');
 
 /** Who runs the inbox. Deliberately excludes clients and employees. */
 const STAFF = ['admin', 'sales', 'project_manager'];
@@ -132,6 +133,109 @@ async function webhookHandler(req, res) {
   // keep the record. Replying is not possible anyway while SMS_OUTBOUND_ENABLED
   // is off, which it is until A2P 10DLC registration clears.
   return twiml(res);
+}
+
+// --- what became of the messages we sent -----------------------------------
+
+/**
+ * Twilio's own vocabulary, and which of it is final.
+ *
+ * `sent` means a carrier took it; `delivered` means a handset confirmed it.
+ * The two failures are the point of this endpoint: `failed` is Twilio or the
+ * carrier refusing, `undelivered` is the carrier accepting and then giving up.
+ * Both arrive after the API call has already returned a SID and been treated as
+ * a success everywhere upstream.
+ */
+const TERMINAL_FAILURES = new Set(['failed', 'undelivered']);
+const KNOWN_STATUSES = new Set([
+  'queued', 'accepted', 'scheduled', 'sending', 'sent', 'delivered', 'failed', 'undelivered',
+]);
+
+/** Twilio error codes worth explaining in the thread rather than as a number. */
+const DELIVERY_ERRORS = {
+  30003: 'the handset is unreachable or switched off',
+  30004: 'the number has blocked messages from us',
+  30005: 'the number does not exist',
+  30006: 'the number is a landline, or cannot receive texts',
+  30007: 'the carrier filtered it as spam',
+  30034: 'our number is not registered for A2P 10DLC yet',
+  21610: 'they replied STOP, so we may not text them',
+};
+
+function explainDeliveryFailure(status, code) {
+  const known = DELIVERY_ERRORS[Number(code)];
+  if (known) return known;
+  if (code) return `the carrier rejected it (Twilio error ${code})`;
+  return status === 'undelivered' ? 'the carrier could not deliver it' : 'the carrier refused it';
+}
+
+/**
+ * Twilio POSTs here as a message it accepted makes its way to a handset.
+ *
+ * The reason this exists: `sendSms` returning a SID only means Twilio took the
+ * message. A rejection by the carrier, a blocked number, an A2P filter -- all of
+ * those land here, seconds or minutes later, long after the row was written as
+ * 'sent' and, for a task, long after the card said the job was done. Without
+ * this endpoint the app's last word on every message it sends is a guess.
+ *
+ * Mounted beside the inbound webhook in server.js with the same urlencoded
+ * parser, and verified against its *own* URL -- the address is part of what
+ * Twilio signs.
+ */
+async function statusHandler(req, res) {
+  if (!twilio.isEnabled()) return res.status(503).end();
+
+  if (!twilio.verifySignature(req, process.env.TWILIO_STATUS_CALLBACK_URL || twilio.statusCallbackUrl())) {
+    console.error(`Rejected an SMS status callback with a bad signature. Expected URL: ${twilio.statusCallbackUrl()}`);
+    return res.status(403).end();
+  }
+
+  const { MessageSid, MessageStatus, ErrorCode } = req.body || {};
+  const status = String(MessageStatus || '').toLowerCase();
+
+  if (!MessageSid || !KNOWN_STATUSES.has(status)) return res.status(204).end();
+
+  // Inline, then answer -- the same reasoning as the inbound webhook above.
+  // This also runs on a serverless platform where the process is frozen the
+  // moment the response is sent, so work deferred past it would simply never
+  // happen. A row update and at most one Slack post is nowhere near Twilio's
+  // budget, and the interim statuses that make up most of this traffic stop at
+  // the first branch below.
+
+  const rows = await db.filter('sms_messages', (m) => m.providerSid === MessageSid);
+  const message = rows[0] || null;
+
+  if (message) {
+    await db.update('sms_messages', message.id, {
+      deliveryStatus: status,
+      deliveryError: TERMINAL_FAILURES.has(status)
+        ? explainDeliveryFailure(status, ErrorCode)
+        : null,
+    });
+    live.publish('sms');
+  }
+
+  if (!TERMINAL_FAILURES.has(status)) return res.status(204).end();
+
+  // A task that was closed on this message has to come back: the work is done
+  // but the customer was never told, and the card is the only place anybody
+  // would find that out.
+  const task = await tasks.findBySentSid(MessageSid);
+  if (!task || task.state !== 'CLOSED') return res.status(204).end();
+
+  const reason = explainDeliveryFailure(status, ErrorCode);
+  const client = task.clientId ? await db.find('users', task.clientId) : null;
+
+  await tasks.reopenAfterFailedDelivery(task, reason, client);
+  await slack.replyInThread({
+    channelId: task.slackChannelId,
+    threadTs: task.slackMessageTs,
+    text:
+      `⚠️ The completion text never reached ${task.phoneNumber} -- ${reason}.\n` +
+      'This task is open again. Check the number in the dashboard, then `@send` when it is right.',
+  });
+
+  return res.status(204).end();
 }
 
 // --- the inbox -------------------------------------------------------------
@@ -463,3 +567,4 @@ router.post('/broadcast', requireCSRF, async (req, res, next) => {
 
 module.exports = router;
 module.exports.webhookHandler = webhookHandler;
+module.exports.statusHandler = statusHandler;

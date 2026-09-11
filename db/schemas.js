@@ -204,7 +204,11 @@ const SCHEMAS = {
     'owner_slack_id', 'assigned_at',
     // The one outbound text this task is allowed, and when it went. Both stay
     // null until @send succeeds, which is also how a second @send is refused.
-    'sent_body', 'sent_at',
+    // sent_sid is Twilio's id for that text, and it is what a later delivery
+    // status callback matches on: "Twilio accepted it" and "the handset got it"
+    // are different questions, sometimes minutes apart, and a task closed on
+    // the first answer has to be reopened if the second one is no.
+    'sent_body', 'sent_at', 'sent_sid',
     'closed_at', 'created_at', 'updated_at',
   ],
   // Dedup ledger for the Slack Events API, the same role provider_sid plays

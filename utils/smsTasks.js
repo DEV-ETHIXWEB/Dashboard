@@ -188,6 +188,19 @@ function renderCard(task, client) {
     lines.push('', `*Sent to customer:* ${task.sentBody}`);
   }
 
+  // A task that was closed and then reopened because the carrier never
+  // delivered the text. The most important line on the card when it applies:
+  // the work is done, the customer does not know it, and somebody has to
+  // decide what to do about a number that is refusing messages.
+  if (task.deliveryFailure) {
+    lines.push(
+      '',
+      `⚠️ *The completion text never reached them* -- ${task.deliveryFailure}`,
+      task.sentBody ? `_It was going to say:_ ${task.sentBody}` : '',
+      'The task is open again. Fix the number or try `@send` once more.',
+    );
+  }
+
   if (!client) lines.push('', 'Not linked to a client yet.');
 
   // Only worth the room while there is still something to do about it.
@@ -204,20 +217,27 @@ function renderCard(task, client) {
 /**
  * Push the current state of a task onto its card.
  *
- * Best-effort, like every other Slack call in this codebase: a failed edit
- * leaves a stale card, which is a cosmetic problem. The row is the truth.
+ * Still best-effort -- a failed edit leaves a stale card, and the row is the
+ * truth either way -- but it now says whether the edit landed, which it used to
+ * swallow. That silence was a real problem: the card is the *only* thing that
+ * answers `@accept`, so a failed edit meant the person who typed it saw nothing
+ * happen and typed it again. The caller uses the answer to say something in the
+ * thread instead.
  */
 async function refreshCard(task, client) {
-  if (!task?.slackChannelId || !task?.slackMessageTs) return null;
+  if (!task?.slackChannelId || !task?.slackMessageTs) {
+    return { ok: false, error: 'this task has no card to update' };
+  }
   try {
-    return await slack.updateMessage({
+    await slack.updateMessage({
       channelId: task.slackChannelId,
       ts: task.slackMessageTs,
       text: renderCard(task, client),
     });
+    return { ok: true };
   } catch (err) {
     console.error(`Could not update the card for task ${task.id}:`, err.message);
-    return null;
+    return { ok: false, error: err.message };
   }
 }
 
@@ -258,15 +278,57 @@ async function open({ conversation, client, message, priority, summary }) {
   });
 }
 
-/** Record a state change and repaint the card in one step. */
+/**
+ * Record a state change and repaint the card in one step.
+ *
+ * Returns the new row and whether the repaint landed. The second half matters
+ * because the card is the only acknowledgement most commands get: if the edit
+ * failed, the caller has to say so in the thread, or the change is invisible.
+ */
 async function transition(task, patch, client) {
   const updated = (await db.update('sms_tasks', task.id, {
     ...patch,
     updatedAt: new Date().toISOString(),
   })) || { ...task, ...patch };
 
-  await refreshCard(updated, client);
-  return updated;
+  const card = await refreshCard(updated, client);
+  return { task: updated, cardUpdated: card.ok === true };
+}
+
+/** The task a Twilio delivery report belongs to, found by the SID it sent. */
+async function findBySentSid(sid) {
+  if (!sid) return null;
+  const rows = await db.filter('sms_tasks', (t) => t.sentSid === sid);
+  return rows[0] || null;
+}
+
+/**
+ * Put a task back after the text it closed on never arrived.
+ *
+ * Closing on Twilio's first answer is right -- it is the only answer available
+ * at the time -- but that answer only means Twilio took the message. When the
+ * carrier rejects it half a minute later, the customer is still waiting and the
+ * team has a card saying the job is done. So the state goes back to ASSIGNED,
+ * and the send claim goes with it: `sent_at` is what refuses a second `@send`,
+ * and a text that never landed has to be sendable again.
+ *
+ * The words that were sent are deliberately kept on the card as
+ * `lastFailedBody`, not thrown away -- whoever picks this up wants to see what
+ * the customer was supposed to receive.
+ */
+async function reopenAfterFailedDelivery(task, reason, client) {
+  const updated = (await db.update('sms_tasks', task.id, {
+    state: 'ASSIGNED',
+    sentAt: null,
+    sentSid: null,
+    closedAt: null,
+    updatedAt: new Date().toISOString(),
+  })) || { ...task, state: 'ASSIGNED', sentAt: null, sentSid: null, closedAt: null };
+
+  // Not persisted: the card renders it from this in-memory copy, and the durable
+  // record of the failure is the sms_messages row the status callback updated.
+  const card = await refreshCard({ ...updated, deliveryFailure: reason }, client);
+  return { task: updated, cardUpdated: card.ok === true };
 }
 
 module.exports = {
@@ -278,6 +340,8 @@ module.exports = {
   configuredChannel,
   findOpen,
   findByCard,
+  findBySentSid,
+  reopenAfterFailedDelivery,
   renderCard,
   refreshCard,
   elapsed,
