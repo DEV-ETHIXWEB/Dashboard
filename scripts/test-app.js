@@ -1417,6 +1417,10 @@ async function main() {
     process.env.SMS_SLACK_CHANNEL = 'CSMSBRIDGE';
     process.env.SLACK_BOT_TOKEN = 'xoxb-test';
     process.env.SLACK_SIGNING_SECRET = 'test_signing_secret';
+    // The directory and channel list are cached for half an hour, and earlier
+    // sections of this suite may already have filled them from a different
+    // stub. Drop both so the fixtures below are what gets read.
+    require('../utils/integrationCache').invalidate('slack:');
 
     let slackTsCounter = 0;
     const twilioSends = [];
@@ -1462,7 +1466,28 @@ async function main() {
         return { ok: true, status: 200, json: async () => ({ ok: true, channels: [{ id: 'CSMSBRIDGE', name: 'client-sms', is_member: true }] }) };
       }
       if (href.startsWith('https://slack.com/api/users.list')) {
-        return { ok: true, status: 200, json: async () => ({ ok: true, members: [] }) };
+        // Real members, because who typed a command now decides whether it
+        // runs. Emails are the join onto the seeded dashboard accounts:
+        // admin and Priya are admins, Ryan is a project manager, Jordan is an
+        // employee, and the guest has no email at all -- which is what a
+        // workspace without the users:read.email scope looks like.
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            members: [
+              { id: 'U_STAFF_1', name: 'admin', is_bot: false, profile: { real_name: 'Admin User', email: 'admin@ethixweb.local' } },
+              { id: 'U_STAFF_2', name: 'priya', is_bot: false, profile: { real_name: 'Priya Nair', email: 'priya.nair@ethixweb.local' } },
+              { id: 'U0DEV0001', name: 'ryan', is_bot: false, profile: { real_name: 'Ryan Coleman', email: 'ryan.coleman@ethixweb.local' } },
+              // Made further down rather than seeded: the approval section of
+              // this suite deletes the seeded employee, and an account that
+              // vanishes halfway through is no use as a role fixture.
+              { id: 'U0DEV0002', name: 'sms-employee', is_bot: false, profile: { real_name: 'SMS Employee', email: 'sms.employee@ethixweb.local' } },
+              { id: 'U_GUEST', name: 'guest', is_bot: false, profile: { real_name: 'Channel Guest' } },
+            ],
+          }),
+        };
       }
       if (href.startsWith('https://slack.com/api/conversations.replies')) {
         return { ok: true, status: 200, json: async () => ({ ok: true, messages: [] }) };
@@ -1837,6 +1862,149 @@ async function main() {
       check('inserting a duplicate id throws', Boolean(conflict), 'no error thrown');
       check('and reports the unique-violation code the retry guard checks for',
         conflict?.code === '23505', conflict?.code);
+    }
+
+    // Test 9g -- only staff can work a task.
+    //
+    // Slack channels hold contractors, clients and guests, and @send reaches a
+    // phone outside the company. Being able to see the thread is not authority
+    // to close it.
+    {
+      const customerD = '+15551230011';
+      r = await postTwilioWebhook({
+        MessageSid: 'SMinboundAuthz', From: customerD, To: process.env.TWILIO_NUMBER,
+        Body: 'Who is allowed to answer this?', NumMedia: '0',
+      });
+      const authzConvo = (await db.filter('sms_conversations', (c) => c.phoneNumber === customerD))[0];
+
+      const sendsBeforeAuthz = twilioSends.length;
+
+      // The employee behind U0DEV0002 in the directory stub above.
+      r = await admin.req('POST', '/api/users', {
+        name: 'SMS Employee', email: 'sms.employee@ethixweb.local', role: 'employee',
+      });
+      check('the employee fixture was created', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+
+      // An employee is staff, but not staff who closes customer tasks.
+      r = await threadSay(authzConvo.slackThreadTs, '@accept', 'EvAuthzEmployee', 'U0DEV0002');
+      check('an employee cannot claim a customer task',
+        (await taskFor(authzConvo.id))?.state === 'NEW', (await taskFor(authzConvo.id))?.state);
+      check('and is told why', /admins and project managers/i.test(lastPost()?.text || ''), lastPost()?.text);
+
+      // A guest with no email is exactly what a workspace missing the
+      // users:read.email scope looks like: unidentifiable, so refused.
+      r = await threadSay(authzConvo.slackThreadTs, '@accept', 'EvAuthzGuest', 'U_GUEST');
+      check('somebody we cannot identify cannot claim a task',
+        (await taskFor(authzConvo.id))?.state === 'NEW');
+      check('and the refusal says how an admin fixes it',
+        /users:read\.email|SMS_TASK_OPERATORS/.test(lastPost()?.text || ''), lastPost()?.text);
+
+      // Nobody unauthorised got anywhere near Twilio.
+      check('no refused command sent anything', twilioSends.length === sendsBeforeAuthz, twilioSends.length);
+
+      // A project manager is.
+      r = await threadSay(authzConvo.slackThreadTs, '@accept', 'EvAuthzPm', 'U0DEV0001');
+      check('a project manager can claim a task', (await taskFor(authzConvo.id))?.state === 'ACCEPTED');
+
+      // The explicit allowlist is the other way to answer, and needs no scope.
+      process.env.SMS_TASK_OPERATORS = 'U_GUEST';
+      r = await threadSay(authzConvo.slackThreadTs, '@assign <@U0DEV0002>', 'EvAuthzListAdmin', 'U_STAFF_1');
+      check('with an allowlist set, an admin who is not on it is refused',
+        (await taskFor(authzConvo.id))?.state === 'ACCEPTED');
+      check('and is pointed at the allowlist',
+        /SMS_TASK_OPERATORS/.test(lastPost()?.text || ''), lastPost()?.text);
+
+      r = await threadSay(authzConvo.slackThreadTs, '@assign <@U0DEV0002>', 'EvAuthzListGuest', 'U_GUEST');
+      check('and somebody on the allowlist is allowed, with no directory lookup',
+        (await taskFor(authzConvo.id))?.state === 'ASSIGNED');
+      delete process.env.SMS_TASK_OPERATORS;
+    }
+
+    // Test 9h -- the subtypes that are still a person typing.
+    //
+    // "Also send to channel" and a screenshot with the command as its comment
+    // are both ordinary ways to work a task, and both used to do nothing.
+    {
+      const customerE = '+15551230012';
+      r = await postTwilioWebhook({
+        MessageSid: 'SMinboundSubtype', From: customerE, To: process.env.TWILIO_NUMBER,
+        Body: 'Testing how the command was typed.', NumMedia: '0',
+      });
+      const subConvo = (await db.filter('sms_conversations', (c) => c.phoneNumber === customerE))[0];
+
+      async function subtypeSay(subtype, text, eventId, extra = {}) {
+        return postSlackEvent({
+          type: 'event_callback',
+          event_id: eventId,
+          event: {
+            type: 'message', subtype, channel: 'CSMSBRIDGE', user: 'U_STAFF_1', text,
+            ts: `17000007${String(eventId.length).padStart(2, '0')}.000100`,
+            thread_ts: subConvo.slackThreadTs,
+            ...extra,
+          },
+        });
+      }
+
+      await subtypeSay('thread_broadcast', '@accept', 'EvSubBroadcast');
+      check('a command sent with "Also send to channel" still runs',
+        (await taskFor(subConvo.id))?.state === 'ACCEPTED', (await taskFor(subConvo.id))?.state);
+
+      await subtypeSay('file_share', '@assign <@U0DEV0001>', 'EvSubFile', { files: [{ id: 'F1' }] });
+      check('a command typed as a file comment still runs',
+        (await taskFor(subConvo.id))?.state === 'ASSIGNED', (await taskFor(subConvo.id))?.state);
+
+      const sendsBeforeEdit = twilioSends.length;
+      await subtypeSay('message_changed', '@send Edited into existence.', 'EvSubEdited');
+      check('an edited message is still not a command', twilioSends.length === sendsBeforeEdit);
+      check('and the task is untouched by it', (await taskFor(subConvo.id))?.state === 'ASSIGNED');
+    }
+
+    // Test 9i -- how people actually type the commands.
+    {
+      const p = require('../routes/slackEvents').parseCommand;
+
+      check('the bot being addressed first still parses',
+        p('<@UBOT123> @accept')?.name === 'accept', JSON.stringify(p('<@UBOT123> @accept')));
+      check('and with a comma after the mention, as Slack often leaves it',
+        p('<@UBOT123>, @send Done.')?.name === 'send');
+      check('the past tense in our own docs parses', p('@accepted')?.name === 'accept');
+      check('@assigned parses too', p('@assigned <@U0DEV0001>')?.userId === 'U0DEV0001');
+      check('@sent parses too', p('@sent')?.name === 'send');
+
+      // The one that would have texted a customer a full stop.
+      check('@send. is a draft request, not an override of "."',
+        p('@send.')?.name === 'send' && p('@send.').override === null,
+        JSON.stringify(p('@send.')));
+      check('but real words after @send are still an override',
+        p('@send All fixed, thanks!')?.override === 'All fixed, thanks!');
+      check('@assign still finds the person named after it',
+        p('@assign <@U0DEV0001|ryan>')?.userId === 'U0DEV0001');
+
+      check('a near miss is recognised as one', p('@approved')?.name === 'unknown');
+      check('and carries the word that was typed', p('@approved')?.word === 'approved');
+      check('a person being mentioned by a name Slack could not resolve is left alone',
+        p('@priya can you look at this') === null);
+      check('and ordinary conversation is still ordinary', p('all done on my side') === null);
+    }
+
+    // The near-miss reply reaches the thread, once, and changes nothing.
+    {
+      const customerF = '+15551230013';
+      r = await postTwilioWebhook({
+        MessageSid: 'SMinboundNearMiss', From: customerF, To: process.env.TWILIO_NUMBER,
+        Body: 'Testing a mistyped command.', NumMedia: '0',
+      });
+      const nmConvo = (await db.filter('sms_conversations', (c) => c.phoneNumber === customerF))[0];
+
+      await threadSay(nmConvo.slackThreadTs, '@approve', 'EvNearMiss');
+      check('a near miss is answered with the usage line',
+        /not a command/i.test(lastPost()?.text || '') && /@accept/.test(lastPost()?.text || ''),
+        lastPost()?.text);
+      check('and the task is unchanged', (await taskFor(nmConvo.id))?.state === 'NEW');
+
+      const postsBeforeChatter = slackPosts.length;
+      await threadSay(nmConvo.slackThreadTs, '@priya can you take a look', 'EvChatter');
+      check('but ordinary talk gets no reply at all', slackPosts.length === postsBeforeChatter);
     }
 
     // Test 10 -- a Slack outage during inbound intake must not lose the SMS

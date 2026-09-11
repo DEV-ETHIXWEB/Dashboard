@@ -187,6 +187,13 @@ async function fetchUserMap() {
           name: member.profile?.display_name || member.profile?.real_name || member.name || member.id,
           avatar: member.profile?.image_48 || null,
           isBot: Boolean(member.is_bot),
+          // Present only when the app holds `users:read.email`, and the one
+          // thing that ties a Slack account to a dashboard account -- which is
+          // what decides whether somebody may text a customer. Undefined
+          // without the scope, and utils/slackIdentity.js says so out loud
+          // rather than quietly letting everyone through.
+          email: member.profile?.email ? String(member.profile.email).toLowerCase() : null,
+          deleted: Boolean(member.deleted),
         };
       }
       cursor = data.response_metadata?.next_cursor || undefined;

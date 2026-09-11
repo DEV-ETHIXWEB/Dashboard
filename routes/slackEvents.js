@@ -8,7 +8,7 @@
  * way routes/sms.js and routes/billing.js are -- Slack signs the exact bytes
  * it sent, and nothing may parse the body before that signature is checked.
  *
- * Two rules shape everything below.
+ * Three rules shape everything below.
  *
  * The first is loop prevention: a message this bridge itself posted into Slack
  * must never be read back as a command. Bot posts and message subtypes are
@@ -20,16 +20,33 @@
  * discussing the work. Now a thread is a workspace: people talk in it freely,
  * and exactly one message ever reaches the customer -- the completion that
  * `@send` produces, once, from a task that somebody has taken ownership of.
+ *
+ * The third is authority, and it is the newest. Every command here changes what
+ * the team sees and one of them reaches a phone outside the company, so being
+ * able to see the channel cannot be what entitles you to run them -- Slack
+ * channels hold contractors, clients and guests routinely. utils/slackIdentity.js
+ * answers who is typing, and refuses when it cannot tell.
  */
 
 const { db } = require('../db/setup');
 const slack = require('../utils/slack');
 const twilio = require('../utils/twilio');
 const tasks = require('../utils/smsTasks');
+const identity = require('../utils/slackIdentity');
 const completion = require('../utils/smsCompletion');
 const live = require('../utils/liveBus');
 
 const PG_UNIQUE_VIOLATION = '23505';
+
+/**
+ * Message subtypes that can still be a person typing a command.
+ *
+ * `undefined` is a plain message; `thread_broadcast` is one sent with "Also
+ * send to channel" ticked; `file_share` is a screenshot or log whose comment
+ * is the message. Anything absent from this set -- `message_changed`,
+ * `message_deleted`, `bot_message`, the join and leave lines -- is not.
+ */
+const ACTIONABLE_SUBTYPES = new Set([undefined, 'thread_broadcast', 'file_share']);
 
 // --- commands --------------------------------------------------------------
 
@@ -46,21 +63,84 @@ const PG_UNIQUE_VIOLATION = '23505';
  * arrives as `<@U123>` or `<@U123|name>`, while `@accept` stays literal text
  * because no such user exists. That asymmetry is what makes this parseable.
  */
+/** The verbs, and the spellings of each that people actually type. */
+const VERBS = {
+  accept: 'accept',
+  accepted: 'accept',
+  assign: 'assign',
+  assigned: 'assign',
+  send: 'send',
+  sent: 'send',
+};
+
+/**
+ * Words that are somebody reaching for a command and missing.
+ *
+ * A message beginning `@` and one of these earns the usage line; anything else
+ * beginning `@` is left alone. The distinction matters because a task thread is
+ * also a place people talk, and `@priya can you look at this` -- which reaches
+ * us as literal text whenever Slack could not resolve the name -- must not be
+ * answered by a bot explaining itself.
+ */
+const NEAR_MISSES = new Set([
+  'approve', 'approved', 'approves', 'accepts', 'accepting',
+  'claim', 'claimed', 'take', 'taking', 'mine',
+  'assigns', 'assigning', 'owner', 'own',
+  'close', 'closed', 'resolve', 'resolved', 'done', 'finish', 'finished',
+  'reply', 'text', 'sending', 'sends', 'notify', 'update',
+]);
+
+const USAGE = 'Commands in this thread: `@accept` to claim it, `@assign @person` to give it an owner, `@send` to close it out (or `@send <your words>`).';
+
+/**
+ * Read a thread message as a command, or decide it is ordinary conversation.
+ *
+ * Everything uses one `@` prefix. Slack's own `/` commands are a different
+ * mechanism entirely -- they need a public endpoint per command and never
+ * appear as message events -- and mixing the two prefixes would mean half the
+ * verbs in this flow lived somewhere else. So `@` throughout, and a message
+ * that does not start with a known one is just a message.
+ *
+ * Note what Slack does to the text before we see it: a real user mention
+ * arrives as `<@U123>` or `<@U123|name>`, while `@accept` stays literal text
+ * because no such user exists. That asymmetry is what makes this parseable --
+ * and it is also why the bot's own mention has to come off the front first.
+ * Addressing a bot by name before telling it what to do is the most natural
+ * thing in the world to type, and `@ethixweb @accept` used to do nothing at
+ * all.
+ */
 function parseCommand(raw) {
-  const text = String(raw || '').trim();
-  const match = /^@(accept|assign|send)\b\s*([\s\S]*)$/i.exec(text);
+  // Leading mentions, however many: `<@UBOT> <@U123> @assign ...`. Only
+  // leading ones, because `@assign <@U123>` needs its mention left in place.
+  const text = String(raw || '')
+    .trim()
+    .replace(/^(?:<@[A-Z0-9]+(?:\|[^>]*)?>[\s,:]*)+/i, '')
+    .trim();
+
+  const match = /^@([a-z]+)\b([\s\S]*)$/i.exec(text);
   if (!match) return null;
 
-  const name = match[1].toLowerCase();
+  const word = match[1].toLowerCase();
+  const name = VERBS[word];
   const rest = match[2].trim();
+
+  if (!name) {
+    // Close enough to a command to be worth answering; otherwise it is talk.
+    return NEAR_MISSES.has(word) ? { name: 'unknown', word } : null;
+  }
 
   if (name === 'assign') {
     const mention = /<@([A-Z0-9]+)(?:\|[^>]*)?>/.exec(rest);
     return { name, userId: mention ? mention[1] : null };
   }
 
-  // `@send` on its own asks for a draft; `@send <text>` sends those exact words.
-  if (name === 'send') return { name, override: rest || null };
+  // `@send` on its own asks for a draft; `@send <text>` sends those exact
+  // words. An override has to carry at least one letter or digit, so the stray
+  // punctuation in `@send.` is read as "no override" rather than becoming a
+  // text message to a customer that says ".".
+  if (name === 'send') {
+    return { name, override: /[a-z0-9]/i.test(rest) ? rest : null };
+  }
 
   return { name };
 }
@@ -252,11 +332,18 @@ async function handleSend(task, command, client) {
 async function handleMessageEvent(event) {
   if (!event || event.type !== 'message') return;
 
-  // Our own bot post (a card, a draft, a confirmation), a message edit, a
-  // delete, a channel-join line -- anything that is not a plain message a human
-  // just typed. Reacting to any of these is the echo loop this bridge must
-  // never create.
-  if (event.bot_id || event.subtype) return;
+  // Our own bot post -- a card, a draft, a confirmation. Reacting to one of
+  // these is the echo loop this bridge must never create.
+  if (event.bot_id) return;
+
+  // Subtypes used to be dropped wholesale, which was too blunt. Two of them
+  // are an ordinary person typing an ordinary message: `thread_broadcast` is
+  // the "Also send to channel" checkbox, and `file_share` is a screenshot with
+  // the command as its comment -- both extremely normal ways to close out a
+  // task, and both silently did nothing. Everything else with a subtype is an
+  // edit, a delete, a join line or another bot, and still has no business here.
+  if (!ACTIONABLE_SUBTYPES.has(event.subtype)) return;
+
   if (!event.user || typeof event.text !== 'string' || !event.text.trim()) return;
 
   // Only a reply *inside* a thread can be a command: the thread is what names
@@ -279,6 +366,24 @@ async function handleMessageEvent(event) {
 
   const task = await tasks.findByCard(event.channel, event.thread_ts);
   if (!task) return; // a thread this bridge did not open
+
+  // Somebody reaching for a command and missing. Answered before the authority
+  // check on purpose: telling a guest what the commands are gives nothing away,
+  // and the alternative is refusing a person who has not asked for anything.
+  if (command.name === 'unknown') {
+    await say(task, `\`@${command.word}\` is not a command. ${USAGE}`);
+    return;
+  }
+
+  // Who typed it. Every command below changes what the team sees, and one of
+  // them texts a person outside the company -- so a channel guest, a
+  // contractor, or a client sitting in the channel must not be able to run any
+  // of them just by being able to see the thread.
+  const authority = await identity.canOperate(event.user);
+  if (!authority.allowed) {
+    await say(task, authority.reason);
+    return;
+  }
 
   const client = task.clientId ? await db.find('users', task.clientId) : null;
 
