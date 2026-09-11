@@ -89,8 +89,11 @@ async function plan(emails) {
   }
   if (targets.some(roles.isSuperAdmin) && remainingSupers.length === 0) {
     throw new OffboardError(
-      'That would remove every super admin, leaving nobody who can appoint one. '
-      + 'Make someone else a super admin first. Nothing has been changed.',
+      'That would remove every super admin, leaving nobody who can appoint one, '
+      + 'and no in-app way to appoint one either -- the power is needed to grant it. '
+      + 'Promote somebody who is staying first:\n\n'
+      + '  npm run admin:recovery -- promote <email> --yes\n\n'
+      + 'Nothing has been changed.',
     );
   }
 
