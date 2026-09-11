@@ -243,11 +243,22 @@ async function main() {
 
     if (!args.confirmed) {
       const supers = await roles.listSuperAdmins();
+
+      // Nothing to offer someone who already holds it. Printing a plan here
+      // invites --yes on a command that would do nothing, and reads as though
+      // the standing were somehow incomplete.
+      if (roles.isSuperAdmin(user)) {
+        console.log(`${user.name} <${user.email}> is already a super admin. Nothing to do.`);
+        console.log(`\nThis workspace has ${supers.length} super admin${supers.length === 1 ? '' : 's'}:`);
+        for (const s of supers) console.log(`  ${s.email}`);
+        return 0;
+      }
+
       console.log('Nothing has been changed. This is what would happen:\n');
       console.log(`  Account   ${user.name} <${user.email}> (${user.role})`);
-      console.log(`  Now       ${roles.isSuperAdmin(user) ? 'already a super admin' : roles.isTrustedAdmin(user) ? 'trusted admin' : 'untrusted admin'}`);
+      console.log(`  Now       ${roles.isTrustedAdmin(user) ? 'trusted admin' : 'untrusted admin'}`);
       console.log('  Would     become a super admin, and trusted along with it');
-      console.log(`  Super admins afterwards  ${supers.length + (roles.isSuperAdmin(user) ? 0 : 1)}`);
+      console.log(`  Super admins afterwards  ${supers.length + 1}`);
       console.log('  Recorded  audit log entry, and a security alert to every other admin');
       console.log('\nRe-run with --yes to go ahead.');
       return 0;
