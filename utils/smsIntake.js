@@ -76,7 +76,9 @@ function senderLabel(message, client) {
 async function postToSlack(message, client) {
   if (!slack.isEnabled()) return null;
 
-  const channel = process.env.SMS_SLACK_CHANNEL || process.env.SLACK_NOTIFICATION_CHANNEL;
+  // Resolved to an id, and shared with the event handler that has to match it
+  // against `event.channel`. See tasks.channelId.
+  const channel = await tasks.channelId();
   if (!channel) return null;
 
   const phoneNumber = twilio.normalizePhone(message.fromNumber);

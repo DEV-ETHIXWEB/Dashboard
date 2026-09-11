@@ -55,6 +55,45 @@ function priorityFromTriage(triagePriority) {
   return FROM_TRIAGE[triagePriority] || 'medium';
 }
 
+// --- which channel ---------------------------------------------------------
+
+/**
+ * The channel the bridge lives in, as an id.
+ *
+ * This used to be an inline `process.env.SMS_SLACK_CHANNEL || ...` in three
+ * places -- here, in utils/smsIntake.js, and in the event handler that decides
+ * whether a message is in scope -- and the third one compared that raw string
+ * against `event.channel`. So a channel configured by name worked for posting
+ * and failed for reading: cards appeared, every command in their threads was
+ * dropped without a word, and nothing in the flow could report it because
+ * nothing had noticed. One resolver, returning an id, is the fix.
+ *
+ * The resolved value is cached against the setting it came from, so a changed
+ * env var is picked up on the next call rather than needing a restart.
+ */
+let resolvedChannel = null;
+
+function configuredChannel() {
+  return process.env.SMS_SLACK_CHANNEL || process.env.SLACK_NOTIFICATION_CHANNEL || null;
+}
+
+async function channelId() {
+  const configured = configuredChannel();
+  if (!configured) return null;
+  if (resolvedChannel?.configured === configured) return resolvedChannel.id;
+
+  try {
+    const id = await slack.resolveChannelId(configured);
+    // Only successes are cached. A lookup that failed because Slack was
+    // briefly unreachable must be retried, not remembered as "no channel".
+    if (id) resolvedChannel = { configured, id };
+    return id;
+  } catch (err) {
+    console.error(`Could not resolve the SMS Slack channel ("${configured}"):`, err.message);
+    return null;
+  }
+}
+
 // --- lookups ---------------------------------------------------------------
 
 /**
@@ -192,8 +231,9 @@ async function refreshCard(task, client) {
  * The caller carries on: the message itself is already saved either way.
  */
 async function open({ conversation, client, message, priority, summary }) {
-  const channel = process.env.SMS_SLACK_CHANNEL || process.env.SLACK_NOTIFICATION_CHANNEL;
-  if (!slack.isEnabled() || !channel) return null;
+  if (!slack.isEnabled()) return null;
+  const channel = await channelId();
+  if (!channel) return null;
 
   const now = new Date().toISOString();
   const draft = {
@@ -234,6 +274,8 @@ module.exports = {
   PRIORITIES,
   PRIORITY_EMOJI,
   priorityFromTriage,
+  channelId,
+  configuredChannel,
   findOpen,
   findByCard,
   renderCard,

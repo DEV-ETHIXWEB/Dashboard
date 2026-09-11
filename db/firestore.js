@@ -54,6 +54,25 @@ function docToObj(doc) {
   return { id: doc.id, ...doc.data() };
 }
 
+/**
+ * Postgres' unique-violation code, which callers here also check for.
+ *
+ * The application must not have to know which driver it is talking to in order
+ * to recognise "that id is taken". Firestore reports it as gRPC status 6
+ * (ALREADY_EXISTS); this restamps it as 23505 so one `err.code === '23505'`
+ * check works on both.
+ */
+const PG_UNIQUE_VIOLATION = '23505';
+const ALREADY_EXISTS = new Set([6, '6', 'already-exists', 'ALREADY_EXISTS']);
+
+function asUniqueViolation(err, collection, id) {
+  if (!ALREADY_EXISTS.has(err?.code)) return err;
+  const conflict = new Error(`${collection} already has a record with id ${id}.`);
+  conflict.code = PG_UNIQUE_VIOLATION;
+  conflict.cause = err;
+  return conflict;
+}
+
 const firestoreDb = {
   async all(collection) {
     const snap = await getDb().collection(collection).get();
@@ -84,7 +103,21 @@ const firestoreDb = {
     const id = String(obj.id || uuidv4());
     const data = sanitize(collection, obj);
     delete data.id; // the document id carries this; don't duplicate it in the body
-    await getDb().collection(collection).doc(id).set(data);
+
+    // `create`, not `set`. An id that is already taken has to be a conflict
+    // here for the same reason a repeated PRIMARY KEY is one in Postgres:
+    // several callers use a failed insert as a guarantee rather than an error.
+    // The Slack retry ledger in routes/slackEvents.js is the sharpest case --
+    // it inserts the event id before doing any work, and reads the conflict as
+    // "another delivery of this event already ran". With `set` that insert
+    // quietly overwrote its own ledger row and the retry went on to send the
+    // customer a second text. Same for the Twilio provider_sid guard in
+    // routes/sms.js and the conversation guard in utils/smsConversations.js.
+    try {
+      await getDb().collection(collection).doc(id).create(data);
+    } catch (err) {
+      throw asUniqueViolation(err, collection, id);
+    }
     return { id, ...data };
   },
 
@@ -232,6 +265,30 @@ const firestoreDb = {
       await batch.commit();
     }
     return stale.map((d) => ({ id: d.id, ...d.data(), status: 'scheduled' }));
+  },
+
+  /** See the Postgres driver: the one-text-per-task claim. */
+  async claimTaskSend(id, at) {
+    const ref = getDb().collection('sms_tasks').doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data.sentAt) return null;
+      const patch = { sentAt: at, updatedAt: at };
+      tx.update(ref, patch);
+      return { id: doc.id, ...data, ...patch };
+    });
+  },
+
+  /** See the Postgres driver: hand back a claim that never became a text. */
+  async releaseTaskSend(id) {
+    const ref = getDb().collection('sms_tasks').doc(String(id));
+    const doc = await ref.get();
+    if (!doc.exists) return null;
+    const patch = { sentAt: null, updatedAt: new Date().toISOString() };
+    await ref.update(patch);
+    return { id: doc.id, ...doc.data(), ...patch };
   },
 };
 

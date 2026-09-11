@@ -609,7 +609,11 @@ async function postMessage({ channelId, text, threadTs }) {
     payload.thread_ts = threadTs;
   }
   const data = await request('chat.postMessage', null, payload);
-  return { ok: true, ts: data.ts, message: data.message };
+  // `data.channel` is always an id, whatever `channelId` was written as. That
+  // distinction is load-bearing: an inbound Slack event only ever carries an
+  // id, so a card filed under the name "#sms-inbox" can never be matched to a
+  // command typed in C0ABCD1234. Callers that store a channel must store this.
+  return { ok: true, ts: data.ts, channelId: data.channel || channelId, message: data.message };
 }
 
 /**
@@ -627,6 +631,44 @@ async function updateMessage({ channelId, ts, text }) {
 
   const data = await request('chat.update', null, { channel: channelId, ts, text: text.trim() });
   return { ok: true, ts: data.ts, channelId };
+}
+
+/** What a Slack channel id looks like: C public, G private group, D direct. */
+const CHANNEL_ID = /^[CGD][A-Z0-9]{6,}$/;
+
+/**
+ * The id of a channel that may have been configured by name.
+ *
+ * `chat.postMessage` accepts either an id or a `#name`, and Slack's own UI
+ * shows people the name far more prominently than the id, so a settings field
+ * asking for a channel gets both. Every *inbound* event, though, names its
+ * channel by id and only by id. Anything that stores a channel in order to
+ * compare it against an event later therefore has to store the id -- and this
+ * is the one place that conversion happens.
+ *
+ * Throws rather than guessing when a name matches nothing: a name that does
+ * not resolve is a configuration mistake, and the failure mode it used to
+ * cause -- cards posting normally while every command in their thread was
+ * silently discarded -- is far worse than a startup error.
+ */
+async function resolveChannelId(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (CHANNEL_ID.test(raw)) return raw;
+
+  const wanted = raw.replace(/^#/, '').toLowerCase();
+  const match = (await fetchChannels()).find(
+    (c) => String(c.name || '').toLowerCase() === wanted,
+  );
+  if (match) return match.id;
+
+  throw new SlackError(
+    `No Slack channel called "${raw}" is visible to the bot. Use the channel id instead ` +
+      '(in Slack: channel name -> About -> Channel ID, near the bottom), and invite the bot ' +
+      'to the channel with /invite.',
+    404,
+    'channel_not_found',
+  );
 }
 
 /**
@@ -654,7 +696,8 @@ async function notifySlack(text, channelId) {
     const targetChannel = await resolveNotificationChannel(channelId);
     if (!targetChannel) return null;
     const result = await postMessage({ channelId: targetChannel, text });
-    return { channelId: targetChannel, ts: result.ts };
+    // The id Slack posted to, not the string we asked with -- see postMessage.
+    return { channelId: result.channelId || targetChannel, ts: result.ts };
   } catch (err) {
     // Silent fail for event notifications so application flow is not interrupted
     console.error('Slack event notification failed:', err.message);
@@ -670,7 +713,7 @@ async function replyInThread({ channelId, threadTs, text }) {
   if (!isEnabled() || !channelId || !threadTs) return null;
   try {
     const result = await postMessage({ channelId, text, threadTs });
-    return { channelId, ts: result.ts };
+    return { channelId: result.channelId || channelId, ts: result.ts };
   } catch (err) {
     console.error('Slack thread reply failed:', err.message);
     return null;
@@ -736,6 +779,7 @@ module.exports = {
   updateMessage,
   notifySlack,
   replyInThread,
+  resolveChannelId,
   resolveNotificationChannel,
   sendSlackDigest,
 };

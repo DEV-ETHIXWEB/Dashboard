@@ -232,6 +232,38 @@ const pgDb = {
     );
     return res.rows.map((row) => rowToCamel(row, 'credential_deliveries'));
   },
+  /**
+   * Take the one outbound text an SMS task is allowed, once.
+   *
+   * The `@send` handler used to read `sent_at`, then draft and send -- and the
+   * gap between the read and the write is a thread fetch plus a model call,
+   * which is seconds. Two admins typing `@send` in that window are two
+   * different Slack events with two different ids, so the retry ledger does
+   * not see them as duplicates and both passed the check. The WHERE clause is
+   * what makes "one text per task" true rather than likely: only the caller
+   * that gets a row back is allowed to send.
+   *
+   * Claimed before the slow work rather than after it, so the loser of the
+   * race finds the task already taken instead of both drafting in parallel.
+   * `releaseTaskSend` is the other half -- a claim that did not become a text
+   * has to go back, or the task could never be sent again.
+   */
+  async claimTaskSend(id, at) {
+    const res = await getPool().query(
+      `UPDATE sms_tasks SET sent_at = $2, updated_at = $2
+        WHERE id = $1 AND sent_at IS NULL RETURNING *`,
+      [id, at]
+    );
+    return rowToCamel(res.rows[0], 'sms_tasks') || null;
+  },
+  /** Hand back a send claim that failed, so `@send` can be tried again. */
+  async releaseTaskSend(id) {
+    const res = await getPool().query(
+      `UPDATE sms_tasks SET sent_at = NULL, updated_at = $2 WHERE id = $1 RETURNING *`,
+      [id, new Date().toISOString()]
+    );
+    return rowToCamel(res.rows[0], 'sms_tasks') || null;
+  },
 };
 
 const firestore = DB_DRIVER === 'firestore' ? require('./firestore') : null;

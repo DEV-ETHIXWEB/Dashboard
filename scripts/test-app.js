@@ -1507,6 +1507,13 @@ async function main() {
       const text = await res.text();
       let data = null;
       try { data = JSON.parse(text); } catch { data = text; }
+
+      // The route answers Slack the moment it has claimed the event id and
+      // runs the command afterwards, off the request -- Slack's three-second
+      // deadline cannot accommodate a draft-and-send. So every assertion about
+      // what an event *did* has to wait for the work, not just the reply.
+      await require('../routes/slackEvents').whenIdle();
+
       return { status: res.status, data };
     }
 
@@ -1722,6 +1729,115 @@ async function main() {
     check('and explains how to send your own words instead',
       /@send <text>/.test(lastPost()?.text || ''), lastPost()?.text);
     check('the task is still open after a declined draft', (await taskFor(convoB.id))?.state === 'ASSIGNED');
+
+    // Test 9c -- Slack is answered before the work runs.
+    //
+    // Slack retires a Request URL that misses its three-second deadline, and a
+    // bare @send cannot meet it. So the route claims the event id, replies, and
+    // works afterwards. Held to a much tighter bound than three seconds here
+    // because the reply must not be waiting on anything at all.
+    {
+      const raw = JSON.stringify({
+        type: 'event_callback',
+        event_id: 'EvAckSpeed',
+        event: {
+          type: 'message', channel: 'CSMSBRIDGE', user: 'U_STAFF_1',
+          text: 'just talking, not a command', ts: '1700000900.000100',
+          thread_ts: convoB.slackThreadTs,
+        },
+      });
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const startedAt = Date.now();
+      const res = await fetch(`${base}/api/slack/events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Slack-Signature': slackSignature(raw, timestamp),
+          'X-Slack-Request-Timestamp': timestamp,
+        },
+        body: raw,
+      });
+      const ackMs = Date.now() - startedAt;
+      check('Slack is acknowledged with a 200', res.status === 200, res.status);
+      check('and acknowledged promptly, not after the work', ackMs < 1500, `${ackMs}ms`);
+      await require('../routes/slackEvents').whenIdle();
+    }
+
+    // Test 9d -- a channel configured by name still matches inbound events.
+    //
+    // chat.postMessage takes a name or an id; an event only ever carries an id.
+    // Configuring the name used to post cards fine and then silently drop every
+    // command typed in their threads, because the raw setting was compared
+    // against event.channel. The resolver is what closes that.
+    {
+      const tasksModule = require('../utils/smsTasks');
+      process.env.SMS_SLACK_CHANNEL = '#client-sms';
+      const resolved = await tasksModule.channelId();
+      check('a channel written as a name resolves to its id', resolved === 'CSMSBRIDGE', resolved);
+
+      process.env.SMS_SLACK_CHANNEL = 'CSMSBRIDGE';
+      check('and an id is passed through untouched',
+        (await tasksModule.channelId()) === 'CSMSBRIDGE');
+
+      process.env.SMS_SLACK_CHANNEL = '#no-such-channel';
+      check('a name matching nothing resolves to nothing rather than a wrong guess',
+        (await tasksModule.channelId()) === null);
+      process.env.SMS_SLACK_CHANNEL = 'CSMSBRIDGE';
+    }
+
+    // Test 9e -- two admins typing @send at the same moment send one text.
+    //
+    // Two Slack events, two ids, so the retry ledger has no reason to connect
+    // them; and the gap between reading sent_at and writing it is a thread
+    // fetch plus a draft. Only the claim makes this one text.
+    {
+      const customerC = '+15551230009';
+      r = await postTwilioWebhook({
+        MessageSid: 'SMinboundRace', From: customerC, To: process.env.TWILIO_NUMBER,
+        Body: 'Two people are about to close this at once.', NumMedia: '0',
+      });
+      check('the race fixture texted in cleanly', r.status === 200, r.status);
+
+      const raceConvo = (await db.filter('sms_conversations', (c) => c.phoneNumber === customerC))[0];
+      const convoC = raceConvo;
+      await threadSay(raceConvo.slackThreadTs, '@accept', 'EvRaceAccept');
+      await threadSay(raceConvo.slackThreadTs, '@assign <@U0DEV0001>', 'EvRaceAssign');
+      const raceTask = await taskFor(convoC.id);
+      check('the race fixture is assigned and ready to send', raceTask?.state === 'ASSIGNED', raceTask?.state);
+
+      const sendsBeforeRace = twilioSends.length;
+      await Promise.all([
+        threadSay(raceConvo.slackThreadTs, '@send First admin closing this.', 'EvRaceSend1'),
+        threadSay(raceConvo.slackThreadTs, '@send Second admin closing this.', 'EvRaceSend2'),
+      ]);
+      await require('../routes/slackEvents').whenIdle();
+
+      check('two simultaneous @sends produce exactly one text',
+        twilioSends.length === sendsBeforeRace + 1, twilioSends.length - sendsBeforeRace);
+      check('and the loser is told it did nothing',
+        slackPosts.some((p) => /already sending/i.test(p.text || '')),
+        slackPosts.slice(-4).map((p) => p.text).join(' | '));
+      check('the task closed once', (await taskFor(convoC.id))?.state === 'CLOSED');
+    }
+
+    // Test 9f -- an id that is already taken is a conflict, on either driver.
+    //
+    // The Slack retry ledger is built on a failed insert, not on a returned
+    // value. The Firestore driver used to `set` here, which overwrote the
+    // ledger row and let the retry go on to send a second text.
+    {
+      const ledgerId = `EvLedger-${Date.now()}`;
+      await db.insert('slack_events', { id: ledgerId, processedAt: new Date().toISOString() });
+      let conflict = null;
+      try {
+        await db.insert('slack_events', { id: ledgerId, processedAt: new Date().toISOString() });
+      } catch (err) {
+        conflict = err;
+      }
+      check('inserting a duplicate id throws', Boolean(conflict), 'no error thrown');
+      check('and reports the unique-violation code the retry guard checks for',
+        conflict?.code === '23505', conflict?.code);
+    }
 
     // Test 10 -- a Slack outage during inbound intake must not lose the SMS
     const realNotifySlack = require('../utils/slack').notifySlack;

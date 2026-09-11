@@ -167,46 +167,80 @@ async function handleSend(task, command, client) {
     return say(task, 'There is no phone number on this task, so there is nowhere to send.');
   }
 
-  let text = command.override;
+  // Take the task's one outbound text before doing anything slow with it.
+  //
+  // The check above is a courtesy, not the guarantee -- everything between it
+  // and the send is seconds of thread-reading and drafting, and two admins
+  // typing `@send` inside that window arrive as two separate Slack events that
+  // the retry ledger has no reason to connect. db.claimTaskSend is the
+  // guarantee: exactly one caller gets a row back, and only that caller sends.
+  const claimed = await db.claimTaskSend(task.id, new Date().toISOString());
+  if (!claimed) {
+    return say(task, 'Somebody else is already sending on this task, so this `@send` did nothing.');
+  }
 
-  if (!text) {
-    // Read the thread fresh: the notes this draft is built from were usually
-    // typed seconds ago, and a cached copy would miss exactly those.
-    let notes = '';
+  // The other half of the claim. Anything that ends without a text having gone
+  // out has to give the claim back, or `@send` could never be tried again.
+  let released = false;
+  const release = async () => {
+    if (released) return;
+    released = true;
     try {
-      const replies = await slack.fetchMessageReplies(task.slackChannelId, task.slackMessageTs, { fresh: true });
-      notes = completion.notesFromThread(replies);
+      await db.releaseTaskSend(task.id);
     } catch (err) {
-      console.error(`Could not read the thread for task ${task.id}:`, err.message);
+      console.error(`Could not release the send claim on task ${task.id}:`, err.message);
+    }
+  };
+
+  try {
+    let text = command.override;
+
+    if (!text) {
+      // Read the thread fresh: the notes this draft is built from were usually
+      // typed seconds ago, and a cached copy would miss exactly those.
+      let notes = '';
+      try {
+        const replies = await slack.fetchMessageReplies(task.slackChannelId, task.slackMessageTs, { fresh: true });
+        notes = completion.notesFromThread(replies);
+      } catch (err) {
+        console.error(`Could not read the thread for task ${task.id}:`, err.message);
+      }
+
+      const drafted = await completion.draft({
+        originalBody: task.originalBody,
+        summary: task.summary,
+        notes,
+      });
+
+      if (drafted.error) {
+        await release();
+        return say(task, drafted.error);
+      }
+      text = drafted.message;
+
+      await say(task, `*Draft:*\n> ${text}`);
     }
 
-    const drafted = await completion.draft({
-      originalBody: task.originalBody,
-      summary: task.summary,
-      notes,
-    });
+    const delivered = await sendToCustomer(task, text);
 
-    if (drafted.error) return say(task, drafted.error);
-    text = drafted.message;
+    if (!delivered) {
+      // Deliberately still open, and still sendable. See sendToCustomer.
+      await release();
+      return say(task, '⚠️ That did not send -- the attempt is recorded in the dashboard and the task is still open. Check the delivery error there, then try `@send` again.');
+    }
 
-    await say(task, `*Draft:*\n> ${text}`);
+    await tasks.transition(task, {
+      state: 'CLOSED',
+      sentBody: text,
+      sentAt: new Date().toISOString(),
+      closedAt: new Date().toISOString(),
+    }, client);
+
+    return say(task, `✅ Sent to ${task.phoneNumber}:\n> ${text}`);
+  } catch (err) {
+    await release();
+    throw err;
   }
-
-  const delivered = await sendToCustomer(task, text);
-
-  if (!delivered) {
-    // Deliberately still open. See sendToCustomer.
-    return say(task, '⚠️ That did not send -- the attempt is recorded in the dashboard and the task is still open. Check the delivery error there, then try `@send` again.');
-  }
-
-  await tasks.transition(task, {
-    state: 'CLOSED',
-    sentBody: text,
-    sentAt: new Date().toISOString(),
-    closedAt: new Date().toISOString(),
-  }, client);
-
-  return say(task, `✅ Sent to ${task.phoneNumber}:\n> ${text}`);
 }
 
 /**
@@ -231,8 +265,10 @@ async function handleMessageEvent(event) {
 
   // Scoped to the one channel this bridge posts cards into, so a thread_ts that
   // happens to collide with something else in the workspace can never be
-  // mistaken for a task.
-  const smsChannel = process.env.SMS_SLACK_CHANNEL || process.env.SLACK_NOTIFICATION_CHANNEL;
+  // mistaken for a task. `event.channel` is always an id, so the thing it is
+  // compared against has to be one too -- which is the whole reason
+  // tasks.channelId exists rather than an env read inline here.
+  const smsChannel = await tasks.channelId();
   if (!smsChannel || event.channel !== smsChannel) return;
 
   // Ordinary conversation. This is the common case in a working thread and the
@@ -254,6 +290,53 @@ async function handleMessageEvent(event) {
   if (command.name === 'accept') await handleAccept(task, event, client);
   else if (command.name === 'assign') await handleAssign(task, command, event, client);
   else if (command.name === 'send') await handleSend(task, command, client);
+}
+
+// --- acknowledging, then working -------------------------------------------
+
+/**
+ * Work still running after this route already answered Slack.
+ *
+ * Slack wants a response within three seconds and retires a Request URL that
+ * keeps missing it -- enough failures and event delivery is switched off for
+ * the whole app. A bare `@send` cannot meet that: it fetches the thread, spends
+ * up to ten seconds drafting, then calls Twilio. So the 200 goes out on the
+ * event id alone and the command runs here, off the request.
+ *
+ * Nothing is lost by answering early. The 200 never meant "this worked" -- it
+ * means "this arrived" -- and the event id was already written to the ledger
+ * before the reply, so a retry Slack sends anyway is still recognised as a
+ * duplicate and dropped.
+ */
+const inFlight = new Set();
+
+function runDetached(work) {
+  const running = Promise.resolve()
+    .then(work)
+    .catch((err) => {
+      // Nowhere to report this to but the log: the request is long since
+      // answered, and Slack retrying a command that half-ran would be worse
+      // than the failure sitting here.
+      console.error('Could not process a Slack message event:', err.message);
+    })
+    .finally(() => inFlight.delete(running));
+
+  inFlight.add(running);
+  return running;
+}
+
+/**
+ * Settle once nothing is still being processed.
+ *
+ * For tests, which post an event over HTTP and then assert on what it did.
+ * Without this they would be racing the work they are checking. Loops because
+ * a handler can start more work -- a card edit after a send -- while being
+ * awaited.
+ */
+async function whenIdle() {
+  while (inFlight.size > 0) {
+    await Promise.all([...inFlight]);
+  }
 }
 
 /**
@@ -306,15 +389,11 @@ async function eventsHandler(req, res) {
     }
   }
 
-  try {
-    await handleMessageEvent(payload.event);
-  } catch (err) {
-    // 200 either way: it only means "received", and Slack retrying a command
-    // that half-ran is worse than the failure being in the log alone.
-    console.error('Could not process a Slack message event:', err.message);
-  }
+  // Scheduled, not awaited -- see runDetached. The work begins on the next
+  // microtask, which is after this handler has finished replying.
+  runDetached(() => handleMessageEvent(payload.event));
 
   return res.status(200).end();
 }
 
-module.exports = { eventsHandler, handleMessageEvent, parseCommand };
+module.exports = { eventsHandler, handleMessageEvent, parseCommand, whenIdle };
