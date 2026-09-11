@@ -65,6 +65,24 @@ async function findByEmail(email) {
 async function plan(emails) {
   if (!emails.length) throw new OffboardError('Which accounts? Pass one or more email addresses.');
 
+  // `npm run` eats --reason and --yes as flags of its own before the script
+  // sees them, which drops the reason's value into the target list as a bare
+  // word. Left unchecked that word becomes an account to delete, and the only
+  // thing standing between it and a real address is that it happened not to
+  // match one. A target that is not an address is a mangled command line, not
+  // a missing account, and saying so is more use than "no account found".
+  const notEmails = emails.filter((e) => !String(e).includes('@'));
+  if (notEmails.length) {
+    throw new OffboardError(
+      `Not an email address: ${notEmails.map((e) => JSON.stringify(e)).join(', ')}.\n\n`
+      + 'This usually means npm swallowed --reason or --yes before the script saw them. '
+      + 'Call node directly instead:\n\n'
+      + '  node --env-file-if-exists=.env scripts/offboard.js remove <email> [<email>...] '
+      + '--reason "..." --yes\n\n'
+      + 'Nothing has been changed.',
+    );
+  }
+
   const seen = new Set();
   const targets = [];
   for (const email of emails) {
