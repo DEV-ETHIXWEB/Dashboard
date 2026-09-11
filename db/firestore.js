@@ -1,7 +1,7 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
-const { toSnake, toCamel, isWritableField } = require('./schemas');
+const { toSnake, toCamel, isWritableField, uniqueFields } = require('./schemas');
 
 let db = null;
 
@@ -73,6 +73,112 @@ function asUniqueViolation(err, collection, id) {
   return conflict;
 }
 
+// --- unique fields ---------------------------------------------------------
+
+/**
+ * How Firestore is made to enforce a UNIQUE column.
+ *
+ * Postgres rejects the second row itself. Firestore has no such thing -- a
+ * field is a field, and duplicates are simply allowed -- so uniqueness has to
+ * be built out of the one guarantee it does offer: a document id can only be
+ * created once. Each unique value is therefore *reserved* by creating a
+ * document whose id encodes it, in the same atomic write as the row, and the
+ * reservation failing is what makes the row fail.
+ *
+ * This is not a tidiness feature. Several callers in this codebase treat a
+ * rejected insert as a guarantee and act on it -- routes/sms.js reads it as
+ * "Twilio is re-sending a text we already have", utils/smsConversations.js as
+ * "somebody else just created this conversation". Without the reservations
+ * those callers were silently wrong on this driver, and a Twilio retry became a
+ * second copy of a customer's message.
+ *
+ * Reservations live in their own collection so nothing iterating real data ever
+ * trips over them, and they are removed when the row that owns them is deleted
+ * or changes the value.
+ */
+const UNIQUE_KEYS = '_unique_keys';
+
+/** A document id for one (collection, field, value). Slashes are not allowed in ids. */
+function reservationId(collection, field, value) {
+  return `${collection}:${toSnake(field)}:${Buffer.from(String(value), 'utf8').toString('base64url')}`;
+}
+
+/**
+ * The reservations a document needs, for the values it actually carries.
+ *
+ * Null and undefined reserve nothing, matching Postgres: a UNIQUE column allows
+ * any number of NULLs, because unknown is not a value two rows can share.
+ */
+function reservationsFor(collection, data) {
+  const wanted = [];
+  for (const field of uniqueFields(collection)) {
+    const value = data[field];
+    if (value === null || value === undefined || value === '') continue;
+    wanted.push({ field, value, id: reservationId(collection, field, value) });
+  }
+  return wanted;
+}
+
+function reservationRef(id) {
+  return getDb().collection(UNIQUE_KEYS).doc(id);
+}
+
+/** The unique-violation error a caller expects, naming the field that clashed. */
+function fieldConflict(collection, field, value) {
+  const conflict = new Error(`${collection}.${toSnake(field)} already has the value ${value}.`);
+  conflict.code = PG_UNIQUE_VIOLATION;
+  conflict.constraint = `${collection}_${toSnake(field)}_key`;
+  return conflict;
+}
+
+/**
+ * Whether a reservation is still doing a job, or is debris.
+ *
+ * A process that dies between committing a row and releasing its old
+ * reservation leaves a value claimed by nobody -- and a claim nobody owns would
+ * block that email, or that phone number, forever. So a blocked write asks one
+ * question before giving up: does the document this points at still exist, and
+ * does it still carry this value? If not, the claim is stale and gets cleared.
+ */
+async function reservationIsLive(held) {
+  const doc = await reservationRef(held.id).get();
+  if (!doc.exists) return false;
+
+  const { collection, docId, field } = doc.data() || {};
+  if (!collection || !docId) return false;
+
+  const owner = await getDb().collection(collection).doc(String(docId)).get();
+  if (!owner.exists) return false;
+
+  const current = owner.data()?.[toCamel(field || '')];
+  return String(current ?? '') === String(held.value);
+}
+
+/** Drop reservations, best-effort: a leftover one is reclaimed by the check above. */
+async function releaseReservations(ids) {
+  if (ids.length === 0) return;
+  const client = getDb();
+  const batch = client.batch();
+  for (const id of ids) batch.delete(reservationRef(id));
+  try {
+    await batch.commit();
+  } catch (err) {
+    console.error('[firestore] could not release unique-key reservations:', err.message);
+  }
+}
+
+/**
+ * Read the reservations a set of documents holds, so deleting them frees the
+ * values again. Without this a deleted user's email could never be reused.
+ */
+function reservationIdsForRows(collection, rows) {
+  const ids = [];
+  for (const row of rows) {
+    for (const held of reservationsFor(collection, row)) ids.push(held.id);
+  }
+  return ids;
+}
+
 const firestoreDb = {
   async all(collection) {
     const snap = await getDb().collection(collection).get();
@@ -113,11 +219,48 @@ const firestoreDb = {
     // quietly overwrote its own ledger row and the retry went on to send the
     // customer a second text. Same for the Twilio provider_sid guard in
     // routes/sms.js and the conversation guard in utils/smsConversations.js.
+    const wanted = reservationsFor(collection, data);
+
+    // One batch, so the row and every value it claims land together or not at
+    // all. A `create` on an id that is taken fails the whole commit, which is
+    // exactly the behaviour a UNIQUE column has in Postgres.
+    const client = getDb();
+    const write = () => {
+      const batch = client.batch();
+      batch.create(client.collection(collection).doc(id), data);
+      for (const held of wanted) {
+        batch.create(reservationRef(held.id), {
+          collection, field: toSnake(held.field), value: String(held.value), docId: id,
+        });
+      }
+      return batch.commit();
+    };
+
     try {
-      await getDb().collection(collection).doc(id).create(data);
+      await write();
     } catch (err) {
-      throw asUniqueViolation(err, collection, id);
+      if (!ALREADY_EXISTS.has(err?.code)) throw err;
+
+      // Which of them clashed? Worth the extra reads: "that email is taken" and
+      // "that id exists" send the caller to completely different places. And a
+      // claim whose owner is gone is debris from an interrupted write, not a
+      // conflict -- clear it and try once more.
+      const stale = [];
+      for (const held of wanted) {
+        if (await reservationIsLive(held)) throw fieldConflict(collection, held.field, held.value);
+        stale.push(held.id);
+      }
+
+      if (stale.length === 0) throw asUniqueViolation(err, collection, id);
+
+      await releaseReservations(stale);
+      try {
+        await write();
+      } catch (retryErr) {
+        throw asUniqueViolation(retryErr, collection, id);
+      }
     }
+
     return { id, ...data };
   },
 
@@ -128,7 +271,45 @@ const firestoreDb = {
 
     const existing = await ref.get();
     if (!existing.exists) return null;
-    if (Object.keys(data).length > 0) await ref.update(data);
+
+    if (Object.keys(data).length > 0) {
+      // A unique value being changed has to move its reservation with it --
+      // claim the new one, release the old. Skipped entirely when the patch
+      // touches no unique field, which is almost every update.
+      const before = docToObj(existing);
+      const moving = reservationsFor(collection, data).filter(
+        (held) => String(before[held.field] ?? '') !== String(held.value),
+      );
+
+      if (moving.length === 0) {
+        await ref.update(data);
+      } else {
+        const client = getDb();
+        const batch = client.batch();
+        batch.update(ref, data);
+        for (const held of moving) {
+          batch.create(reservationRef(held.id), {
+            collection, field: toSnake(held.field), value: String(held.value), docId: String(id),
+          });
+        }
+
+        try {
+          await batch.commit();
+        } catch (err) {
+          if (!ALREADY_EXISTS.has(err?.code)) throw err;
+          const clash = moving.find(() => true);
+          throw fieldConflict(collection, clash.field, clash.value);
+        }
+
+        // Only once the new claim is safely committed. The other order would
+        // free a value while the row that owns it still carries it.
+        await releaseReservations(
+          moving
+            .filter((held) => before[held.field])
+            .map((held) => reservationId(collection, held.field, before[held.field])),
+        );
+      }
+    }
 
     const after = await ref.get();
     return docToObj(after);
@@ -138,13 +319,19 @@ const firestoreDb = {
     const ref = getDb().collection(collection).doc(String(id));
     const existing = await ref.get();
     if (!existing.exists) return false;
+    const held = reservationIdsForRows(collection, [docToObj(existing)]);
     await ref.delete();
+    // After the row is gone: a reservation outliving its row blocks the value
+    // forever, which is worse than one that is briefly free.
+    await releaseReservations(held);
     return true;
   },
 
   async removeWhere(collection, predicate) {
     const rows = await firestoreDb.filter(collection, predicate);
+    const held = reservationIdsForRows(collection, rows);
     await deleteAll(collection, rows.map((r) => r.id));
+    await releaseReservations(held);
     return rows.length;
   },
 
@@ -308,4 +495,13 @@ async function initSchema() {
   await client.collection('users').limit(1).get();
 }
 
-module.exports = { db: firestoreDb, initSchema, getDb };
+module.exports = {
+  db: firestoreDb,
+  initSchema,
+  getDb,
+  // The pure half of the uniqueness machinery, exported so it can be tested
+  // without a Firestore to talk to. Everything else here needs a connection.
+  UNIQUE_KEYS,
+  reservationId,
+  reservationsFor,
+};

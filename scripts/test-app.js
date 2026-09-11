@@ -2149,6 +2149,60 @@ async function main() {
       check('and it comes back with the checks', Array.isArray(r.data.checks), r.text.slice(0, 160));
     }
 
+    // Test 9m -- Firestore has no UNIQUE columns, so it is given some.
+    //
+    // Postgres enforces these itself; Firestore cannot, and several callers in
+    // this codebase treat a rejected insert as a guarantee rather than an error.
+    // The test that matters most is the drift one: a UNIQUE column added to the
+    // Postgres schema and forgotten here is silently unenforced on the other
+    // driver, which is exactly how provider_sid came to be unprotected.
+    {
+      const fs = require('fs');
+      const schemas = require('../db/schemas');
+      const firestore = require('../db/firestore');
+
+      const setupSql = fs.readFileSync(require('path').join(__dirname, '..', 'db', 'setup.js'), 'utf8');
+      const declared = {};
+      for (const block of setupSql.matchAll(/CREATE TABLE IF NOT EXISTS (\w+) \(([\s\S]*?)\)`/g)) {
+        const [, table, columns] = block;
+        for (const col of columns.matchAll(/(\w+) +[A-Z]+(?:\(\d+\))? +UNIQUE/g)) {
+          (declared[table] ||= []).push(schemas.toCamel(col[1]));
+        }
+      }
+
+      const missing = [];
+      for (const [table, columns] of Object.entries(declared)) {
+        for (const column of columns) {
+          if (!schemas.uniqueFields(table).includes(column)) missing.push(`${table}.${column}`);
+        }
+      }
+
+      check('every UNIQUE column in the Postgres schema is declared for Firestore too',
+        missing.length === 0, missing.join(', '));
+      check('and the one the Twilio retry guard depends on is among them',
+        schemas.uniqueFields('sms_messages').includes('providerSid'));
+      check('as is the one the conversation guard depends on',
+        schemas.uniqueFields('sms_conversations').includes('phoneNumber'));
+
+      // A value is reserved by encoding it into a document id, which is the
+      // only uniqueness Firestore actually offers.
+      const a = firestore.reservationId('sms_messages', 'providerSid', 'SM123');
+      const b = firestore.reservationId('sms_messages', 'providerSid', 'SM124');
+      check('two values reserve two different ids', a !== b);
+      check('the same value reserves the same id every time',
+        a === firestore.reservationId('sms_messages', 'providerSid', 'SM123'));
+      check('and the id is safe to use as a Firestore document id',
+        !/[/\s]/.test(a) && a.length < 1500, a);
+
+      // NULL is not a value two rows can share -- same as Postgres.
+      check('a null unique field reserves nothing',
+        firestore.reservationsFor('sms_messages', { providerSid: null }).length === 0);
+      check('an absent one reserves nothing either',
+        firestore.reservationsFor('sms_messages', { body: 'hi' }).length === 0);
+      check('but a real one does',
+        firestore.reservationsFor('sms_messages', { providerSid: 'SM9' }).length === 1);
+    }
+
     // Test 10 -- a Slack outage during inbound intake must not lose the SMS
     const realNotifySlack = require('../utils/slack').notifySlack;
     require('../utils/slack').notifySlack = async () => { throw new Error('Slack is down'); };

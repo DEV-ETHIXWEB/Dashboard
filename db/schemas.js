@@ -218,6 +218,45 @@ const SCHEMAS = {
   slack_events: ['id', 'processed_at'],
 };
 
+/**
+ * Columns that may hold a given value only once, in camelCase.
+ *
+ * Postgres already knows this -- every one of these is a UNIQUE column in
+ * db/setup.js, and the constraint is enforced by the database whether the
+ * application remembers it or not. Firestore has no equivalent: a field is just
+ * a field, and two documents may carry the same one happily. So the list is
+ * repeated here, where both drivers can read it, and db/firestore.js reserves
+ * each value as it writes.
+ *
+ * These are not decorative. Several of them are load-bearing guarantees that
+ * callers rely on by catching the *failure* of a write:
+ *
+ *   sms_messages.provider_sid    Twilio re-sends a text it is unsure landed;
+ *                                the rejected insert is how routes/sms.js knows
+ *                                it is a repeat and not a second text.
+ *   sms_conversations.phone_number  two texts from one customer arriving at the
+ *                                same moment must land in one conversation.
+ *   users.email                  two accounts on one address is an authentication
+ *                                problem, not an untidy list.
+ *   payments.stripe_object_id    Stripe retries webhooks; this is what stops one
+ *                                payment being recorded twice.
+ *   billing.client_id            one billing record per client, by definition.
+ *   user_avatars.user_id         one picture per account -- a replacement is an
+ *                                upsert, not a second row to choose between.
+ */
+const UNIQUE_FIELDS = {
+  users: ['email'],
+  billing: ['clientId'],
+  payments: ['stripeObjectId'],
+  user_avatars: ['userId'],
+  sms_messages: ['providerSid'],
+  sms_conversations: ['phoneNumber'],
+};
+
+function uniqueFields(collection) {
+  return UNIQUE_FIELDS[collection] || [];
+}
+
 function toSnake(str) { return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`); }
 function toCamel(str) { return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase()); }
 
@@ -241,4 +280,4 @@ function isWritableField(collection, key) {
   return key === toCamel(snakeKey);
 }
 
-module.exports = { SCHEMAS, toSnake, toCamel, isWritableField };
+module.exports = { SCHEMAS, UNIQUE_FIELDS, uniqueFields, toSnake, toCamel, isWritableField };
