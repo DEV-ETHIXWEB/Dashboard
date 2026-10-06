@@ -9,6 +9,9 @@
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/((?!api/).*)", "destination": "/public/index.html" }
   ],
+  "crons": [
+    { "path": "/api/outbox/sweep", "schedule": "*/2 * * * *" }
+  ],
   "headers": [
     {
       "source": "/assets/(.*)",

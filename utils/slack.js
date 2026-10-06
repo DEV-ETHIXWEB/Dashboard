@@ -699,15 +699,48 @@ async function resolveNotificationChannel(channelId) {
  */
 async function notifySlack(text, channelId) {
   if (!isEnabled()) return null;
+  let targetChannel = null;
   try {
-    const targetChannel = await resolveNotificationChannel(channelId);
+    targetChannel = await resolveNotificationChannel(channelId);
     if (!targetChannel) return null;
     const result = await postMessage({ channelId: targetChannel, text });
     // The id Slack posted to, not the string we asked with -- see postMessage.
     return { channelId: result.channelId || targetChannel, ts: result.ts };
   } catch (err) {
-    // Silent fail for event notifications so application flow is not interrupted
-    console.error('Slack event notification failed:', err.message);
+    // Posted inline rather than queued, because the `ts` this returns is the
+    // thread every later update on the same ticket hangs off: a caller that
+    // gets null instead cannot thread anything, so there is nothing to be
+    // gained by making the happy path asynchronous.
+    //
+    // The failure is a different matter. This used to log and return null,
+    // and the notification was simply gone. Now it goes in the queue, so a
+    // Slack outage costs a delay rather than the message. The retry has no
+    // thread to join -- nothing can, the first post never happened -- so it
+    // arrives as its own message, which beats not arriving.
+    console.error('Slack event notification failed, queueing it instead:', err.message);
+    await queueSlackMessage({ channelId: targetChannel, text });
+    return null;
+  }
+}
+
+/**
+ * Hand a Slack post to the outbound queue.
+ *
+ * Shared by `notifySlack` and `replyInThread`, and best-effort on purpose: if
+ * even queueing fails there is nothing further to try, and the caller is in
+ * the middle of something that must not be taken down by Slack being unwell.
+ */
+async function queueSlackMessage({ channelId, text, threadTs = null }) {
+  if (!channelId || !text) return null;
+  try {
+    return await require('./outbox').enqueue({
+      channel: 'slack',
+      payload: { channelId, text, threadTs },
+      entity: 'slack_channel',
+      entityId: channelId,
+    });
+  } catch (err) {
+    console.error('Could not queue the Slack message either:', err.message);
     return null;
   }
 }
@@ -722,7 +755,10 @@ async function replyInThread({ channelId, threadTs, text }) {
     const result = await postMessage({ channelId, text, threadTs });
     return { channelId: result.channelId || channelId, ts: result.ts };
   } catch (err) {
-    console.error('Slack thread reply failed:', err.message);
+    // This one retries perfectly: the thread it belongs to is known up front,
+    // so a queued reply lands exactly where it would have, just later.
+    console.error('Slack thread reply failed, queueing it instead:', err.message);
+    await queueSlackMessage({ channelId, text, threadTs });
     return null;
   }
 }

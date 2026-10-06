@@ -182,10 +182,51 @@ function statusCallbackUrl() {
   return derived === inbound.trim() ? null : derived;
 }
 
-async function sendSms({ to, body }) {
-  if (!outboundEnabled()) return null;
-  if (!isEnabled() || !fromNumber()) return null;
-  if (!to || !body || !body.trim()) return null;
+/**
+ * Twilio error codes that no retry will ever get past.
+ *
+ * All of them are about the message or the account rather than the moment:
+ * a number that is not a mobile, a recipient who has replied STOP, a
+ * registration that has not cleared. Retrying any of these for nine hours
+ * produces nine hours of identical errors and one message that was never
+ * going to arrive, so the queue is told to stop and raise it instead.
+ */
+const PERMANENT_CODES = new Set([
+  21211, // 'To' is not a valid phone number
+  21212, // 'From' is not a valid phone number
+  21408, // not permitted to send to this region
+  21610, // the recipient has unsubscribed (STOP)
+  21614, // 'To' is not a mobile number
+  30003, // the handset is unreachable, permanently
+  30005, // unknown destination handset
+  30006, // landline, or unreachable carrier
+  30034, // the number is not registered for A2P 10DLC
+]);
+
+/**
+ * Send one SMS and say what happened.
+ *
+ * `sendSms` below returns a SID or null, which is all its callers ever needed
+ * and all that fits in a column. It is not enough for utils/outbox.js: a
+ * message that failed because Twilio could not be reached should be tried
+ * again in a minute, and one that failed because the recipient has replied
+ * STOP must never be tried again at all. Both arrive as `null` there, so the
+ * queue would either retry nothing or retry everything.
+ *
+ * So this is the full answer, and `sendSms` is the thin wrapper over it.
+ */
+async function sendSmsResult({ to, body }) {
+  // All three of these are the caller asking for something impossible, so the
+  // queue should not hold the message open waiting for them to change.
+  if (!outboundEnabled()) {
+    return { ok: false, permanent: true, error: 'Outbound SMS is switched off (set SMS_OUTBOUND_ENABLED=on).' };
+  }
+  if (!isEnabled() || !fromNumber()) {
+    return { ok: false, permanent: true, error: 'Twilio is not configured for sending.' };
+  }
+  if (!to || !body || !body.trim()) {
+    return { ok: false, permanent: true, error: 'A text needs a recipient and a body.' };
+  }
 
   const form = new URLSearchParams({ To: to, From: fromNumber(), Body: body.trim().slice(0, 1600) });
 
@@ -212,14 +253,26 @@ async function sendSms({ to, body }) {
       const hint = data.code === 30034
         ? ' The number is not registered for A2P 10DLC yet, so Twilio will refuse every send until that clears.'
         : '';
-      console.error(`Twilio refused an outbound message${code}: ${data.message || res.status}.${hint}`);
-      return null;
+      const error = `Twilio refused an outbound message${code}: ${data.message || res.status}.${hint}`;
+      console.error(error);
+      // A 4xx is Twilio's considered opinion about this message; a 5xx is
+      // Twilio having a bad minute, and that one is worth trying again.
+      const permanent = PERMANENT_CODES.has(Number(data.code)) || (res.status >= 400 && res.status < 500);
+      return { ok: false, permanent, error, code: data.code || null };
     }
-    return data.sid || null;
+    return { ok: true, sid: data.sid || null };
   } catch (err) {
-    console.error('Could not reach Twilio to send a message:', err.message);
-    return null;
+    // Never reached Twilio at all, so nothing was sent and nothing is known.
+    // Always worth another go.
+    const error = `Could not reach Twilio to send a message: ${err.message}`;
+    console.error(error);
+    return { ok: false, permanent: false, error };
   }
+}
+
+async function sendSms({ to, body }) {
+  const result = await sendSmsResult({ to, body });
+  return result.ok ? (result.sid || null) : null;
 }
 
 module.exports = {
@@ -231,5 +284,6 @@ module.exports = {
   normalizePhone,
   phoneKey,
   sendSms,
+  sendSmsResult,
   statusCallbackUrl,
 };

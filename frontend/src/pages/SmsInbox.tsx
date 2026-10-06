@@ -31,7 +31,13 @@ interface SmsMessage {
   toNumber: string | null;
   body: string;
   status: Status;
-  deliveryStatus: "sent" | "failed" | null;
+  // Twilio's own vocabulary for an outbound message, which the status callback
+  // in routes/sms.js writes as it arrives. "queued" is also written by the app
+  // itself when a send could not reach Twilio and went into the outbound queue
+  // instead -- see utils/outbox.js. Null on every inbound row.
+  deliveryStatus:
+    | "queued" | "accepted" | "scheduled" | "sending"
+    | "sent" | "delivered" | "failed" | "undelivered" | null;
   deliveryError: string | null;
   createdAt: string;
   clientId: string | null;
@@ -70,6 +76,19 @@ const PRIORITY_TONE: Record<string, string> = {
   Urgent: "bg-destructive/10 text-destructive ring-destructive/20",
   High: "bg-amber-500/10 text-amber-600 ring-amber-500/20 dark:text-amber-400",
 };
+
+/**
+ * Whether this is Twilio's last word, and the word is no.
+ *
+ * "undelivered" means the carrier gave up and "failed" means it was refused;
+ * both are final and both deserve the red pill. Only "failed" used to be
+ * checked, so a text the carrier could not deliver showed as though it had
+ * gone -- the one case where the customer is most likely to say they never
+ * got it.
+ */
+function isFailedDelivery(status: SmsMessage["deliveryStatus"]): boolean {
+  return status === "failed" || status === "undelivered";
+}
 
 function Pill({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
@@ -155,10 +174,18 @@ export default function SmsInbox() {
 
   const sendReply = useMutation({
     mutationFn: ({ id, body }: { id: string; body: string }) =>
-      api<{ message: SmsMessage }>("POST", `/sms/${id}/reply`, { body }),
-    onSuccess: () => {
+      api<{ message: SmsMessage; queued?: boolean; notice?: string }>("POST", `/sms/${id}/reply`, { body }),
+    onSuccess: (data) => {
       closeReply();
       qc.invalidateQueries({ queryKey: ["sms"] });
+      // Twilio could not be reached, so the server put the reply in the
+      // outbound queue and it will go out on its own. Saying "Reply sent"
+      // here would be a lie the thread itself contradicts -- the row reads
+      // as queued until it lands.
+      if (data?.queued) {
+        toast.success(data.notice || "Twilio could not be reached. The reply is queued and will send automatically.");
+        return;
+      }
       toast.success("Reply sent.");
     },
     // Covers both a refusal and the 502 the server returns when Twilio would not
@@ -415,9 +442,17 @@ export default function SmsInbox() {
                 <Pill className={PRIORITY_TONE[m.priority]}>{m.priority}</Pill>
               )}
               {m.category && <Pill className="bg-muted text-muted-foreground ring-border">{m.category}</Pill>}
-              {m.deliveryStatus === "failed" && (
+              {isFailedDelivery(m.deliveryStatus) && (
                 <Pill className="bg-destructive/10 text-destructive ring-destructive/20">
                   Delivery failed
+                </Pill>
+              )}
+              {/* Waiting on the outbound queue, not a problem. Without this the
+                  row looked identical to one that had been delivered, so a
+                  reply that had not actually gone yet read as though it had. */}
+              {m.deliveryStatus === "queued" && (
+                <Pill className="bg-sky-500/10 text-sky-600 ring-sky-500/20 dark:text-sky-400">
+                  Queued to send
                 </Pill>
               )}
               <span className="ml-auto text-xs text-muted-foreground">
@@ -431,7 +466,7 @@ export default function SmsInbox() {
 
             <p className="whitespace-pre-wrap text-sm">{m.body}</p>
 
-            {m.deliveryStatus === "failed" && m.deliveryError && (
+            {isFailedDelivery(m.deliveryStatus) && m.deliveryError && (
               <p className="mt-1 text-xs text-destructive">{m.deliveryError}</p>
             )}
 

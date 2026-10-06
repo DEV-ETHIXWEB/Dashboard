@@ -1,6 +1,10 @@
 /** Shapes returned by routes/mail.js. */
 
-export type EmailStatus = "sent" | "failed" | "skipped";
+// "queued" is written the moment a message is accepted, before anything has
+// been sent. It is what the Mail page shows for a message the outbound queue
+// is still carrying -- see utils/outbox.js. The same row becomes "sent" or
+// "failed" in place rather than a second row appearing beside it.
+export type EmailStatus = "queued" | "sent" | "failed" | "skipped";
 
 export interface EmailLogEntry {
   id: string;
@@ -84,4 +88,9 @@ export function statusTone(status: EmailStatus): "success" | "danger" | "muted" 
   if (status === "sent") return "success";
   if (status === "failed") return "danger";
   return "muted";
+}
+
+/** Whether this message is still on its way, rather than finished either way. */
+export function isPending(status: EmailStatus): boolean {
+  return status === "queued";
 }

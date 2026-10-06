@@ -232,6 +232,11 @@ router.post('/test', requireCSRF, async (req, res, next) => {
       template: key || 'test',
       entity: 'user',
       entityId: req.user.id,
+      // Inline, not queued. The entire point of this button is to answer
+      // "does the transport work", and "it is in the queue" is not an answer
+      // to that -- the admin would have to go and look at the Mail page to
+      // find out what this request was for.
+      queue: false,
     });
     await audit(req.user.id, 'send', 'email_test', to, { template: key || 'test' });
 
@@ -296,6 +301,9 @@ router.post('/digest/:clientId', requireCSRF, async (req, res, next) => {
     if (!result.ok && !result.skipped) return res.status(502).json({ error: result.error || 'The summary could not be sent.' });
     res.json({
       ok: Boolean(result.ok),
+      // Accepted into the outbound queue rather than already in the inbox, so
+      // the page can say "sending" instead of claiming it has landed.
+      queued: Boolean(result.queued),
       skipped: result.skipped || null,
       to: client.email,
       redirectedTo: result.redirectedTo || null,

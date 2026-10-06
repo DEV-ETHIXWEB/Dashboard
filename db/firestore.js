@@ -477,6 +477,78 @@ const firestoreDb = {
     await ref.update(patch);
     return { id: doc.id, ...doc.data(), ...patch };
   },
+
+  /**
+   * See the Postgres driver: the queued messages that are due.
+   *
+   * Firestore needs a composite index on (status, nextAttemptAt) for this, and
+   * will say so with a link the first time it runs. Unlike the Postgres side
+   * there is no DDL to declare it in, so that link is the instruction -- which
+   * is why this is worth a comment rather than being left to be discovered at
+   * three in the morning.
+   */
+  async dueOutboxMessages(now, limit = 50) {
+    const snap = await getDb().collection('outbox')
+      .where('status', '==', 'queued')
+      .where('nextAttemptAt', '<=', now)
+      .orderBy('nextAttemptAt', 'asc')
+      .limit(limit)
+      .get();
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  /** See the Postgres driver: take one queued message, once. */
+  async claimOutboxMessage(id) {
+    const ref = getDb().collection('outbox').doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data.status !== 'queued') return null;
+      const now = Date.now();
+      const patch = {
+        status: 'sending',
+        claimedAt: now,
+        lastAttemptAt: now,
+        attempts: Number(data.attempts || 0) + 1,
+      };
+      tx.update(ref, patch);
+      return { id: doc.id, ...data, ...patch };
+    });
+  },
+
+  /** See the Postgres driver: hand back a claim whose process died. */
+  async releaseStaleOutboxClaims(olderThanMs) {
+    const cutoff = Date.now() - olderThanMs;
+    const snap = await getDb().collection('outbox').where('status', '==', 'sending').get();
+    const stale = snap.docs.filter((d) => Number(d.data().claimedAt || 0) < cutoff);
+    const client = getDb();
+    for (let i = 0; i < stale.length; i += 450) {
+      const batch = client.batch();
+      for (const doc of stale.slice(i, i + 450)) {
+        batch.update(doc.ref, { status: 'queued', claimedAt: null });
+      }
+      await batch.commit();
+    }
+    return stale.map((d) => ({ id: d.id, ...d.data(), status: 'queued' }));
+  },
+
+  /**
+   * See the Postgres driver: throw away what nobody is coming back for.
+   *
+   * `remove` rather than a raw batch delete, because a sent row still holds
+   * the dedupe-key reservation that db/firestore.js wrote for it, and deleting
+   * the document without releasing that would leave the key claimed for ever
+   * -- the same message could then never be queued again.
+   */
+  async pruneOutbox(sentBefore) {
+    const snap = await getDb().collection('outbox').where('status', '==', 'sent').get();
+    const old = snap.docs.filter((d) => Number(d.data().sentAt || 0) < sentBefore);
+    for (const doc of old) {
+      await firestoreDb.remove('outbox', doc.id);
+    }
+    return old.length;
+  },
 };
 
 async function deleteAll(collection, ids) {

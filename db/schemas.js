@@ -126,6 +126,31 @@ const SCHEMAS = {
     'claimed_at', 'sent_at', 'cancelled_at',
     'created_by', 'created_at', 'updated_at',
   ],
+  // Every outbound message that is waiting to go, being sent, or has given up.
+  //
+  // The queue exists because a send used to be one attempt: a provider blip,
+  // and the message was gone -- a row in `email_log` saying 'failed' and
+  // nobody told. A row here outlives the request that created it, so a
+  // transport that is down for ten minutes costs a delay rather than a
+  // message. See utils/outbox.js.
+  //
+  // `payload` is JSON and never holds a secret. Anything carrying a live
+  // credential -- a sign-in code, an activation link -- is refused by
+  // `enqueue` and sent inline instead, because a code retried half an hour
+  // later has expired anyway and a queue row holding one is a credential
+  // sitting at rest. utils/mailer.js names the templates that rule covers.
+  //
+  // `dedupe_key` carries a UNIQUE index. It is how a caller that may run
+  // twice -- a retried webhook, a double-clicked button -- queues a message
+  // once: the second insert is refused by the database rather than by the
+  // application remembering.
+  outbox: [
+    'id', 'channel', 'status', 'dedupe_key', 'payload',
+    'attempts', 'max_attempts', 'next_attempt_at',
+    'claimed_at', 'last_attempt_at', 'last_error',
+    'sent_at', 'transport', 'entity', 'entity_id',
+    'created_at', 'updated_at',
+  ],
   // Account-activation and password-reset links. Same shape as login_links and
   // for the same reason: only the SHA-256 of the secret half is stored, so a
   // database leak cannot be replayed as a password change.
@@ -243,9 +268,13 @@ const SCHEMAS = {
  *   billing.client_id            one billing record per client, by definition.
  *   user_avatars.user_id         one picture per account -- a replacement is an
  *                                upsert, not a second row to choose between.
+ *   outbox.dedupe_key            a caller that may run twice queues the message
+ *                                once; the refused insert is how utils/outbox.js
+ *                                knows it has already been asked.
  */
 const UNIQUE_FIELDS = {
   users: ['email'],
+  outbox: ['dedupeKey'],
   billing: ['clientId'],
   payments: ['stripeObjectId'],
   user_avatars: ['userId'],

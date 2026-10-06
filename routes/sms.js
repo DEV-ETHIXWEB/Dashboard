@@ -22,6 +22,7 @@ const live = require('../utils/liveBus');
 const slack = require('../utils/slack');
 const conversations = require('../utils/smsConversations');
 const tasks = require('../utils/smsTasks');
+const outbox = require('../utils/outbox');
 
 /** Who runs the inbox. Deliberately excludes clients and employees. */
 const STAFF = ['admin', 'sales', 'project_manager'];
@@ -412,7 +413,16 @@ router.post('/:id/reply', requireCSRF, async (req, res, next) => {
 
     // Sent either way, and the row is kept either way: a Twilio failure must
     // read as a failed message in the thread, never as a reply that vanished.
-    const sid = await twilio.sendSms({ to: message.fromNumber, body });
+    const attempt = await twilio.sendSmsResult({ to: message.fromNumber, body });
+    const sid = attempt.ok ? attempt.sid : null;
+
+    // A refusal that is about this moment rather than this message -- Twilio
+    // unreachable, a 5xx, a timeout -- is worth another go, and asking the
+    // person who typed the reply to notice and press the button again is not a
+    // retry strategy. One that is about the message (a number that is not a
+    // mobile, a recipient who replied STOP) is recorded as failed exactly as
+    // before, because no amount of retrying will land it.
+    const willRetry = !attempt.ok && !attempt.permanent;
 
     const sent = await db.insert('sms_messages', {
       provider: 'twilio',
@@ -425,10 +435,21 @@ router.post('/:id/reply', requireCSRF, async (req, res, next) => {
       numMedia: 0,
       clientId: message.clientId || null,
       status: 'read',
-      deliveryStatus: sid ? 'sent' : 'failed',
-      deliveryError: sid ? null : 'Twilio would not accept the message. Check the server log.',
+      // 'queued' is one of Twilio's own statuses, so the thread already knows
+      // how to show it -- see KNOWN_STATUSES above.
+      deliveryStatus: attempt.ok ? 'sent' : (willRetry ? 'queued' : 'failed'),
+      deliveryError: attempt.ok ? null : attempt.error,
       createdAt: new Date().toISOString(),
     });
+
+    if (willRetry) {
+      await outbox.enqueue({
+        channel: 'sms',
+        payload: { to: message.fromNumber, body, messageId: sent.id },
+        entity: 'sms_message',
+        entityId: sent.id,
+      });
+    }
 
     // Keep the customer's Slack thread a complete record of the conversation
     // regardless of which surface staff replied from -- best-effort, since a
@@ -449,13 +470,25 @@ router.post('/:id/reply', requireCSRF, async (req, res, next) => {
       }
     }
 
-    await audit(req.user.id, 'sms.reply', 'sms_message', message.id, { sid: sid || null, delivered: Boolean(sid) });
+    await audit(req.user.id, 'sms.reply', 'sms_message', message.id, {
+      sid: sid || null, delivered: Boolean(sid), queued: willRetry,
+    });
 
     const linked = sent.clientId ? await db.find('users', sent.clientId) : null;
     const presented = present(sent, new Map(linked ? [[linked.id, linked]] : []));
 
+    // Accepted, not delivered -- and said so rather than claiming either. The
+    // reply is in the thread and the queue owns it from here.
+    if (willRetry) {
+      return res.status(202).json({
+        message: presented,
+        queued: true,
+        notice: 'Twilio could not be reached, so the reply is queued and will be sent automatically.',
+      });
+    }
+
     if (!sid) {
-      return res.status(502).json({ error: 'Twilio would not accept the message. The attempt was recorded.', message: presented });
+      return res.status(502).json({ error: attempt.error || 'Twilio would not accept the message. The attempt was recorded.', message: presented });
     }
     res.status(201).json({ message: presented });
   } catch (err) {
@@ -515,8 +548,13 @@ router.post('/broadcast', requireCSRF, async (req, res, next) => {
       }
 
       const conversation = await conversations.getOrCreate({ phoneNumber: to, clientId: client.id });
-      const sid = await twilio.sendSms({ to, body });
-      const deliveryError = sid ? null : 'Twilio would not accept the message. Check the server log.';
+      const attempt = await twilio.sendSmsResult({ to, body });
+      const sid = attempt.ok ? attempt.sid : null;
+      // As in the single reply above: a provider that could not be reached is
+      // worth another go, and in a broadcast it matters more -- one bad minute
+      // halfway through a batch would otherwise lose every recipient after it.
+      const willRetry = !attempt.ok && !attempt.permanent;
+      const deliveryError = attempt.ok ? null : attempt.error;
 
       const sent = await db.insert('sms_messages', {
         provider: 'twilio',
@@ -530,10 +568,19 @@ router.post('/broadcast', requireCSRF, async (req, res, next) => {
         clientId: client.id,
         broadcastId: broadcast.id,
         status: 'read',
-        deliveryStatus: sid ? 'sent' : 'failed',
+        deliveryStatus: attempt.ok ? 'sent' : (willRetry ? 'queued' : 'failed'),
         deliveryError,
         createdAt: new Date().toISOString(),
       });
+
+      if (willRetry) {
+        await outbox.enqueue({
+          channel: 'sms',
+          payload: { to, body, messageId: sent.id },
+          entity: 'sms_message',
+          entityId: sent.id,
+        });
+      }
 
       // Same best-effort echo as a single reply: only into a thread that
       // already exists, never opening a new one for a broadcast.
@@ -550,12 +597,17 @@ router.post('/broadcast', requireCSRF, async (req, res, next) => {
       }
 
       live.publish('sms');
-      results.push({ clientId, status: sid ? 'sent' : 'failed', error: deliveryError });
+      results.push({
+        clientId,
+        status: attempt.ok ? 'sent' : (willRetry ? 'queued' : 'failed'),
+        error: deliveryError,
+      });
     }
 
     await audit(req.user.id, 'sms.broadcast', 'sms_broadcast', broadcast.id, {
       recipientCount: clientIds.length,
       sent: results.filter((r) => r.status === 'sent').length,
+      queued: results.filter((r) => r.status === 'queued').length,
       failed: results.filter((r) => r.status === 'failed').length,
     });
 

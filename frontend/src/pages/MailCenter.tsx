@@ -54,6 +54,7 @@ export default function MailCenter() {
   const counts = useMemo(() => {
     const entries = log.data?.entries ?? [];
     return {
+      queued: entries.filter((e) => e.status === "queued").length,
       sent: entries.filter((e) => e.status === "sent").length,
       failed: entries.filter((e) => e.status === "failed").length,
       skipped: entries.filter((e) => e.status === "skipped").length,
@@ -99,7 +100,12 @@ export default function MailCenter() {
         />
       )}
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Messages the outbound queue is still carrying. Not a warning tone:
+            a message waiting a minute for the next sweep is working as
+            designed, and colouring it like a problem would train an admin to
+            ignore the card that does mean one. */}
+        <SummaryCard icon={Send} value={counts.queued} label="Sending" tone={counts.queued ? "primary" : "muted"} />
         <SummaryCard icon={MailCheck} value={counts.sent} label="Delivered" tone="success" />
         <SummaryCard icon={MailX} value={counts.failed} label="Failed" tone={counts.failed ? "danger" : "muted"} />
         <SummaryCard icon={Inbox} value={counts.skipped} label="Held (no transport)" tone={counts.skipped ? "warning" : "muted"} />
@@ -442,13 +448,16 @@ function TemplatePreview({ templateKey }: { templateKey: string | null }) {
 }
 
 const STATUS_STYLE: Record<EmailStatus, string> = {
+  // Blue rather than amber: waiting is the ordinary state of a queued message
+  // and not a thing to worry about, which "Held" beside it genuinely is.
+  queued: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
   sent: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
   failed: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
   skipped: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
 };
 
 function StatusChip({ status }: { status: EmailStatus }) {
-  const label = { sent: "Delivered", failed: "Failed", skipped: "Held" }[status] ?? status;
+  const label = { queued: "Sending", sent: "Delivered", failed: "Failed", skipped: "Held" }[status] ?? status;
   return (
     <span
       className={cn(
