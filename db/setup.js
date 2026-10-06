@@ -350,7 +350,8 @@ async function initPostgresSchema() {
     )`,
     `CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT, client_id TEXT,
-      assigned_pm_id TEXT, status TEXT, description TEXT, created_at TEXT
+      assigned_pm_id TEXT, status TEXT, description TEXT, created_at TEXT,
+      service TEXT, service_context TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY, project_id TEXT, name TEXT NOT NULL, assignee_id TEXT,
@@ -585,6 +586,10 @@ async function initPostgresSchema() {
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS slack_channel_id TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS slack_thread_ts TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS resolved_notified_at BIGINT`,
+    // Which service a project delivers, and the details its launch email
+    // needs. See db/schemas.js and utils/serviceLaunch.js.
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS service TEXT`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS service_context TEXT`,
     `ALTER TABLE billing ADD COLUMN IF NOT EXISTS currency TEXT`,
     `ALTER TABLE billing ADD COLUMN IF NOT EXISTS amount NUMERIC`,
     `ALTER TABLE billing ADD COLUMN IF NOT EXISTS interval TEXT`,

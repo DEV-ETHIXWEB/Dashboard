@@ -24,43 +24,19 @@ const router = express.Router();
 
 const { requireAuth, requireRole } = require('../middleware/auth');
 const outbox = require('../utils/outbox');
+const cronAuth = require('../utils/cronAuth');
 
 /**
  * Whether this request carries the cron secret.
  *
- * Compared with `timingSafeEqual` on equal-length buffers, because a plain
- * `===` on a secret leaks its length and a little of its content to anybody
- * who can time the reply. The same care the Twilio signature check takes in
- * utils/twilio.js, for the same reason.
- *
- * With OUTBOX_CRON_SECRET unset the endpoint is closed rather than open. An
- * unauthenticated sweep is not harmless: it sends real messages, so leaving it
- * open on a deployment that forgot to set the variable would hand anybody who
- * found the URL a way to drain the queue early and, with a backlog, to make
- * the app send on command.
+ * The check itself lives in utils/cronAuth.js, because the service summary
+ * sweep in routes/mail.js needs the same one and a second copy of a security
+ * check is a second thing to forget to fix. OUTBOX_CRON_SECRET still wins over
+ * CRON_SECRET here, so a deployment can keep this endpoint on a secret of its
+ * own.
  */
 function authorisedCron(req) {
-  const crypto = require('crypto');
-  // CRON_SECRET is the name Vercel looks for: set it, and Vercel's own cron
-  // sends `Authorization: Bearer <that value>` with every invocation, which is
-  // why it is accepted here. OUTBOX_CRON_SECRET wins when both are set, for a
-  // deployment that would rather keep this endpoint's secret separate from
-  // whatever else the platform's cron reaches.
-  const expected = String(process.env.OUTBOX_CRON_SECRET || process.env.CRON_SECRET || '').trim();
-  if (!expected) return false;
-
-  // Vercel's cron sends `Authorization: Bearer <CRON_SECRET>`. The explicit
-  // header is for anything else that finds a bearer token awkward.
-  const header = String(req.get('authorization') || '');
-  const provided = header.toLowerCase().startsWith('bearer ')
-    ? header.slice(7).trim()
-    : String(req.get('x-outbox-secret') || '').trim();
-  if (!provided) return false;
-
-  const a = Buffer.from(provided, 'utf8');
-  const b = Buffer.from(expected, 'utf8');
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  return cronAuth.authorisedCron(req, ['OUTBOX_CRON_SECRET', 'CRON_SECRET']);
 }
 
 /**

@@ -7,8 +7,49 @@ const { db } = require('../db/setup');
 const { requireAuth, requireRole, requireCSRF, audit, notify } = require('../middleware/auth');
 const { requirePage } = require('../utils/clientPages');
 const approvals = require('../utils/approvals');
+const serviceEmails = require('../utils/serviceEmails');
+const serviceLaunch = require('../utils/serviceLaunch');
 
 const STATUS_PCT = { 'To Do': 0, 'In Progress': 50, 'In Review': 90, Complete: 100 };
+
+/**
+ * Check the two fields that decide whether this project mails the client.
+ *
+ * Both are optional, and both are checked here rather than trusted, because the
+ * cost of getting them wrong is not a bad record -- it is a client receiving an
+ * announcement for a service they never bought. An unknown service key is
+ * refused by name so the admin can see the typo; silently storing it would mean
+ * the project simply never announced and nobody would know why.
+ *
+ * Returns an error string, or null when the patch is fine.
+ */
+function serviceFieldsProblem(patch) {
+  if ('service' in patch && patch.service) {
+    if (!serviceEmails.SERVICE_KEYS.includes(patch.service)) {
+      return `"${patch.service}" is not a service we send an announcement for.`;
+    }
+  }
+  if ('serviceContext' in patch && patch.serviceContext) {
+    const raw = patch.serviceContext;
+    if (typeof raw === 'object') return Array.isArray(raw) ? 'serviceContext must be an object.' : null;
+    try {
+      const parsed = JSON.parse(String(raw));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return 'serviceContext must be a JSON object.';
+      }
+    } catch {
+      return 'serviceContext is not valid JSON.';
+    }
+  }
+  return null;
+}
+
+/** Stored as a string either way, so the column holds one shape. */
+function normaliseContext(value) {
+  if (value === undefined) return undefined;
+  if (!value) return null;
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
 
 /** Roles that can be named as the manager of a project. */
 const PM_ROLES = ['admin', 'project_manager'];
@@ -89,17 +130,20 @@ router.get('/:id', async (req, res, next) => {
 
 router.post('/', requireCSRF, requireRole('admin', 'sales', 'project_manager'), async (req, res, next) => {
   try {
-    const { name, type, clientId, assignedPmId, status, description } = req.body || {};
+    const { name, type, clientId, assignedPmId, status, description, service, serviceContext } = req.body || {};
     if (!name || !clientId) return res.status(400).json({ error: 'name and clientId are required' });
     const client = await db.find('users', clientId);
     if (!client || client.role !== 'client') return res.status(400).json({ error: 'clientId must reference a client user' });
     if (!(await isValidPm(assignedPmId))) {
       return res.status(400).json({ error: 'The project manager must be an admin or a project manager.' });
     }
+    const serviceProblem = serviceFieldsProblem({ service, serviceContext });
+    if (serviceProblem) return res.status(400).json({ error: serviceProblem });
 
     const project = await db.insert('projects', {
       name, type: type || 'General', clientId, assignedPmId: assignedPmId || null,
       status: status || 'On Track', description: description || '', createdAt: new Date().toISOString(),
+      service: service || null, serviceContext: normaliseContext(serviceContext) ?? null,
     });
     // Tell this client's open tabs, not everyone's.
     res.locals.liveAudience = [clientId];
@@ -119,6 +163,13 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
 
     const patch = { ...req.body };
     delete patch.id;
+
+    // Checked before the write, not after: an unknown service key saved and
+    // then rejected would leave a project that looks configured and announces
+    // nothing.
+    const serviceProblem = serviceFieldsProblem(patch);
+    if (serviceProblem) return res.status(400).json({ error: serviceProblem });
+    if ('serviceContext' in patch) patch.serviceContext = normaliseContext(patch.serviceContext) ?? null;
 
     // Which client a project belongs to decides whose portal shows it, so a
     // change of owner is checked rather than taken on trust -- pointing a
@@ -147,6 +198,12 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
 
     if (patch.status && patch.status !== project.status) {
       await notify(project.clientId, `Your project "${project.name}" moved to ${patch.status}`, 'project');
+      // And, if this project delivers one of our services and has just gone
+      // live, the client gets the announcement for it. Deliberately only on an
+      // update and not on create: a project entered after the fact, already
+      // marked complete, is somebody back-filling records and should not mail
+      // anyone. Swallowed on purpose -- see utils/serviceLaunch.js.
+      await serviceLaunch.announceQuietly(updated, project.status, patch.status);
     }
     const tasks = await db.filter('tasks', (t) => t.projectId === req.params.id);
     res.json({ project: progressFor(updated, tasks) });

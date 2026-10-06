@@ -231,6 +231,11 @@ app.use(require('./middleware/live').broadcastChanges);
 // utils/outbox.js is what makes it safe for two *processes* to race here.
 app.use('/api', (req, res, next) => {
   void require('./utils/outbox').maybeSweep();
+  // And the monthly service summaries, on the same principle and for the same
+  // reason: a deployment that never set up the cron should still send them.
+  // Throttled to once an hour and a no-op after the tenth of the month, so on
+  // the other twenty days of the year this costs one comparison.
+  void require('./utils/serviceDigest').maybeSweep();
   next();
 });
 

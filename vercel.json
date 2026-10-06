@@ -10,7 +10,8 @@
     { "source": "/((?!api/).*)", "destination": "/public/index.html" }
   ],
   "crons": [
-    { "path": "/api/outbox/sweep", "schedule": "*/2 * * * *" }
+    { "path": "/api/outbox/sweep", "schedule": "*/2 * * * *" },
+    { "path": "/api/mail/cron/service-sweep", "schedule": "0 9 1-10 * *" }
   ],
   "headers": [
     {

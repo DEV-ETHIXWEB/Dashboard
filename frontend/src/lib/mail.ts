@@ -20,10 +20,30 @@ export interface EmailLogEntry {
   hasHtml: boolean;
 }
 
+/** Who reads a message: the paying client, our own team, or both. */
+export type TemplateAudience = "client" | "team" | "both";
+
 export interface EmailTemplateInfo {
   key: string;
   label: string;
   description: string;
+  audience: TemplateAudience;
+  group: string;
+}
+
+/**
+ * A heading and the templates under it, in the order the server sends them.
+ *
+ * The grouping is the server's, not this page's. It used to be a constant in
+ * this file, and every template added after it was written stopped being drawn
+ * -- forty-one of fifty-four of them by the end, including every payment,
+ * approval, domain and password message. Taking the list from the same place
+ * the templates are defined is what stops that happening again.
+ */
+export interface EmailTemplateGroup {
+  heading: string;
+  templates: EmailTemplateInfo[];
+  audiences: TemplateAudience[];
 }
 
 export interface EmailTemplatePreview {
@@ -77,12 +97,12 @@ export const MAIL_SETUP = {
   ],
 };
 
-/** Which templates belong to which part of the product, for grouping. */
-export const TEMPLATE_GROUPS: { heading: string; keys: string[] }[] = [
-  { heading: "Tickets", keys: ["new_ticket_staff", "ticket_receipt_client", "ticket_assigned", "ticket_status", "ticket_comment", "ticket_request", "sla_warning"] },
-  { heading: "Accounts", keys: ["login_code", "credentials", "admin_roster"] },
-  { heading: "Summaries", keys: ["progress_digest", "test"] },
-];
+/** What to call each audience in the filter. */
+export const AUDIENCE_LABEL: Record<TemplateAudience, string> = {
+  client: "Client",
+  team: "Team",
+  both: "Either",
+};
 
 export function statusTone(status: EmailStatus): "success" | "danger" | "muted" {
   if (status === "sent") return "success";

@@ -778,7 +778,12 @@ function footer({ reason, links = [], actor = null }) {
       : '',
   ].join('');
 
-  const actorCol = actor
+  // A name is what this column is: a face, who it was, how to reach them.
+  // `actor` also carries the one-line kicker under the eyebrow, and a caller
+  // that only wants that line -- "Now serving brightpath-retail.com" -- was
+  // getting a person card for nobody down here: a red circle with "?" in it
+  // where the initials go, and an empty name beside it.
+  const actorCol = actor && actor.name
     ? [
       '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>',
       `<td width="60" valign="middle" style="padding-right:14px;">${avatarCircle(actor.name, { size: 54, color: actor.color, neumorphic: true })}</td>`,

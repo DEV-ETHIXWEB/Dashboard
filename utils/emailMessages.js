@@ -12,6 +12,13 @@
 const t = require('./emailTemplates');
 const appUrl = require('./appUrl');
 
+// The service announcements -- "this is live, here is what it does for you" --
+// live in their own file. There are thirty-one of them and they share a shape
+// of their own, which would have buried the twenty-four operational templates
+// here under copy. They register into the same list, so the Mail page and
+// `renderMessage()` cannot tell the two files apart.
+const service = require('./serviceEmails');
+
 function baseUrl() {
   return appUrl.baseUrl();
 }
@@ -1310,6 +1317,8 @@ const SAMPLE_PAYMENT = {
 
 const TEMPLATES = {
   new_ticket_staff: {
+    audience: 'team',
+    group: 'Tickets',
     label: 'New ticket (team)',
     description: 'Sent to every admin and the assigned owner when a ticket is raised.',
     render: () => newTicketForStaff({
@@ -1320,11 +1329,15 @@ const TEMPLATES = {
     }),
   },
   ticket_receipt_client: {
+    audience: 'client',
+    group: 'Tickets',
     label: 'Ticket receipt (client)',
     description: "The client's confirmation that their request landed and has an owner.",
     render: () => ticketReceiptForClient({ ticket: SAMPLE_TICKET, clientName: 'David Shaw', assigneeName: 'Ryan Coleman' }),
   },
   ticket_assigned: {
+    audience: 'team',
+    group: 'Tickets',
     label: 'Ticket assigned',
     description: 'Sent to a team member when a ticket becomes theirs.',
     render: () => ticketAssigned({
@@ -1332,6 +1345,8 @@ const TEMPLATES = {
     }),
   },
   ticket_status: {
+    audience: 'client',
+    group: 'Tickets',
     label: 'Status changed',
     description: 'Sent to the client when a ticket moves status.',
     render: () => ticketStatusChanged({
@@ -1339,6 +1354,8 @@ const TEMPLATES = {
     }),
   },
   ticket_comment: {
+    audience: 'both',
+    group: 'Tickets',
     label: 'New comment',
     description: 'Sent when a note is posted on a ticket.',
     render: () => ticketComment({
@@ -1350,6 +1367,8 @@ const TEMPLATES = {
     }),
   },
   ticket_request: {
+    audience: 'team',
+    group: 'Tickets',
     label: 'Handover request',
     description: 'Sent when a teammate is asked to take over or help.',
     render: () => ticketRequest({
@@ -1358,6 +1377,8 @@ const TEMPLATES = {
     }),
   },
   sla_warning: {
+    audience: 'team',
+    group: 'Tickets',
     label: 'Response due',
     description: 'Sent to the owner and admins as the first-response clock runs out.',
     render: () => slaWarning({
@@ -1365,6 +1386,8 @@ const TEMPLATES = {
     }),
   },
   login_code: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Sign-in code',
     description: 'The one-time code sent to anyone signing in without an admin role.',
     render: () => loginCode({
@@ -1375,6 +1398,8 @@ const TEMPLATES = {
     }),
   },
   credentials: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Login issued',
     description: 'Sent to a person when an admin creates their account or resets the password.',
     render: () => credentialsIssued({
@@ -1389,6 +1414,8 @@ const TEMPLATES = {
     }),
   },
   admin_roster: {
+    audience: 'team',
+    group: 'Accounts & access',
     label: 'Admin roster change',
     description: 'Sent to every administrator when the admin list changes.',
     render: () => adminRosterChanged({
@@ -1396,6 +1423,8 @@ const TEMPLATES = {
     }),
   },
   progress_digest: {
+    audience: 'client',
+    group: 'Reports & summaries',
     label: 'Progress summary',
     description: 'Periodic client-facing summary of tickets and projects.',
     render: () => progressDigest({
@@ -1405,11 +1434,15 @@ const TEMPLATES = {
     }),
   },
   payment_received: {
+    audience: 'client',
+    group: 'Billing',
     label: 'Payment received',
     description: 'The receipt a client gets the first time Stripe reports an invoice paid.',
     render: () => paymentReceived({ clientName: 'David Shaw', payment: SAMPLE_PAYMENT }),
   },
   payment_failed: {
+    audience: 'client',
+    group: 'Billing',
     label: 'Payment failed',
     description: 'Sent when Stripe reports a declined card, with the one action that fixes it.',
     render: () => paymentFailed({
@@ -1422,6 +1455,8 @@ const TEMPLATES = {
     }),
   },
   payment_summary: {
+    audience: 'client',
+    group: 'Billing',
     label: 'Payment summary',
     description: 'Periodic client-facing summary of what they paid, read from Stripe.',
     render: () => paymentSummary({
@@ -1439,6 +1474,8 @@ const TEMPLATES = {
     }),
   },
   approval_requested: {
+    audience: 'team',
+    group: 'Internal approvals',
     label: 'Approval needed',
     description: 'Sent to every approver when an untrusted admin proposes a sensitive change.',
     render: () => approvalRequested({
@@ -1449,6 +1486,8 @@ const TEMPLATES = {
     }),
   },
   approval_decided: {
+    audience: 'team',
+    group: 'Internal approvals',
     label: 'Approval decided',
     description: 'The answer, sent to whoever raised the request.',
     render: () => approvalDecided({
@@ -1459,6 +1498,8 @@ const TEMPLATES = {
     }),
   },
   domain_expiring: {
+    audience: 'client',
+    group: 'Domains',
     label: 'Domain expiring',
     description: 'Automatic renewal reminders, from a month out to a week after the date.',
     render: () => domainExpiring({
@@ -1475,6 +1516,8 @@ const TEMPLATES = {
     }),
   },
   account_activation: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Account activation',
     description: 'A scheduled hand-over: the link that lets a new account choose its own password.',
     render: () => accountActivation({
@@ -1486,6 +1529,8 @@ const TEMPLATES = {
     }),
   },
   password_expiring: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Password expiring',
     description: 'The heads-up a few days before a password reaches the end of its month.',
     render: () => passwordExpiring({
@@ -1496,6 +1541,8 @@ const TEMPLATES = {
     }),
   },
   password_reset: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Password reset',
     description: 'The single-use link that sets a new password. Never carries a password itself.',
     render: () => passwordReset({
@@ -1506,6 +1553,8 @@ const TEMPLATES = {
     }),
   },
   password_changed: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Password changed',
     description: 'Confirmation that a password moved, so a takeover cannot happen quietly.',
     render: () => passwordChanged({
@@ -1516,6 +1565,8 @@ const TEMPLATES = {
     }),
   },
   credential_delivery_failed: {
+    audience: 'team',
+    group: 'Accounts & access',
     label: 'Credential delivery failed',
     description: 'Sent to administrators when a scheduled login email could not be delivered.',
     render: () => credentialDeliveryFailed({
@@ -1525,7 +1576,14 @@ const TEMPLATES = {
       attempts: 2,
     }),
   },
+  // Welcome, the twenty-two service launches, the four engagement steps and the
+  // four recurring summaries. Spread rather than re-declared so that adding one
+  // means touching serviceEmails.js and nothing else.
+  ...service.SERVICE_TEMPLATES,
+
   test: {
+    audience: 'team',
+    group: 'Diagnostics',
     label: 'Test message',
     description: 'Deliverability check sent from the Mail page.',
     render: () => testEmail({ requestedBy: 'Admin User' }),
@@ -1538,8 +1596,86 @@ function renderMessage(key) {
   return entry ? entry.render() : null;
 }
 
+/**
+ * The order the groups are shown in on the Mail page.
+ *
+ * Client-facing first and internal last, because that is the order an admin
+ * cares about them: the messages a paying customer reads are the ones worth
+ * proof-reading, and the ones this app sends itself are the ones you only look
+ * at when something is wrong.
+ *
+ * A group named here that holds nothing is simply not drawn. A group a template
+ * names that is NOT here is appended at the end rather than dropped -- see
+ * `listGroups` -- because a template vanishing from this page is exactly the
+ * failure this list is replacing.
+ */
+const GROUP_ORDER = [
+  'Welcome & onboarding',
+  'Service launches - Website',
+  'Service launches - AI',
+  'Service launches - Growth',
+  'Service launches - Data',
+  'Service launches - Accessibility',
+  'Service launches - Support',
+  'Engagement steps',
+  'Monthly updates',
+  'Tickets',
+  'Billing',
+  'Domains',
+  'Reports & summaries',
+  'Accounts & access',
+  'Internal approvals',
+  'Diagnostics',
+];
+
+/** Where a template with no group of its own ends up. */
+const UNGROUPED = 'Other';
+
+/** Who reads it: the paying client, our own team, or both depending on context. */
+const AUDIENCES = ['client', 'team', 'both'];
+
 function listTemplates() {
-  return Object.entries(TEMPLATES).map(([key, v]) => ({ key, label: v.label, description: v.description }));
+  return Object.entries(TEMPLATES).map(([key, v]) => ({
+    key,
+    label: v.label,
+    description: v.description,
+    // Defaulted rather than required. A template added without these still
+    // appears on the page, in Other, which is visible enough to get fixed --
+    // the alternative, silently not being drawn, is what went wrong before.
+    audience: AUDIENCES.includes(v.audience) ? v.audience : 'team',
+    group: v.group || UNGROUPED,
+  }));
+}
+
+/**
+ * The groups, in display order, each with its templates.
+ *
+ * Built from the templates themselves rather than from a list the page keeps
+ * of its own. That is the whole point of this function: the Mail page used to
+ * hold its own hard-coded set of groups and keys, and every template added
+ * since simply stopped appearing -- forty-one of fifty-four of them, in the
+ * end, including every payment, approval, domain and password message. The
+ * page now draws what the server says exists, so a template cannot be added
+ * without showing up somewhere.
+ */
+function listGroups() {
+  const templates = listTemplates();
+  const byGroup = new Map();
+  for (const template of templates) {
+    if (!byGroup.has(template.group)) byGroup.set(template.group, []);
+    byGroup.get(template.group).push(template);
+  }
+
+  const ordered = GROUP_ORDER.filter((heading) => byGroup.has(heading));
+  const extras = [...byGroup.keys()].filter((heading) => !GROUP_ORDER.includes(heading)).sort();
+
+  return [...ordered, ...extras].map((heading) => ({
+    heading,
+    templates: byGroup.get(heading),
+    // What the group as a whole is for, so the page can filter on it without
+    // opening every template in it.
+    audiences: [...new Set(byGroup.get(heading).map((t) => t.audience))],
+  }));
 }
 
 /**
@@ -1586,7 +1722,45 @@ module.exports = {
   approvalDecided,
   domainExpiring,
   testEmail,
+
+  // Service announcements, re-exported so callers have one place to require
+  // from. `service` keeps them grouped for anything that wants the whole set.
+  service,
+  servicesWelcome: service.servicesWelcome,
+  websiteRedesignLive: service.websiteRedesignLive,
+  headlessLive: service.headlessLive,
+  landingPageLive: service.landingPageLive,
+  maintenanceLive: service.maintenanceLive,
+  knowledgeChatbotLive: service.knowledgeChatbotLive,
+  llmChatbotLive: service.llmChatbotLive,
+  csrAutomationLive: service.csrAutomationLive,
+  humanHandoffLive: service.humanHandoffLive,
+  seoLive: service.seoLive,
+  googleAdsLive: service.googleAdsLive,
+  metaAdsLive: service.metaAdsLive,
+  socialReelsLive: service.socialReelsLive,
+  emailMarketingLive: service.emailMarketingLive,
+  crmIntegrationLive: service.crmIntegrationLive,
+  dashboardLive: service.dashboardLive,
+  analyticsLive: service.analyticsLive,
+  monthlyReportingLive: service.monthlyReportingLive,
+  accessibilityFixesLive: service.accessibilityFixesLive,
+  accessibilityAuditLive: service.accessibilityAuditLive,
+  techSupportLive: service.techSupportLive,
+  aiContextUpdateLive: service.aiContextUpdateLive,
+  apiMaintenanceLive: service.apiMaintenanceLive,
+  auditReady: service.auditReady,
+  planReady: service.planReady,
+  buildStarted: service.buildStarted,
+  optimizeDigest: service.optimizeDigest,
+  adsPerformanceUpdate: service.adsPerformanceUpdate,
+  seoRankingUpdate: service.seoRankingUpdate,
+  chatbotPerformanceUpdate: service.chatbotPerformanceUpdate,
+  accessibilityScoreUpdate: service.accessibilityScoreUpdate,
+
   listTemplates,
+  listGroups,
+  GROUP_ORDER,
   renderMessage,
   renderPreview,
   stageLabel,

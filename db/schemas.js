@@ -39,7 +39,21 @@ const SCHEMAS = {
     // held for a second signature until a super admin vouches for them.
     'admin_trusted', 'admin_trusted_at', 'admin_trusted_by',
   ],
-  projects: ['id', 'name', 'type', 'client_id', 'assigned_pm_id', 'status', 'description', 'created_at'],
+  projects: [
+    'id', 'name', 'type', 'client_id', 'assigned_pm_id', 'status', 'description', 'created_at',
+    // Which of the twenty-two services this project delivers, and the details
+    // its launch email needs. `service` is one of the keys in
+    // utils/serviceEmails.js (SERVICE_KEYS); when the project reaches a live
+    // status, utils/serviceLaunch.js sends that service's announcement to the
+    // client, once. Empty means this project announces nothing, which is the
+    // right default -- an internal rebuild should not mail anybody.
+    //
+    // `service_context` is JSON holding the handful of specifics that make the
+    // announcement worth reading (the domain, the monthly budget, which CRM).
+    // It is deliberately a blob rather than twenty columns: every service wants
+    // different fields, and none of them is ever queried.
+    'service', 'service_context',
+  ],
   tasks: ['id', 'project_id', 'name', 'assignee_id', 'status', 'priority', 'due'],
   tickets: [
     'id', 'subject', 'category', 'client_id', 'assignee_id', 'status', 'description', 'created_at',
