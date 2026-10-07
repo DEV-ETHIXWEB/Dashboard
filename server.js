@@ -306,6 +306,11 @@ if (require.main === module) {
           'Without a transport they cannot complete a sign-in either. Configure mail before restarting in production.',
       );
     }
+    // The three settings that decide whether a client's email arrives looking
+    // like a real message or like a broken one. Each is silent when wrong --
+    // the send succeeds, the inbox shows the damage -- so they are named at
+    // boot rather than discovered by a customer.
+    require('./utils/mailAutomation').warnIfRisky();
   });
 }
 

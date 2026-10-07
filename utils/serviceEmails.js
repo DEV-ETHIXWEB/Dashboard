@@ -172,6 +172,7 @@ function websiteRedesignLive({ clientName, domain = null, siteUrl = null } = {})
   const site = siteUrl || (domain ? `https://${String(domain).replace(/^https?:\/\//, '')}` : null);
   return build({
     subject: 'Your new website is live',
+    hero: 'badge-website',
     eyebrow: 'Website redesign',
     title: 'Your new website is live',
     preheader: 'Live now, and every link people already had still works.',
@@ -199,6 +200,7 @@ function websiteRedesignLive({ clientName, domain = null, siteUrl = null } = {})
 function headlessLive({ clientName, siteUrl = null } = {}) {
   return build({
     subject: 'Your site now runs on its new foundation',
+    hero: 'badge-speed',
     eyebrow: 'Headless architecture',
     title: 'Your site now runs on its new foundation',
     preheader: 'Same site, rebuilt underneath. Faster now, easier to add to later.',
@@ -220,6 +222,7 @@ function headlessLive({ clientName, siteUrl = null } = {}) {
 function landingPageLive({ clientName, pageName = null, pageUrl = null, campaign = null } = {}) {
   return build({
     subject: pageName ? `Your "${pageName}" landing page is live` : 'Your new landing page is live',
+    hero: 'badge-landing',
     eyebrow: 'Landing page',
     title: 'Your new landing page is live',
     preheader: 'One offer, one action, and every enquiry counted.',
@@ -247,6 +250,7 @@ function landingPageLive({ clientName, pageName = null, pageUrl = null, campaign
 function maintenanceLive({ clientName, plan = null, backupTime = 'every night' } = {}) {
   return build({
     subject: 'Your website care plan is live',
+    hero: 'badge-shield',
     eyebrow: 'Maintenance & security',
     title: 'Your website care plan is live',
     preheader: 'Updates, backups and monitoring are ours from today.',
@@ -276,6 +280,7 @@ function maintenanceLive({ clientName, plan = null, backupTime = 'every night' }
 function knowledgeChatbotLive({ clientName, siteUrl = null, sources = null } = {}) {
   return build({
     subject: 'Your website assistant is answering questions',
+    hero: 'badge-chat',
     eyebrow: 'Knowledge chatbot',
     title: 'Your website assistant is answering questions',
     preheader: 'It answers from your own pages, and fetches a person when it should.',
@@ -298,6 +303,7 @@ function knowledgeChatbotLive({ clientName, siteUrl = null, sources = null } = {
 function llmChatbotLive({ clientName, siteUrl = null } = {}) {
   return build({
     subject: 'Your assistant can now hold a real conversation',
+    hero: 'badge-chat-ai',
     eyebrow: 'LLM chatbot',
     title: 'Your assistant can now hold a real conversation',
     preheader: 'It understands ordinary phrasing, and remembers the thread.',
@@ -324,6 +330,7 @@ function llmChatbotLive({ clientName, siteUrl = null } = {}) {
 function csrAutomationLive({ clientName, hours = 'around the clock' } = {}) {
   return build({
     subject: 'Your front desk now answers after hours',
+    hero: 'badge-headset',
     eyebrow: 'Automation & CSR',
     title: 'Your front desk now answers after hours',
     preheader: 'Enquiries arriving at ten at night are answered and waiting for you.',
@@ -350,6 +357,7 @@ function csrAutomationLive({ clientName, hours = 'around the clock' } = {}) {
 function humanHandoffLive({ clientName } = {}) {
   return build({
     subject: 'A real person is one step away',
+    hero: 'badge-people',
     eyebrow: 'Human handoff',
     title: 'A real person is one step away',
     preheader: 'Your assistant knows when to stop and fetch somebody.',
@@ -380,6 +388,7 @@ function humanHandoffLive({ clientName } = {}) {
 function seoLive({ clientName, area = null, firstReport = 'at the end of next month' } = {}) {
   return build({
     subject: 'Your search work has started',
+    hero: 'badge-search',
     eyebrow: 'SEO',
     title: 'Your search work has started',
     preheader: 'Underway now, with an honest word about how long it takes.',
@@ -411,6 +420,7 @@ function seoLive({ clientName, area = null, firstReport = 'at the end of next mo
 function googleAdsLive({ clientName, budget = null, area = null, lsa = false } = {}) {
   return build({
     subject: 'Your Google Ads are live',
+    hero: 'badge-megaphone',
     eyebrow: 'Google Ads' + (lsa ? ' + LSA' : ''),
     title: 'Your Google Ads are live',
     preheader: 'Running now, budget capped, every call traced to its ad.',
@@ -444,6 +454,7 @@ function googleAdsLive({ clientName, budget = null, area = null, lsa = false } =
 function metaAdsLive({ clientName, budget = null, area = null } = {}) {
   return build({
     subject: 'Your Facebook and Instagram ads are live',
+    hero: 'badge-social',
     eyebrow: 'Meta ads',
     title: 'Your Facebook and Instagram ads are live',
     preheader: 'Running now, and measured in enquiries rather than likes.',
@@ -470,6 +481,7 @@ function metaAdsLive({ clientName, budget = null, area = null } = {}) {
 function socialReelsLive({ clientName, cadence = null, channels = null } = {}) {
   return build({
     subject: 'Your social calendar is running',
+    hero: 'badge-reels',
     eyebrow: 'Social & reels',
     title: 'Your social calendar is running',
     preheader: 'Posts planned and scheduled ahead. You approve everything first.',
@@ -496,6 +508,7 @@ function socialReelsLive({ clientName, cadence = null, channels = null } = {}) {
 function emailMarketingLive({ clientName, listSize = null } = {}) {
   return build({
     subject: 'Your email marketing is switched on',
+    hero: 'badge-envelope',
     eyebrow: 'Email marketing',
     title: 'Your email marketing is switched on',
     preheader: 'Your welcome sequence runs itself, and your mail reaches inboxes.',
@@ -518,6 +531,7 @@ function emailMarketingLive({ clientName, listSize = null } = {}) {
 function crmIntegrationLive({ clientName, crmName = null, sources = null } = {}) {
   return build({
     subject: 'Your enquiries now land in one place',
+    hero: 'badge-link',
     eyebrow: 'CRM integration',
     title: 'Your enquiries now land in one place',
     preheader: 'Calls, forms and chats arrive in your system automatically.',
@@ -547,6 +561,7 @@ function crmIntegrationLive({ clientName, crmName = null, sources = null } = {})
 function dashboardLive({ clientName, dashboardUrl = null } = {}) {
   return build({
     subject: 'Your dashboard is ready',
+    hero: 'badge-gauge',
     eyebrow: 'Dashboard',
     title: 'Your dashboard is ready',
     preheader: 'One screen with the numbers that matter, updating on its own.',
@@ -570,6 +585,7 @@ function dashboardLive({ clientName, dashboardUrl = null } = {}) {
 function analyticsLive({ clientName, tracked = null } = {}) {
   return build({
     subject: 'Your tracking is in place',
+    hero: 'badge-chart',
     eyebrow: 'Analytics',
     title: 'Your tracking is in place',
     preheader: 'Calls, forms and bookings now counted properly and traced to source.',
@@ -592,6 +608,7 @@ function analyticsLive({ clientName, tracked = null } = {}) {
 function monthlyReportingLive({ clientName, firstReport = 'at the start of next month' } = {}) {
   return build({
     subject: 'Your monthly reporting has started',
+    hero: 'badge-report',
     eyebrow: 'Monthly reporting',
     title: 'Your monthly reporting has started',
     preheader: 'A short, plain-English summary each month. No charts to decode.',
@@ -621,6 +638,7 @@ function monthlyReportingLive({ clientName, firstReport = 'at the start of next 
 function accessibilityFixesLive({ clientName, standard = 'WCAG 2.2 AA', fixed = null } = {}) {
   return build({
     subject: 'Your accessibility improvements are live',
+    hero: 'badge-access',
     eyebrow: 'Accessibility improvements',
     title: 'Your accessibility improvements are live',
     preheader: 'Your site now works for people it was quietly turning away.',
@@ -666,6 +684,7 @@ function accessibilityAuditLive({
 
   return build({
     subject: 'Your accessibility review is finished',
+    hero: 'badge-access-audit',
     eyebrow: 'Accessibility testing',
     title: 'Your accessibility review is finished',
     preheader: 'Checked by a person as well as a tool, with a plain list of what to fix.',
@@ -707,6 +726,7 @@ function accessibilityAuditLive({
 function techSupportLive({ clientName, ownerName = null, responseHours = null, coverage = null } = {}) {
   return build({
     subject: 'Your support line is open',
+    hero: 'badge-support',
     eyebrow: 'Technical support',
     title: 'Your support line is open',
     preheader: 'One place to raise anything, and a named person on it.',
@@ -736,6 +756,7 @@ function techSupportLive({ clientName, ownerName = null, responseHours = null, c
 function aiContextUpdateLive({ clientName, updatedAt = null, changes = null, corrected = null } = {}) {
   return build({
     subject: 'Your assistant has been brought up to date',
+    hero: 'badge-refresh',
     eyebrow: 'AI & context updates',
     title: 'Your assistant has been brought up to date',
     preheader: 'New prices, hours and services loaded in. Mistakes corrected.',
@@ -761,6 +782,7 @@ function aiContextUpdateLive({ clientName, updatedAt = null, changes = null, cor
 function apiMaintenanceLive({ clientName, integrations = null } = {}) {
   return build({
     subject: 'Your connections are being looked after',
+    hero: 'badge-plug',
     eyebrow: 'API maintenance',
     title: 'Your connections are being looked after',
     preheader: 'The links between your tools are watched and kept working.',
@@ -790,6 +812,7 @@ function apiMaintenanceLive({ clientName, integrations = null } = {}) {
 function auditReady({ clientName, scope = null, findings = null, quickWins = null, reportUrl = null } = {}) {
   return build({
     subject: 'Your audit is ready',
+    hero: 'badge-audit',
     eyebrow: 'Step 1 of 4 - Audit',
     title: 'Your audit is ready',
     preheader: 'What we found, including the awkward parts. Nothing is being sold.',
@@ -818,6 +841,7 @@ function auditReady({ clientName, scope = null, findings = null, quickWins = nul
 function planReady({ clientName, horizon = null, items = null, startDate = null, planUrl = null } = {}) {
   return build({
     subject: 'Your plan is ready',
+    hero: 'badge-plan',
     eyebrow: 'Step 2 of 4 - Plan',
     title: 'Your plan is ready',
     preheader: 'What we will do, in what order, and what each piece should return.',
@@ -847,6 +871,7 @@ function planReady({ clientName, horizon = null, items = null, startDate = null,
 function buildStarted({ clientName, projectName = null, startedOn = null, firstMilestone = null, ownerName = null } = {}) {
   return build({
     subject: projectName ? `We have started building ${projectName}` : 'We have started building',
+    hero: 'badge-build',
     eyebrow: 'Step 3 of 4 - Build',
     title: 'We have started building',
     preheader: 'Work is underway. Here is who is on it and when you will see something.',
@@ -908,6 +933,7 @@ function optimizeDigest({
     html: t.renderEmail({
       preheader: `What moved ${period}, and what we are on next.`,
       eyebrow: 'Step 4 of 4 - Optimise',
+      hero: 'badge-optimise',
       title: `Your progress ${period}`,
       blocks,
       cta,
@@ -964,10 +990,10 @@ function adsPerformanceUpdate({
 
   return build({
     subject: `Your ads ${period}`,
+    hero: 'badge-chart',
     eyebrow: 'Ads update',
     title: `How your ads did ${period}`,
     preheader: `What you spent ${period}, and what it brought in.`,
-    hero: null,
     line: bestChannel ? `Best performer: ${bestChannel}` : null,
     intro: `${greet(clientName)} Here is how your advertising did ${period}.`,
     second: note || 'The only figure worth arguing about is the cost per enquiry.',
@@ -1009,10 +1035,10 @@ function seoRankingUpdate({
 
   return build({
     subject: `Your search results ${period}`,
+    hero: 'badge-search',
     eyebrow: 'SEO update',
     title: `How you ranked ${period}`,
     preheader: `Where you sit in search ${period}, and what moved.`,
-    hero: null,
     line: topKeyword ? `Best performing search: ${topKeyword}` : null,
     intro: `${greet(clientName)} Here is where you stand in search ${period}.`,
     second: 'Search moves in months, so a flat month inside a rising quarter is normal.',
@@ -1054,10 +1080,10 @@ function chatbotPerformanceUpdate({
 
   return build({
     subject: `Your assistant ${period}`,
+    hero: 'badge-chat',
     eyebrow: 'Assistant update',
     title: `What your assistant handled ${period}`,
     preheader: 'How many it answered, how many it passed on, what people kept asking.',
-    hero: null,
     line: topQuestion ? `Most asked: ${topQuestion}` : null,
     intro: `${greet(clientName)} Here is what your website assistant dealt with ${period}.`,
     second: 'The questions it could not answer are the useful half: a free list of what your website does not tell people.',
@@ -1099,10 +1125,10 @@ function accessibilityScoreUpdate({
 
   return build({
     subject: `Your accessibility score ${period}`,
+    hero: 'badge-access',
     eyebrow: 'Accessibility update',
     title: `Your accessibility score ${period}`,
     preheader: 'Where your site stands against the standard, and what we fixed.',
-    hero: null,
     line: standard ? `Measured against ${standard}` : null,
     intro: `${greet(clientName)} Here is where your site stands on accessibility ${period}.`,
     second: 'We re-check after every significant change, because a page added in a hurry is how a good score slips.',
@@ -1156,6 +1182,7 @@ function servicesWelcome({
 
   return build({
     subject: 'Welcome - here is everything you are getting',
+    hero: 'badge-welcome',
     eyebrow: 'Welcome',
     title: 'Everything you are getting',
     preheader: 'Your services, your contact, and where to see all of it.',

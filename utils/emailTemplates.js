@@ -81,14 +81,63 @@ const ICONS = [
   'owner-tile', 'due-tile', 'progress-tile', 'history-tile', 'stage-tile',
   'check-badge', 'web-corner',
   'bar-000', 'bar-010', 'bar-020', 'bar-030', 'bar-040', 'bar-050', 'bar-060', 'bar-070', 'bar-080', 'bar-090', 'bar-100',
+  // The hero badges the service announcements open with. `check-badge` said
+  // "something succeeded" for all of them, which is true and useless: thirty-one
+  // emails opening with the same tick teach the reader to skip the top of the
+  // message. These say which kind of news it is before a word is read. Same
+  // disc, same ramp, same lit top edge -- only the glyph changes.
+  'badge-welcome', 'badge-website', 'badge-speed', 'badge-landing', 'badge-shield',
+  'badge-chat', 'badge-chat-ai', 'badge-headset', 'badge-people',
+  'badge-search', 'badge-megaphone', 'badge-social', 'badge-reels', 'badge-envelope', 'badge-link',
+  'badge-gauge', 'badge-chart', 'badge-report',
+  'badge-access', 'badge-access-audit',
+  'badge-support', 'badge-refresh', 'badge-plug',
+  'badge-audit', 'badge-plan', 'badge-build', 'badge-optimise',
+  // The operational mail: tickets, billing, sign-ins, approvals, domains. These
+  // are what the dashboard sends every day, and twenty-two of the twenty-three
+  // opened with no mark at all -- a wall of text where every other message in
+  // the set now leads with a picture of what it is about.
+  'badge-ticket', 'badge-ticket-new', 'badge-assign', 'badge-status',
+  'badge-comment', 'badge-handover', 'badge-clock',
+  'badge-key', 'badge-credentials', 'badge-activate',
+  'badge-lock', 'badge-lock-done', 'badge-alert', 'badge-admin',
+  'badge-payment', 'badge-payment-failed', 'badge-receipt',
+  'badge-approval', 'badge-decided', 'badge-domain', 'badge-send',
 ];
 
 /**
  * Where one icon lives. Names are the bare file stem ('due-tile', 'bar-030');
  * the bucket stores them all as .png at one flat level.
  */
+/**
+ * Where one icon lives, in the order of what can actually be trusted to hold it.
+ *
+ * 1. MAIL_ICON_BASE_URL, when a deployment wants to say outright.
+ * 2. This app's own /mail-icons, when it has a public address. The art is in
+ *    the repository next to the templates that name it and ships with every
+ *    build, so the picture and the message that wants it cannot get out of
+ *    step. The bucket can: it is updated by hand, and the forty-eight badges
+ *    added here would have 404'd in every inbox until somebody remembered to
+ *    upload them. An icon that needs a second, manual deploy is an icon that
+ *    will one day be missing.
+ * 3. The bucket, for a deployment with no public URL configured. Unchanged
+ *    behaviour, and the original artwork is there.
+ */
 function hostedIcon(name) {
-  const base = String(process.env.MAIL_ICON_BASE_URL || HOSTED_ASSET_BASE).replace(/\/+$/, '');
+  const configured = String(process.env.MAIL_ICON_BASE_URL || '').trim();
+
+  // MAIL_ICON_BASE_URL=cid sends the artwork with the message instead of
+  // linking to it. utils/mailer.js already attaches any glyph referenced this
+  // way, straight out of public/mail-icons, and has done since before these
+  // badges existed -- nothing had been producing the references.
+  //
+  // It is the only option that cannot 404: no bucket to fill, no deploy to
+  // wait for, nothing to keep in step. It costs about 30KB per glyph the
+  // message actually uses, which is why it is opt-in rather than the default.
+  if (configured.toLowerCase() === 'cid') return `cid:${ICON_CID_PREFIX}${name}`;
+
+  const own = configured ? '' : `${String(appUrl.baseUrl() || '').trim()}`;
+  const base = (configured || (own ? `${own}/mail-icons` : HOSTED_ASSET_BASE)).replace(/\/+$/, '');
   return `${base}/${name}.png`;
 }
 
@@ -157,6 +206,55 @@ const TOKENS = {
   // below and still render a clean sans, never a serif fallback.
   font: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
 };
+
+/**
+ * The lift under a panel, a callout and the task card.
+ *
+ * Three layers doing three jobs: a wide soft shadow that sits the box on the
+ * page, a tight dark one directly beneath that gives it an edge, and an inset
+ * white line along the top that catches the light. The same logic the buttons
+ * and the icon tiles already use, which is the point -- a flat bordered
+ * rectangle sitting beside a raised button reads as two different products.
+ *
+ * It degrades the way everything else here does. Outlook drops box-shadow
+ * outright and is left with the border and the background, which is exactly
+ * what these boxes looked like before this existed.
+ */
+const BOX_LIFT = '0 6px 16px rgba(16,18,22,.07), 0 1px 2px rgba(16,18,22,.08), '
+  + 'inset 0 1px 0 rgba(255,255,255,.9)';
+
+/** The colour of the drawn shadow. A grey off the page, not off the card. */
+const SHADOW_TINT = '#dcdfe6';
+
+/**
+ * Put a box on a drawn shadow.
+ *
+ * `box-shadow` is not in Gmail's CSS allowlist. Gmail strips it, and Gmail is
+ * where most of these are read -- so the lift that looked right everywhere it
+ * was tested was invisible to the people it was for.
+ *
+ * This draws it instead of styling it: an outer cell tinted the colour of a
+ * shadow, with the real box sitting on top and three pixels of the tint showing
+ * along the bottom. It is a table and a background colour, which every client
+ * made since 1998 can render. The CSS shadow stays on the inner box for the
+ * clients that honour it, and the two agree rather than fight -- the drawn lip
+ * is under the soft shadow, not beside it.
+ */
+function lifted(inner, { margin = '0 0 20px' } = {}) {
+  return [
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:${margin};">`,
+    `<tr><td bgcolor="${SHADOW_TINT}" style="background-color:${SHADOW_TINT};border-radius:13px;`,
+    // The tint shows only along the bottom edge, which is where a light source
+    // above the page would put it.
+    'padding:0 0 3px;font-size:0;line-height:0;">',
+    inner,
+    '</td></tr></table>',
+  ].join('');
+}
+
+/** The same idea with more weight, for the one card that leads a message. */
+const CARD_LIFT = '0 10px 26px rgba(16,18,22,.09), 0 2px 4px rgba(16,18,22,.07), '
+  + 'inset 0 1px 0 rgba(255,255,255,.95)';
 
 /**
  * The footer stays black on purpose: it closes the message the way the
@@ -336,7 +434,14 @@ function iconTile({ size = 46, icon = 'assignment-tile' } = {}) {
 }
 
 /** The circular badge that opens a status message. */
-function heroBadge(icon = 'check-badge', size = 96) {
+// 132 on a 240px canvas. The disc occupies 168 of those 240, so it draws at the
+// same 92px it did at 110 on the old 200px canvas -- the mark is the size it was
+// after the 15% increase, and the extra is the clearance the glow needs. Shrink
+// the canvas back and the glow gets sliced flat on three sides.
+//
+// `check-badge` is still the default and is still 200px art, so it renders a
+// little larger than the rest. Nothing uses the default any more.
+function heroBadge(icon = 'check-badge', size = 132) {
   return [
     '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto 18px;">',
     `<tr><td align="center"><img src="${hostedIcon(icon)}" alt="" width="${size}" height="${size}" border="0" `
@@ -440,7 +545,7 @@ function taskCard({ status, title, breadcrumb, meta = [], url = null }) {
 
   return [
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${TOKENS.panel}" `
-      + `style="background:${TOKENS.panel};border-radius:20px;margin:0 0 30px;">`,
+      + `style="background:${TOKENS.panel};border-radius:20px;margin:0 0 30px;box-shadow:${CARD_LIFT};">`,
     '<tr><td class="ew-pad" style="padding:28px 30px 24px;">',
     head,
     grid,
@@ -500,15 +605,15 @@ function bulletList(items) {
  */
 function panel({ tone = 'info', title, html = '' }) {
   const accent = { info: brand().color, success: TOKENS.success, warn: TOKENS.warn, danger: TOKENS.danger }[tone] || brand().color;
-  return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px;border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
+  return lifted([
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};box-shadow:${BOX_LIFT};">`,
     '<tr><td valign="top" style="padding:18px 20px;">',
     title
       ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:12px;">${escapeHtml(title)}</div>`
       : '',
     html,
     '</td></tr></table>',
-  ].join('');
+  ].join(''), { margin: '0 0 18px' });
 }
 
 /**
@@ -543,8 +648,8 @@ function codeValue(label, value, { hint = null } = {}) {
 /** Highlighted strip for credentials, warnings, and deadlines. */
 function callout({ tone = 'info', title, body, mono = false }) {
   const accent = { info: brand().color, success: TOKENS.success, warn: TOKENS.warn, danger: TOKENS.danger }[tone] || brand().color;
-  return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
+  return lifted([
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};box-shadow:${BOX_LIFT};">`,
     '<tr><td style="padding:16px 18px;">',
     title
       ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:7px;">${escapeHtml(title)}</div>`
@@ -552,7 +657,7 @@ function callout({ tone = 'info', title, body, mono = false }) {
     `<div style="font-family:${mono ? "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" : TOKENS.font};`,
     `font-size:${mono ? 15 : 14}px;line-height:1.6;color:${TOKENS.text};white-space:pre-wrap;word-break:break-word;">${escapeHtml(body)}</div>`,
     '</td></tr></table>',
-  ].join('');
+  ].join(''), { margin: '0 0 20px' });
 }
 
 /**
@@ -597,8 +702,8 @@ function detailPanel({ tone = 'info', title, fields = [], mono = false, note = n
     '</td>',
   ].join(''));
 
-  return [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};">`,
+  return lifted([
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:12px;background:${TOKENS.panel};border:1px solid ${TOKENS.border};border-left:3px solid ${accent};box-shadow:${BOX_LIFT};">`,
     '<tr><td style="padding:18px 20px;">',
     title
       ? `<div style="font-family:${TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:${accent};padding-bottom:12px;">${escapeHtml(title)}</div>`
@@ -608,7 +713,7 @@ function detailPanel({ tone = 'info', title, fields = [], mono = false, note = n
       ? `<div style="font-family:${TOKENS.font};font-size:12px;line-height:1.6;color:${TOKENS.soft};padding-top:10px;">${escapeHtml(note)}</div>`
       : '',
     '</td></tr></table>',
-  ].join('');
+  ].join(''), { margin: '0 0 20px' });
 }
 
 /**

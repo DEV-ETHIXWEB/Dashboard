@@ -23,6 +23,7 @@ const { db } = require('../db/setup');
 const mailer = require('./mailer');
 const service = require('./serviceEmails');
 const launch = require('./serviceLaunch');
+const automation = require('./mailAutomation');
 
 /** Floor between sweeps, so a busy admin session cannot hammer the database. */
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
@@ -59,12 +60,36 @@ function periodLabel(now = new Date()) {
  * started yet learns that our numbers are decorative.
  */
 async function dueProjects() {
-  return db.filter(
+  const candidates = await db.filter(
     'projects',
     (p) => Boolean(p.service)
       && Boolean(service.UPDATE_BY_SERVICE[p.service])
       && launch.isLaunched(p.status),
   );
+
+  // And then the rule that makes a migration safe: a client only gets a monthly
+  // summary for work we have already told them went live.
+  //
+  // Without it, importing existing clients is a disaster. Fifty accounts come in
+  // from the old system with their projects already marked complete, the sweep
+  // runs within the hour, and fifty people who have never had an email from this
+  // dashboard get "here is how your search did last month" about a month we did
+  // not report on and have no figures for. Measured, before this existed: three
+  // imported clients produced three immediate sends.
+  //
+  // The launch announcement is the handshake. This is the follow-up, and a
+  // follow-up to a conversation that never happened is just a stranger writing.
+  const announced = [];
+  for (const project of candidates) {
+    const planned = service.LAUNCH_BY_SERVICE[project.service];
+    if (!planned) continue;
+    const rows = await db.filter(
+      'email_log',
+      (e) => e.template === planned.key && e.entityId === project.id,
+    );
+    if (rows.length > 0) announced.push(project);
+  }
+  return announced;
 }
 
 /**
@@ -157,6 +182,10 @@ async function sendOne(group, { now = new Date(), force = false } = {}) {
  * window and the already-sent check. The cron never passes it.
  */
 async function runSweep({ now = new Date(), force = false } = {}) {
+  // Held during an import, and `force` does not override it. An admin pressing
+  // the button while the pause is on is far more likely to have forgotten the
+  // pause than to mean it.
+  if (automation.paused()) return { skipped: 'automated mail is paused', considered: 0, sent: 0 };
   if (!force && now.getDate() > LATEST_DAY_OF_MONTH) {
     return { skipped: 'too late in the month', considered: 0, sent: 0 };
   }

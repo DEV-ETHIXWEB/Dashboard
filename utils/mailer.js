@@ -237,6 +237,23 @@ async function verifySmtp2go() {
   }
 }
 
+/**
+ * Where a reply goes.
+ *
+ * The From address is a noreply, which is correct for a sender nobody should
+ * write to -- but several of these messages tell the client in as many words to
+ * "just reply to this email", and a promise like that has to land somewhere a
+ * person reads. Set MAIL_REPLY_TO to the inbox your team actually watches.
+ *
+ * Unset, no Reply-To header is added and replies go to the From address, which
+ * is the behaviour this app had before. That is a silent dead end, so the
+ * startup check in server.js says so out loud.
+ */
+function replyToAddress() {
+  const value = String(process.env.MAIL_REPLY_TO || '').trim();
+  return value && isAddress(value.replace(/^.*</, '').replace(/>.*$/, '')) ? value : null;
+}
+
 function fromAddress() {
   return process.env.MAIL_FROM || 'EthixWeb Dashboard <noreply@ethixwebdashboard.com>';
 }
@@ -270,8 +287,10 @@ function cleanRecipients(to) {
 
 async function sendViaSmtp({ to, subject, text, html }) {
   const images = inlineImagesFor(html);
+  const reply = replyToAddress();
   const info = await getSmtpTransport().sendMail({
     from: fromAddress(),
+    ...(reply ? { replyTo: reply } : {}),
     to: to.join(', '),
     subject,
     text,
@@ -314,6 +333,7 @@ async function sendViaSmtp2go({ to, subject, text, html }) {
     },
     body: JSON.stringify({
       sender: fromAddress(),
+      ...(replyToAddress() ? { reply_to: replyToAddress() } : {}),
       to,
       subject,
       text_body: text,
@@ -361,7 +381,7 @@ async function sendViaWebhook({ to, subject, text, html }) {
       'Content-Type': 'application/json',
       ...(process.env.MAIL_WEBHOOK_TOKEN ? { Authorization: `Bearer ${process.env.MAIL_WEBHOOK_TOKEN}` } : {}),
     },
-    body: JSON.stringify({ from: fromAddress(), to, subject, text, html }),
+    body: JSON.stringify({ from: fromAddress(), replyTo: replyToAddress(), to, subject, text, html }),
   });
   if (!res.ok) throw new Error(`Mail webhook returned ${res.status}`);
   return { ok: true, transport: 'webhook', providerId: null };
@@ -813,5 +833,6 @@ module.exports = {
   cleanRecipients,
   isAddress,
   fromAddress,
+  replyToAddress,
   recentLog,
 };

@@ -125,6 +125,7 @@ function newTicketForStaff({ ticket, clientName, assigneeName, clickupUrl }) {
     html: t.renderEmail({
       preheader: `${clientName || 'A client'} raised "${ticket.subject}"`,
       eyebrow: 'New ticket',
+      hero: 'badge-ticket-new',
       title: `${clientName || 'A client'} raised a ticket`,
       actor: {
         name: clientName || 'Client',
@@ -160,6 +161,7 @@ function ticketReceiptForClient({ ticket, clientName, assigneeName }) {
     html: t.renderEmail({
       preheader: `Ticket ${ticket.id} is open and assigned.`,
       eyebrow: 'Request received',
+      hero: 'badge-ticket',
       title: 'We got your request',
       blocks: [
         t.paragraph(
@@ -205,6 +207,7 @@ function ticketAssigned({ ticket, assigneeName, clientName, actorName, actor = n
     html: t.renderEmail({
       preheader: `${who} assigned you ${ticket.id}`,
       eyebrow: 'Assignment',
+      hero: 'badge-assign',
       title: `${who} assigned you a ticket`,
       actor: actorCard(actor, actorName, `${who} assigned this to you`),
       blocks: [
@@ -243,7 +246,10 @@ function ticketStatusChanged({ ticket, fromStatus, toStatus, clientName, assigne
     html: t.renderEmail({
       preheader: `${fromStatus || 'Open'} to ${toStatus}`,
       eyebrow: 'Status update',
-      hero: done ? 'check-badge' : null,
+      // The one message here whose badge depends on the news. A ticket reaching
+      // "resolved" has earned the tick; a move to "in progress" has not, and
+      // using the same mark for both is how a tick stops meaning anything.
+      hero: done ? 'badge-status' : 'badge-ticket',
       title: done ? 'Your request is resolved' : `Your request moved to ${toStatus}`,
       blocks: [
         t.paragraph(
@@ -289,6 +295,7 @@ function ticketComment({ ticket, authorName, body, progress, stage, forClient = 
     html: t.renderEmail({
       preheader: `${authorName} commented on ${ticket.id}`,
       eyebrow: 'New comment',
+      hero: 'badge-comment',
       title: `${authorName} posted an update`,
       actor: { name: authorName, line: `${authorName} commented on ${ticket.id}` },
       blocks: [
@@ -335,6 +342,7 @@ function ticketRequest({ ticket, kind, fromName, toName, note }) {
     html: t.renderEmail({
       preheader: `${fromName} sent you a ${handover ? 'handover' : 'collaboration'} request`,
       eyebrow: handover ? 'Handover request' : 'Collaboration request',
+      hero: 'badge-handover',
       title: handover
         ? `${fromName} wants to hand this ticket to you`
         : `${fromName} wants your help on this ticket`,
@@ -381,6 +389,7 @@ function slaWarning({ ticket, assigneeName, clientName, minutesLeft }) {
     html: t.renderEmail({
       preheader: overdue ? `${ticket.id} is past its first-response deadline` : `${minutesLeft} minutes left on ${ticket.id}`,
       eyebrow: overdue ? 'Overdue' : 'Due soon',
+      hero: 'badge-clock',
       title: overdue ? 'This ticket has no first response yet' : 'A first response is due soon',
       blocks: [
         t.callout({
@@ -430,6 +439,7 @@ function credentialsIssued({ user, temporaryPassword, expiresAt, sections, invit
     html: t.renderEmail({
       preheader: isReset ? 'A new password for your account' : 'Your password, or a one-tap link',
       eyebrow: isReset ? 'Password reset' : 'Welcome',
+      hero: 'badge-credentials',
       title: isReset ? 'Your password has been reset' : `Your ${roleWord} login`,
       actor: invitedBy ? { name: invitedBy, line: `${invitedBy} set this up for you` } : null,
       blocks: [
@@ -495,6 +505,7 @@ function loginCode({ user, code, expiresAt, ipAddress }) {
     html: t.renderEmail({
       preheader: `Your code expires in ${minutes} minutes.`,
       eyebrow: 'Verification',
+      hero: 'badge-key',
       title: 'Finish signing in',
       blocks: [
         t.paragraph(`Hi ${user.name}. Enter this code to finish signing in. It expires in ${minutes} minutes.`),
@@ -530,6 +541,7 @@ function adminRosterChanged({ actorName, targetName, targetEmail, change, adminC
     html: t.renderEmail({
       preheader: `${actorName} ${added ? 'promoted' : 'removed'} ${targetName}`,
       eyebrow: 'Administration',
+      hero: 'badge-admin',
       title: added ? 'A new administrator was added' : 'An administrator was removed',
       actor: { name: actorName, line: `${actorName} made this change` },
       blocks: [
@@ -587,6 +599,7 @@ function progressDigest({ clientName, tickets = [], projects = [], period = 'thi
     html: t.renderEmail({
       preheader: `${open.length} in flight, ${closed.length} finished ${period}`,
       eyebrow: 'Progress summary',
+      hero: 'badge-optimise',
       title: `Where your work stands ${period}`,
       blocks: [
         t.paragraph(`Hi ${clientName || 'there'}. Here is where your work stands.`),
@@ -660,6 +673,7 @@ function paymentReceived({ clientName, payment }) {
     html: t.renderEmail({
       preheader: `${amount} received. Nothing further is needed.`,
       eyebrow: 'Payment received',
+      hero: 'badge-payment',
       title: `Thank you - ${amount} received`,
       blocks: [
         t.paragraph(`Hi ${clientName || 'there'}. Your payment went through, and there is nothing else for you to do.`),
@@ -713,6 +727,7 @@ function paymentFailed({ clientName, payment }) {
     html: t.renderEmail({
       preheader: 'Your card was declined. Updating it takes about a minute.',
       eyebrow: 'Action needed',
+      hero: 'badge-payment-failed',
       title: 'We could not take your last payment',
       blocks: [
         t.paragraph(`Hi ${clientName || 'there'}. Your bank declined the payment below, so your plan is on hold. Nothing has been deleted and your work is untouched.`),
@@ -763,6 +778,7 @@ function paymentSummary({ clientName, payments = [], total, currency = 'usd', pe
     html: t.renderEmail({
       preheader: `${money(total, currency)} across ${paid.length} payment${paid.length === 1 ? '' : 's'}.`,
       eyebrow: 'Payment summary',
+      hero: 'badge-receipt',
       title: `${money(total, currency)} ${period}`,
       blocks: [
         t.paragraph(`Hi ${clientName || 'there'}. Here is every payment on your account ${period}, straight from our payment provider.`),
@@ -810,6 +826,7 @@ function approvalRequested({ requesterName, summary, actionLabel, requestedAt })
     html: t.renderEmail({
       preheader: `${requesterName} is waiting on a second signature.`,
       eyebrow: 'Approval needed',
+      hero: 'badge-approval',
       title: `${requesterName} needs a second signature`,
       blocks: [
         t.paragraph('An administrator has proposed a change that does not take effect until someone else signs it off. Nothing has happened yet.'),
@@ -850,6 +867,7 @@ function approvalDecided({ approverName, summary, decision, note }) {
     html: t.renderEmail({
       preheader: `${approverName} ${approved ? 'approved' : 'turned down'} your request.`,
       eyebrow: approved ? 'Approved' : 'Turned down',
+      hero: 'badge-decided',
       title: approved ? 'Your change went through' : 'Your change was turned down',
       blocks: [
         t.paragraph(
@@ -926,6 +944,7 @@ function domainExpiring({ domain, clientName, daysLeft, window }) {
         ? `${domain.domainName} has lapsed. It can usually still be recovered.`
         : `${domain.domainName} needs renewing ${window}.`,
       eyebrow: expired ? 'Needs attention' : urgent ? 'Renewal due' : 'Coming up',
+      hero: 'badge-domain',
       title: subject,
       blocks: [
         t.paragraph(opening),
@@ -977,6 +996,7 @@ function testEmail({ requestedBy }) {
     html: t.renderEmail({
       preheader: 'If you can read this, outbound email works.',
       eyebrow: 'Test message',
+      hero: 'badge-send',
       title: 'Outbound email is working',
       actor: requestedBy ? { name: requestedBy, line: `${requestedBy} sent this test` } : null,
       blocks: [
@@ -1046,6 +1066,7 @@ function accountActivation({ user, activationUrl, expiresAt, sections = null, in
         ? 'One link, one use, and you choose the password.'
         : `Choose a password and your ${roleWord} is ready.`,
       eyebrow: isReset ? 'Password setup' : 'Welcome',
+      hero: 'badge-activate',
       title: isReset ? 'Choose a new password' : `Set up your ${roleWord}`,
       actor: invitedBy ? { name: invitedBy, line: `${invitedBy} set this up for you` } : null,
       blocks: [
@@ -1102,6 +1123,7 @@ function passwordExpiring({ user, daysLeft, expiresAt, resetUrl = null }) {
     html: t.renderEmail({
       preheader: `Change it now and you will not be interrupted later.`,
       eyebrow: 'Security',
+      hero: 'badge-clock',
       title: `Your password expires ${when}`,
       blocks: [
         t.paragraph(
@@ -1144,6 +1166,7 @@ function passwordReset({ user, resetUrl, expiresAt, ipAddress = null, required =
     html: t.renderEmail({
       preheader: 'One link, good once, and it expires shortly.',
       eyebrow: 'Password reset',
+      hero: 'badge-lock',
       title: required ? 'Your password needs replacing' : 'Reset your password',
       blocks: [
         t.paragraph(
@@ -1200,6 +1223,7 @@ function passwordChanged({ user, at = Date.now(), ipAddress = null, via = 'self'
     html: t.renderEmail({
       preheader: 'If this was you, there is nothing to do.',
       eyebrow: 'Security',
+      hero: 'badge-lock-done',
       title: 'Your password was changed',
       blocks: [
         t.paragraph(`Hi ${user.name}. The password on your account was changed ${how}.`),
@@ -1245,6 +1269,7 @@ function credentialDeliveryFailed({ user, error, scheduledAt = null, attempts = 
     html: t.renderEmail({
       preheader: 'A scheduled credential delivery failed and is waiting to be retried.',
       eyebrow: 'Delivery failed',
+      hero: 'badge-alert',
       title: 'A login could not be delivered',
       blocks: [
         t.paragraph(

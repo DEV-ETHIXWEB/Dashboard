@@ -25,6 +25,7 @@
 const { db } = require('../db/setup');
 const mailer = require('./mailer');
 const service = require('./serviceEmails');
+const automation = require('./mailAutomation');
 
 /**
  * The project statuses that mean "the client can see this now".
@@ -104,6 +105,11 @@ async function alreadyAnnounced(template, projectId) {
  * which is exactly the thing the check exists to protect against.
  */
 async function announce(project, { force = false } = {}) {
+  // Held during an import. See utils/mailAutomation.js: a bulk status correction
+  // is indistinguishable from a real launch, and this is the difference between
+  // a quiet migration and fifty people being told their year-old website went
+  // live this morning.
+  if (automation.paused()) return automation.heldResult();
   if (!project || !project.service) return { sent: false, reason: 'no service on this project' };
 
   const planned = service.launchFor(project.service);

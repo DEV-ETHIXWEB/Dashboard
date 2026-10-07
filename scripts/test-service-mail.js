@@ -180,11 +180,20 @@ async function main() {
     // Not launched yet: nothing to report, so nothing reported.
     await makeProject({ id: 'svc-p9', clientId: client.id, service: 'llm_chatbot', status: 'In Progress' });
 
+    // A summary only follows a launch we actually sent, so these three have to
+    // have been announced first. That rule is what makes importing existing
+    // clients safe, and it is tested on its own further down.
+    for (const id of ['svc-p6', 'svc-p7', 'svc-p8']) {
+      await launch.announce(await db.find('projects', id));
+    }
+    const launches = sent.length;
+    check('the three live projects announced themselves first', launches === 3, `sent ${launches}`);
+
     const firstOfMonth = new Date(2026, 9, 1, 9, 0, 0);
     const result = await digest.runSweep({ now: firstOfMonth });
 
-    check('two summaries went out, not three', sent.length === 2, `sent ${sent.length}`);
-    const templates = sent.map((s) => s.template).sort();
+    check('two summaries went out, not three', sent.length - launches === 2, `sent ${sent.length - launches}`);
+    const templates = sent.slice(launches).map((s) => s.template).sort();
     check('one about the ads', templates.includes('update_ads_performance'), templates.join(', '));
     check('one about search', templates.includes('update_seo_ranking'), templates.join(', '));
     check('nothing about the chatbot that is not live yet', !templates.includes('update_chatbot_performance'));
@@ -199,12 +208,12 @@ async function main() {
     // The cron runs daily. The ninth must not resend the first's work.
     const ninth = new Date(2026, 9, 9, 9, 0, 0);
     await digest.runSweep({ now: ninth });
-    check('running again the same month sends nothing', sent.length === 2, `sent ${sent.length}`);
+    check('running again the same month sends nothing', sent.length - launches === 2, `sent ${sent.length - launches}`);
 
     // Next month is a new story.
     const nextMonth = new Date(2026, 10, 2, 9, 0, 0);
     await digest.runSweep({ now: nextMonth });
-    check('the following month sends them again', sent.length === 4, `sent ${sent.length}`);
+    check('the following month sends them again', sent.length - launches === 4, `sent ${sent.length - launches}`);
 
     restore();
   }
@@ -247,6 +256,64 @@ async function main() {
     check('and it greets them by name', sent[0]?.message?.html?.includes('Priya'));
     check('a broken blob parses as empty', Object.keys(launch.parseContext('{ nope')).length === 0);
     check('an array is not a context either', Object.keys(launch.parseContext('[1,2]')).length === 0);
+    restore();
+  }
+
+  // --- the two guards a migration depends on -------------------------------
+
+  section('Importing existing clients does not mail the people being imported');
+  {
+    const { sent, restore } = captureSends();
+
+    // What a migration actually looks like: established clients arrive with
+    // their projects already live, because they have been live for a year.
+    for (const i of [1, 2, 3]) {
+      await makeClient(`mig-c${i}`, `Migrated ${i}`, `mig${i}@example.com`);
+      await makeProject({
+        id: `mig-p${i}`, clientId: `mig-c${i}`, service: 'seo', status: 'Complete',
+      });
+    }
+
+    const result = await digest.runSweep({ now: new Date(2026, 9, 2, 9, 0, 0) });
+    check('the monthly sweep mails none of them', sent.length === 0, `sent ${sent.length}`);
+    check('because none of them was ever told it went live', result.sent === 0, JSON.stringify(result));
+
+    // Once a launch HAS gone out, the follow-up is wanted.
+    await launch.announce(await db.find('projects', 'mig-p1'));
+    check('announcing one of them sends its launch email', sent.length === 1, `sent ${sent.length}`);
+
+    await digest.runSweep({ now: new Date(2026, 9, 3, 9, 0, 0) });
+    check('and then only that one gets a summary', sent.length === 2, `sent ${sent.length}`);
+    check('the other two are still silent',
+      !sent.some((s) => String(s.entityId).startsWith('mig-c2') || String(s.entityId).startsWith('mig-c3')));
+
+    restore();
+  }
+
+  section('The pause switch holds automated mail, and only that');
+  {
+    const { sent, restore } = captureSends();
+    process.env.MAIL_AUTOMATION_PAUSED = 'true';
+
+    const client = await makeClient('pause-c1', 'Paused Client', 'paused@example.com');
+    const project = await makeProject({
+      id: 'pause-p1', clientId: client.id, service: 'website_redesign', status: 'In Progress',
+    });
+
+    await launch.onStatusChange(project, 'In Progress', 'Complete');
+    check('a project going live sends nothing while paused', sent.length === 0, `sent ${sent.length}`);
+
+    const swept = await digest.runSweep({ now: new Date(2026, 9, 2, 9, 0, 0) });
+    check('the monthly sweep sends nothing while paused', sent.length === 0, `sent ${sent.length}`);
+    check('and says it was held', String(swept.skipped).includes('paused'), JSON.stringify(swept));
+
+    const forced = await digest.runSweep({ now: new Date(2026, 9, 2, 9, 0, 0), force: true });
+    check('forcing the sweep does not override the pause', forced.sent === 0, JSON.stringify(forced));
+
+    delete process.env.MAIL_AUTOMATION_PAUSED;
+    await launch.onStatusChange(project, 'In Progress', 'Complete');
+    check('clearing the pause lets it send again', sent.length === 1, `sent ${sent.length}`);
+
     restore();
   }
 
