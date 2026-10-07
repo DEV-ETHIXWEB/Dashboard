@@ -111,6 +111,33 @@ function transportName() {
   return 'none';
 }
 
+/**
+ * Every configured transport, best first.
+ *
+ * `transportName` answers "which one will be used", which was the only
+ * question while a send was one attempt. It is the wrong question now: a
+ * deployment with SMTP2GO *and* an SMTP mailbox configured had the second one
+ * sitting there unused while a single SMTP2GO outage dropped every message.
+ * The order is the same preference `transportName` applies -- it is the first
+ * element of this list -- and `sendNow` walks the rest when the first one
+ * fails for a reason that is about the transport rather than the recipient.
+ *
+ * Forcing MAIL_TRANSPORT still means exactly one: an admin who named a
+ * transport does not want mail quietly leaving by another route.
+ */
+function transportChain() {
+  const forced = String(process.env.MAIL_TRANSPORT || '').trim().toLowerCase();
+  if (forced) {
+    const one = transportName();
+    return one === 'none' ? [] : [one];
+  }
+  const chain = [];
+  if (smtp2goConfigured()) chain.push('smtp2go');
+  if (smtpConfigured()) chain.push('smtp');
+  if (process.env.MAIL_WEBHOOK_URL) chain.push('webhook');
+  return chain;
+}
+
 /** 465 is implicit TLS; 587 and 25 start plaintext and upgrade with STARTTLS. */
 function smtpSecure(port) {
   const explicit = process.env.SMTP_SECURE;
@@ -210,6 +237,23 @@ async function verifySmtp2go() {
   }
 }
 
+/**
+ * Where a reply goes.
+ *
+ * The From address is a noreply, which is correct for a sender nobody should
+ * write to -- but several of these messages tell the client in as many words to
+ * "just reply to this email", and a promise like that has to land somewhere a
+ * person reads. Set MAIL_REPLY_TO to the inbox your team actually watches.
+ *
+ * Unset, no Reply-To header is added and replies go to the From address, which
+ * is the behaviour this app had before. That is a silent dead end, so the
+ * startup check in server.js says so out loud.
+ */
+function replyToAddress() {
+  const value = String(process.env.MAIL_REPLY_TO || '').trim();
+  return value && isAddress(value.replace(/^.*</, '').replace(/>.*$/, '')) ? value : null;
+}
+
 function fromAddress() {
   return process.env.MAIL_FROM || 'EthixWeb Dashboard <noreply@ethixwebdashboard.com>';
 }
@@ -243,8 +287,10 @@ function cleanRecipients(to) {
 
 async function sendViaSmtp({ to, subject, text, html }) {
   const images = inlineImagesFor(html);
+  const reply = replyToAddress();
   const info = await getSmtpTransport().sendMail({
     from: fromAddress(),
+    ...(reply ? { replyTo: reply } : {}),
     to: to.join(', '),
     subject,
     text,
@@ -287,6 +333,7 @@ async function sendViaSmtp2go({ to, subject, text, html }) {
     },
     body: JSON.stringify({
       sender: fromAddress(),
+      ...(replyToAddress() ? { reply_to: replyToAddress() } : {}),
       to,
       subject,
       text_body: text,
@@ -334,7 +381,7 @@ async function sendViaWebhook({ to, subject, text, html }) {
       'Content-Type': 'application/json',
       ...(process.env.MAIL_WEBHOOK_TOKEN ? { Authorization: `Bearer ${process.env.MAIL_WEBHOOK_TOKEN}` } : {}),
     },
-    body: JSON.stringify({ from: fromAddress(), to, subject, text, html }),
+    body: JSON.stringify({ from: fromAddress(), replyTo: replyToAddress(), to, subject, text, html }),
   });
   if (!res.ok) throw new Error(`Mail webhook returned ${res.status}`);
   return { ok: true, transport: 'webhook', providerId: null };
@@ -356,6 +403,59 @@ async function sendViaWebhook({ to, subject, text, html }) {
 const UNLOGGED_BODIES = new Set(['credentials', 'login_code']);
 
 /**
+ * Templates that are never queued.
+ *
+ * Each of these carries something that works: a plaintext password, a sign-in
+ * code, a link that sets a password. Putting one in the outbox would store a
+ * live credential in a table, in a `payload` column, for as long as the retry
+ * schedule takes -- which is the thing `UNLOGGED_BODIES` above exists to stop
+ * happening in `email_log`. Doing it in a second table would be worse, because
+ * that one is written on the way *in*, before anybody knows the send worked.
+ *
+ * Retrying them is also close to pointless. A sign-in code is valid for a few
+ * minutes, so the fourth attempt six hours later delivers an expired number to
+ * somebody who gave up and asked for another one. These flows all have a
+ * person waiting at a screen, and what helps them is an immediate answer and a
+ * second transport to try -- both of which `sendNow` gives them.
+ */
+const NEVER_QUEUED = new Set(['credentials', 'login_code', 'account_activation', 'password_reset']);
+
+/**
+ * Whether a provider's refusal is about this message or about this moment.
+ *
+ * Only used to decide whether walking to the next transport is worth trying.
+ * A connection that was refused, a timeout, a rate limit or a 5xx is the
+ * moment, and another provider may well take the message. A rejected
+ * recipient, a trial-mode account or an unverified sending domain is the
+ * message or the configuration, and every transport in the chain will say the
+ * same thing -- so stopping is both faster and quieter than proving it twice.
+ */
+function worthAnotherTransport(message) {
+  const raw = String(message || '');
+  if (/ECONNREFUSED|ETIMEDOUT|ENOTFOUND|getaddrinfo|ECONNRESET|socket hang up/i.test(raw)) return true;
+  if (/rate.?limit|too many requests|\b429\b/i.test(raw)) return true;
+  if (/\b5\d\d\b/.test(raw)) return true;
+  if (/could not reach/i.test(raw)) return true;
+  return false;
+}
+
+/**
+ * Whether no transport will ever accept this, so the outbox should stop.
+ *
+ * Mirrors `worthAnotherTransport` from the other side and is read by
+ * utils/outbox.js through the `permanent` flag on a failed result.
+ */
+function isPermanentFailure(message) {
+  const raw = String(message || '');
+  if (/only send testing emails to your own email address/i.test(raw)) return true;
+  if (/domain is not verified|not verified|sender[^.]*(not allowed|denied)|SENDER_/i.test(raw)) return true;
+  if (/\b(401|403)\b|api[_ ]?key|unauthor|AUTHENTICATION/i.test(raw)) return true;
+  if (/Invalid login|authentication failed|535/i.test(raw)) return true;
+  if (/The server rejected /i.test(raw)) return true;
+  return false;
+}
+
+/**
  * Belt and braces for every other template: a sign-in token that finds its way
  * into some future email must not be replayable out of the log either.
  */
@@ -368,6 +468,18 @@ function scrubStoredHtml(html) {
     // password-setup link on the Mail page for any admin to open. The rendered
     // email keeps its shape here; only the secret goes.
     .replace(/(set-password#token=)[^"'&\s<]+/gi, '$1[redacted]');
+}
+
+/**
+ * Whether this body contains something that works.
+ *
+ * The same two patterns `scrubStoredHtml` redacts, asked as a question. If the
+ * body would lose something to that scrub, it is not a body to hold in a queue
+ * -- the queue has to keep the real thing, because a redacted link in a sent
+ * email is worse than no email.
+ */
+function carriesSecret(html) {
+  return scrubStoredHtml(html) !== String(html || '');
 }
 
 /** What is safe to keep of this message's body. */
@@ -396,6 +508,10 @@ function storableSubject(entry) {
 /**
  * Record what happened. Logging is best-effort too: a missing table on an old
  * deployment must not turn a delivered email into a thrown error.
+ *
+ * Returns the row's id, so a queued message can come back and finish the same
+ * row rather than writing a second one -- see `logId` below. Returns null when
+ * the write failed, and callers treat that as "no row to update".
  */
 async function logEmail(entry) {
   try {
@@ -405,8 +521,9 @@ async function logEmail(entry) {
     // Required lazily so requiring the mailer never pulls in a database
     // connection -- template previews and tests do not need one.
     const { db } = require('../db/setup');
+    const id = uuidv4();
     await db.insert('email_log', {
-      id: uuidv4(),
+      id,
       toEmails: entry.to.join(', '),
       subject: storableSubject(entry),
       template: entry.template || 'custom',
@@ -418,8 +535,33 @@ async function logEmail(entry) {
       html: storableHtml(entry),
       createdAt: new Date().toISOString(),
     });
+    return id;
   } catch (err) {
     console.error('Could not write the email log entry:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Finish the row a queued message already has.
+ *
+ * Queueing writes the `email_log` row immediately, because the Mail page is
+ * where an admin looks to find out whether something went out and a message
+ * that is invisible for two minutes reads as a message that was never sent.
+ * The row then has to be *completed* rather than duplicated, or every queued
+ * email would appear twice -- once as queued, once as sent -- and a message
+ * that retried four times would appear five times.
+ *
+ * Best-effort, like the insert above, and for the same reason.
+ */
+async function updateLog(id, patch) {
+  if (!id) return;
+  try {
+    require('./liveBus').publish('mail');
+    const { db } = require('../db/setup');
+    await db.update('email_log', id, patch);
+  } catch (err) {
+    console.error('Could not update the email log entry:', err.message);
   }
 }
 
@@ -480,9 +622,34 @@ function explainSendError(message) {
   return raw.length > 160 ? `${raw.slice(0, 157)}...` : raw;
 }
 
-async function sendMail({ to, subject, text, html, template, entity, entityId }) {
+const SENDERS = { smtp2go: sendViaSmtp2go, smtp: sendViaSmtp, webhook: sendViaWebhook };
+
+/**
+ * Actually put the message on the wire, now, trying each transport in turn.
+ *
+ * This is the old `sendMail`, with one thing added: when a transport fails for
+ * a reason that is about the transport rather than the message, the next
+ * configured one gets a go before the attempt is called a failure. A
+ * deployment with SMTP2GO and an SMTP mailbox both configured now survives
+ * either of them being down, which is the whole reason anybody configures two.
+ *
+ * Still never throws. Every attempt is written to `email_log` with the
+ * transport that made it, so a chain that fell through to its second choice
+ * says so on the Mail page rather than looking like one lucky send.
+ *
+ * `permanent` on a failed result is what utils/outbox.js reads to decide
+ * whether retrying this in a minute could possibly help.
+ */
+async function sendNow({ to, subject, text, html, template, entity, entityId, logId = null }) {
   const requested = cleanRecipients(to);
-  if (requested.length === 0) return { ok: false, skipped: 'no valid recipients' };
+  if (requested.length === 0) return { ok: false, skipped: 'no valid recipients', permanent: true };
+
+  // A queued message already has its row; an inline one needs a new one each
+  // time. `record` hides which case this is from the rest of the function.
+  const record = async (entry) => {
+    if (logId) return updateLog(logId, { status: entry.status, transport: entry.transport, error: entry.error });
+    return logEmail(entry);
+  };
 
   // The log always records who the message was *for*, even when a test inbox
   // is where it physically went -- otherwise the record is a lie.
@@ -490,33 +657,132 @@ async function sendMail({ to, subject, text, html, template, entity, entityId })
   const recipients = redirect ? [redirect] : requested;
   const outSubject = redirect ? `[to: ${requested.join(', ')}] ${subject}` : subject;
 
-  const transport = transportName();
-  if (transport === 'none') {
-    await logEmail({
+  const chain = transportChain();
+  if (chain.length === 0) {
+    await record({
       to: recipients, subject, html, template, entity, entityId,
       status: 'skipped',
       transport: 'none',
       error: 'No email transport configured (set SMTP2GO_API_KEY, SMTP_HOST, or MAIL_WEBHOOK_URL)',
     });
-    return { ok: false, skipped: 'email transport not configured', recipients };
+    // Not permanent: an admin setting SMTP2GO_API_KEY is exactly the kind of
+    // thing that happens between one attempt and the next, and a message that
+    // was waiting for a transport should go out when one appears.
+    return { ok: false, skipped: 'email transport not configured', recipients, permanent: false };
   }
 
+  let lastError = null;
+
+  for (let i = 0; i < chain.length; i += 1) {
+    const transport = chain[i];
+    try {
+      const result = await SENDERS[transport]({ to: recipients, subject: outSubject, text, html });
+      await record({
+        to: requested, subject, html, template, entity, entityId,
+        status: 'sent',
+        transport: result.transport,
+        error: redirect ? `Redirected to ${redirect} by MAIL_REDIRECT_TO` : null,
+      });
+      return { ...result, recipients: requested, redirectedTo: redirect };
+    } catch (err) {
+      lastError = err;
+      const another = i + 1 < chain.length && worthAnotherTransport(err.message);
+      // An inline send writes one row per transport tried, so the Mail page
+      // shows the failover rather than hiding it behind whichever attempt
+      // ended up last. A queued one keeps updating its single row: five
+      // attempts across two transports is still one message, and the outbox
+      // row is where the attempt history lives.
+      await record({
+        to: requested, subject, html, template, entity, entityId,
+        status: 'failed',
+        transport,
+        error: another ? `${err.message} -- trying ${chain[i + 1]} next` : err.message,
+      });
+      if (!another) break;
+      console.warn(`[mail] ${transport} failed, falling back to ${chain[i + 1]}: ${err.message}`);
+    }
+  }
+
+  const friendly = explainSendError(lastError && lastError.message);
+  // Short line for a person, full text for whoever debugs it later.
+  console.error('Email send failed:', friendly);
+  return {
+    ok: false,
+    error: friendly,
+    detail: lastError && lastError.message,
+    recipients: requested,
+    permanent: isPermanentFailure(lastError && lastError.message),
+  };
+}
+
+/**
+ * Send a message. Never throws -- failures are logged and reported in the
+ * return value so callers can stay on the happy path.
+ *
+ * By default this now *queues* the message rather than sending it inline, and
+ * `ok: true` means "accepted for delivery" rather than "in the inbox". That is
+ * the point: a caller that has just saved a ticket should not be waiting on an
+ * SMTP handshake, and a provider blip during that handshake should not be the
+ * end of the message. utils/outbox.js carries it from there, retrying with
+ * backoff and telling the administrators if it runs out of attempts.
+ *
+ * Two things still go out inline:
+ *
+ *   - anything in NEVER_QUEUED, because its contents would be a credential
+ *     sitting in a database table, and because it is useless late
+ *   - anything the caller asked for with `queue: false`, which is the admin
+ *     "send a test email" button: it exists to report what happened, and
+ *     "queued" is not an answer to that question
+ *
+ * `template`, `entity`, and `entityId` are metadata for the Mail page only.
+ */
+async function sendMail({ to, subject, text, html, template, entity, entityId, queue = true, dedupeKey = null }) {
+  let inline = queue === false || NEVER_QUEUED.has(template);
+
+  // NEVER_QUEUED is a list somebody has to remember to add to, and the cost of
+  // forgetting is a live credential sitting in a database column for hours.
+  // So the rule is also enforced on the message itself: anything that still
+  // carries a token after `scrubStoredHtml` would have redacted it is treated
+  // as secret-bearing whatever its template is called. A new template that
+  // emails a sign-in link is then safe by default rather than safe if
+  // somebody noticed.
+  if (!inline && carriesSecret(html)) {
+    console.warn(
+      `[mail] the "${template || 'custom'}" template carries a token, so it was sent inline `
+      + 'rather than queued. Add it to NEVER_QUEUED in utils/mailer.js to make that explicit.',
+    );
+    inline = true;
+  }
+
+  if (inline) return sendNow({ to, subject, text, html, template, entity, entityId });
+
+  const requested = cleanRecipients(to);
+  if (requested.length === 0) return { ok: false, skipped: 'no valid recipients' };
+
   try {
-    const send = { smtp2go: sendViaSmtp2go, smtp: sendViaSmtp, webhook: sendViaWebhook }[transport];
-    const result = await send({ to: recipients, subject: outSubject, text, html });
-    await logEmail({
+    // The Mail page's row exists from this moment, so a message that is
+    // waiting is visible as waiting rather than as nothing at all. `sendNow`
+    // completes this same row when the sweep gets to it.
+    const logId = await logEmail({
       to: requested, subject, html, template, entity, entityId,
-      status: 'sent',
-      transport: result.transport,
-      error: redirect ? `Redirected to ${redirect} by MAIL_REDIRECT_TO` : null,
+      status: 'queued',
+      transport: transportChain()[0] || 'none',
     });
-    return { ...result, recipients: requested, redirectedTo: redirect };
+
+    const row = await require('./outbox').enqueue({
+      channel: 'email',
+      payload: { to: requested, subject, text, html, template, entity, entityId, logId },
+      dedupeKey,
+      entity,
+      entityId,
+    });
+    return { ok: true, queued: true, outboxId: row.id, logId, recipients: requested };
   } catch (err) {
-    const friendly = explainSendError(err.message);
-    // Short line for a person, full text for whoever debugs it later.
-    console.error('Email send failed:', friendly);
-    await logEmail({ to: requested, subject, html, template, entity, entityId, status: 'failed', error: err.message });
-    return { ok: false, error: friendly, detail: err.message, recipients: requested };
+    // The queue is a database table, and a database that will not take the
+    // row is a worse problem than a slow send. Fall back to sending inline
+    // rather than dropping the message, which is what this file exists to stop.
+    console.error('Could not queue an email, sending it inline instead:', err.message);
+    return sendNow({ to, subject, text, html, template, entity, entityId });
   }
 }
 
@@ -526,7 +792,7 @@ async function sendMail({ to, subject, text, html, template, entity, entityId })
  * `message` is the `{ subject, html, text }` a template returned, so the call
  * site reads as "render this, send it to these people".
  */
-async function sendTemplate({ to, message, template, entity, entityId }) {
+async function sendTemplate({ to, message, template, entity, entityId, queue = true, dedupeKey = null }) {
   if (!message || !message.subject) return { ok: false, skipped: 'no message' };
   return sendMail({
     to,
@@ -536,6 +802,8 @@ async function sendTemplate({ to, message, template, entity, entityId }) {
     template,
     entity,
     entityId,
+    queue,
+    dedupeKey,
   });
 }
 
@@ -550,6 +818,11 @@ module.exports = {
   explainSendError,
   isEnabled,
   transportName,
+  transportChain,
+  worthAnotherTransport,
+  isPermanentFailure,
+  NEVER_QUEUED,
+  sendNow,
   smtpConfigured,
   smtp2goConfigured,
   smtpSummary,
@@ -560,5 +833,6 @@ module.exports = {
   cleanRecipients,
   isAddress,
   fromAddress,
+  replyToAddress,
   recentLog,
 };

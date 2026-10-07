@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import type { EmailLogEntry, EmailTemplateInfo, EmailTemplatePreview, MailStatus } from "@/lib/mail";
+import type {
+  EmailLogEntry, EmailTemplateGroup, EmailTemplateInfo, EmailTemplatePreview, MailStatus,
+} from "@/lib/mail";
 
 /** The whole Mail page is admin-only; gate every query on the role. */
 function useIsAdmin() {
@@ -18,11 +20,21 @@ export function useMailStatus() {
   });
 }
 
+/**
+ * Every template and the grouping to draw it under.
+ *
+ * Both halves come from the server. The page keeps the flat list for looking
+ * one up by key, and renders from `groups`, which is ordered and complete by
+ * construction -- see listGroups in utils/emailMessages.js.
+ */
 export function useMailTemplates() {
   const isAdmin = useIsAdmin();
   return useQuery({
     queryKey: ["mail", "templates"],
-    queryFn: () => api<{ templates: EmailTemplateInfo[] }>("GET", "/mail/templates").then((d) => d.templates),
+    queryFn: () => api<{ templates: EmailTemplateInfo[]; groups: EmailTemplateGroup[] }>(
+      "GET",
+      "/mail/templates",
+    ),
     enabled: isAdmin,
   });
 }

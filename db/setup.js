@@ -50,6 +50,13 @@ function rowToCamel(row, collection) {
   if ('createdAt' in out && typeof out.createdAt === 'object' && out.createdAt instanceof Date) {
     out.createdAt = out.createdAt.toISOString();
   }
+  // The queued message's own fields. Stored as JSON text because its shape
+  // differs per channel, and handed back as an object so callers never have to
+  // remember to parse it. A row whose payload will not parse is handed back
+  // with payload null; utils/outbox.js fails that row rather than guessing.
+  if (collection === 'outbox' && typeof out.payload === 'string') {
+    try { out.payload = JSON.parse(out.payload); } catch { out.payload = null; }
+  }
   if (collection === 'sessions') {
     if ('expiresAt' in out) out.expiresAt = Number(out.expiresAt);
     if ('createdAt' in out) out.createdAt = Number(out.createdAt);
@@ -63,6 +70,7 @@ function rowToCamel(row, collection) {
   for (const key of [
     'passwordChangedAt', 'passwordResetAt', 'avatarUpdatedAt',
     'scheduledAt', 'lastAttemptAt', 'claimedAt', 'sentAt', 'cancelledAt', 'consumedAt',
+    'nextAttemptAt',
   ]) {
     if (key in out && out[key] !== null && out[key] !== undefined) out[key] = Number(out[key]);
   }
@@ -88,6 +96,7 @@ function objToSnakeEntries(collection, obj) {
     let value = v;
     if (k === 'meta' && value !== null && typeof value === 'object') value = JSON.stringify(value);
     if (k === 'allowedPages' && Array.isArray(value)) value = JSON.stringify(value);
+    if (k === 'payload' && value !== null && typeof value === 'object') value = JSON.stringify(value);
     entries.push([snakeKey, value]);
   }
   return entries;
@@ -264,6 +273,59 @@ const pgDb = {
     );
     return rowToCamel(res.rows[0], 'sms_tasks') || null;
   },
+  /**
+   * Queued messages that are due, oldest first.
+   *
+   * Its own method rather than a `filter` predicate because the sweep runs
+   * every minute: reading the whole outbox each time to find the handful of
+   * rows that are due would make the queue slower the longer it has been
+   * working. idx_outbox_due is on (status, next_attempt_at), which is exactly
+   * this query.
+   */
+  async dueOutboxMessages(now, limit = 50) {
+    const res = await getPool().query(
+      `SELECT * FROM outbox WHERE status = 'queued' AND next_attempt_at <= $1
+        ORDER BY next_attempt_at ASC LIMIT $2`,
+      [now, limit]
+    );
+    return res.rows.map((row) => rowToCamel(row, 'outbox'));
+  },
+  /**
+   * Take ownership of one queued message, once.
+   *
+   * The same guarantee as claimCredentialDelivery above, and for the same
+   * reason: a Vercel cron and a request-driven sweep can run at the same
+   * moment, both see this row, and only the one that gets it back may send.
+   * Without it, "at least once" delivery becomes "sometimes twice", which for
+   * an email to a client is worse than late.
+   */
+  async claimOutboxMessage(id) {
+    const now = Date.now();
+    const res = await getPool().query(
+      `UPDATE outbox
+          SET status = 'sending', claimed_at = $2, attempts = attempts + 1, last_attempt_at = $2
+        WHERE id = $1 AND status = 'queued' RETURNING *`,
+      [id, now]
+    );
+    return rowToCamel(res.rows[0], 'outbox') || null;
+  },
+  /** Hand back a claim whose process died before it reached a conclusion. */
+  async releaseStaleOutboxClaims(olderThanMs) {
+    const res = await getPool().query(
+      `UPDATE outbox SET status = 'queued', claimed_at = NULL
+        WHERE status = 'sending' AND claimed_at < $1 RETURNING *`,
+      [Date.now() - olderThanMs]
+    );
+    return res.rows.map((row) => rowToCamel(row, 'outbox'));
+  },
+  /** Throw away rows nobody is coming back for. Keeps failures for review. */
+  async pruneOutbox(sentBefore) {
+    const res = await getPool().query(
+      `DELETE FROM outbox WHERE status = 'sent' AND sent_at < $1 RETURNING id`,
+      [sentBefore]
+    );
+    return res.rows.length;
+  },
 };
 
 const firestore = DB_DRIVER === 'firestore' ? require('./firestore') : null;
@@ -288,7 +350,8 @@ async function initPostgresSchema() {
     )`,
     `CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT, client_id TEXT,
-      assigned_pm_id TEXT, status TEXT, description TEXT, created_at TEXT
+      assigned_pm_id TEXT, status TEXT, description TEXT, created_at TEXT,
+      service TEXT, service_context TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY, project_id TEXT, name TEXT NOT NULL, assignee_id TEXT,
@@ -397,6 +460,26 @@ async function initPostgresSchema() {
     // that is the index it gets.
     `CREATE INDEX IF NOT EXISTS idx_credential_deliveries_due ON credential_deliveries(status, scheduled_at)`,
     `CREATE INDEX IF NOT EXISTS idx_credential_deliveries_user ON credential_deliveries(user_id)`,
+    // The outbound queue. See db/schemas.js for what a row means and
+    // utils/outbox.js for what moves it along.
+    `CREATE TABLE IF NOT EXISTS outbox (
+      id TEXT PRIMARY KEY, channel TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued', dedupe_key TEXT, payload TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 5,
+      next_attempt_at BIGINT NOT NULL,
+      claimed_at BIGINT, last_attempt_at BIGINT, last_error TEXT,
+      sent_at BIGINT, transport TEXT, entity TEXT, entity_id TEXT,
+      created_at TEXT, updated_at TEXT
+    )`,
+    // The sweep's only query.
+    `CREATE INDEX IF NOT EXISTS idx_outbox_due ON outbox(status, next_attempt_at)`,
+    // What makes "queue this once" true rather than likely. No WHERE clause
+    // needed: Postgres counts NULLs as distinct from each other in a UNIQUE
+    // index, so the many rows with no dedupe key never collide. A partial
+    // index would say the same thing less portably -- pg-mem, which the test
+    // suites run on, does not implement one.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_dedupe ON outbox(dedupe_key)`,
+    `CREATE INDEX IF NOT EXISTS idx_outbox_entity ON outbox(entity, entity_id)`,
     `CREATE TABLE IF NOT EXISTS password_tokens (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT 'reset',
       token_hash TEXT NOT NULL, ip_address TEXT, created_at TEXT, expires_at BIGINT,
@@ -503,6 +586,10 @@ async function initPostgresSchema() {
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS slack_channel_id TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS slack_thread_ts TEXT`,
     `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS resolved_notified_at BIGINT`,
+    // Which service a project delivers, and the details its launch email
+    // needs. See db/schemas.js and utils/serviceLaunch.js.
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS service TEXT`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS service_context TEXT`,
     `ALTER TABLE billing ADD COLUMN IF NOT EXISTS currency TEXT`,
     `ALTER TABLE billing ADD COLUMN IF NOT EXISTS amount NUMERIC`,
     `ALTER TABLE billing ADD COLUMN IF NOT EXISTS interval TEXT`,

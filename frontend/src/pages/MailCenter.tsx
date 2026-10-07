@@ -26,8 +26,8 @@ import {
 import { formatRelativeTime } from "@/lib/format";
 import { IntegrationNotConnected } from "@/components/IntegrationNotConnected";
 import {
-  MAIL_SETUP, TEMPLATE_GROUPS, TRANSPORT_LABEL,
-  type EmailLogEntry, type EmailStatus, type SmtpSummary,
+  AUDIENCE_LABEL, MAIL_SETUP, TRANSPORT_LABEL,
+  type EmailLogEntry, type EmailStatus, type SmtpSummary, type TemplateAudience,
 } from "@/lib/mail";
 import { cn } from "@/lib/utils";
 
@@ -49,11 +49,39 @@ export default function MailCenter() {
   const [openEntry, setOpenEntry] = useState<EmailLogEntry | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
 
-  const activeKey = selected ?? templates.data?.[0]?.key ?? null;
+  // Which audience the list is narrowed to. There are fifty-four templates and
+  // most of an admin's reasons for being here concern one half or the other:
+  // proof-reading what a client reads, or checking what the app tells the team.
+  const [audience, setAudience] = useState<TemplateAudience | "all">("all");
+
+  /**
+   * The groups, narrowed to the chosen audience.
+   *
+   * "Either" templates -- a sign-in code, a password reset -- go to whoever has
+   * an account, so they belong in both filtered views rather than only in the
+   * unfiltered one. A filter that hid them would be answering a different
+   * question from the one the admin asked.
+   */
+  const groups = useMemo(() => {
+    const all = templates.data?.groups ?? [];
+    if (audience === "all") return all;
+    return all
+      .map((group) => ({
+        ...group,
+        templates: group.templates.filter((t) => t.audience === audience || t.audience === "both"),
+      }))
+      .filter((group) => group.templates.length > 0);
+  }, [templates.data, audience]);
+
+  // Falls back to the first template still visible, so narrowing the filter
+  // cannot leave the preview showing something no longer in the list.
+  const visibleKeys = useMemo(() => groups.flatMap((g) => g.templates.map((t) => t.key)), [groups]);
+  const activeKey = selected && visibleKeys.includes(selected) ? selected : visibleKeys[0] ?? null;
 
   const counts = useMemo(() => {
     const entries = log.data?.entries ?? [];
     return {
+      queued: entries.filter((e) => e.status === "queued").length,
       sent: entries.filter((e) => e.status === "sent").length,
       failed: entries.filter((e) => e.status === "failed").length,
       skipped: entries.filter((e) => e.status === "skipped").length,
@@ -99,7 +127,12 @@ export default function MailCenter() {
         />
       )}
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Messages the outbound queue is still carrying. Not a warning tone:
+            a message waiting a minute for the next sweep is working as
+            designed, and colouring it like a problem would train an admin to
+            ignore the card that does mean one. */}
+        <SummaryCard icon={Send} value={counts.queued} label="Sending" tone={counts.queued ? "primary" : "muted"} />
         <SummaryCard icon={MailCheck} value={counts.sent} label="Delivered" tone="success" />
         <SummaryCard icon={MailX} value={counts.failed} label="Failed" tone={counts.failed ? "danger" : "muted"} />
         <SummaryCard icon={Inbox} value={counts.skipped} label="Held (no transport)" tone={counts.skipped ? "warning" : "muted"} />
@@ -121,17 +154,43 @@ export default function MailCenter() {
           ) : templates.isLoading || !templates.data ? (
             <Skeleton className="h-96 w-full rounded-2xl" />
           ) : (
-            <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+            <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
               <nav className="space-y-4">
-                {TEMPLATE_GROUPS.map((group) => {
-                  const items = group.keys
-                    .map((k) => templates.data.find((t) => t.key === k))
-                    .filter((t): t is NonNullable<typeof t> => t != null);
-                  if (items.length === 0) return null;
+                <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter templates by who reads them">
+                  {(["all", "client", "team"] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setAudience(value)}
+                      aria-pressed={audience === value}
+                      className={cn(
+                        "focus-clear rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                        audience === value
+                          ? "bg-primary/10 text-primary ring-1 ring-primary/25"
+                          : "text-muted-foreground hover:bg-foreground/5",
+                      )}
+                    >
+                      {value === "all" ? "All" : AUDIENCE_LABEL[value]}
+                      <span className="ml-1.5 tabular-nums opacity-60">
+                        {value === "all"
+                          ? templates.data.templates.length
+                          : templates.data.templates.filter(
+                            (t) => t.audience === value || t.audience === "both",
+                          ).length}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {groups.map((group) => {
+                  const items = group.templates;
                   return (
                     <div key={group.heading}>
-                      <div className="px-1 pb-1.5 t-label text-muted-foreground">
-                        {group.heading}
+                      <div className="flex items-baseline justify-between gap-2 px-1 pb-1.5">
+                        <span className="t-label text-muted-foreground">{group.heading}</span>
+                        <span className="text-[11px] tabular-nums text-muted-foreground/70">
+                          {items.length}
+                        </span>
                       </div>
                       <div className="space-y-1">
                         {items.map((t) => (
@@ -147,7 +206,24 @@ export default function MailCenter() {
                                 : "hover:bg-foreground/5",
                             )}
                           >
-                            <div className="text-sm font-medium">{t.label}</div>
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-sm font-medium">{t.label}</span>
+                              {/* Only on the mixed groups. In "Service launches
+                                  - Growth", where every row says Client, the
+                                  badge is noise repeated six times. */}
+                              {group.audiences.length > 1 ? (
+                                <span
+                                  className={cn(
+                                    "mt-0.5 shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                                    activeKey === t.key
+                                      ? "bg-primary/15 text-primary"
+                                      : "bg-foreground/5 text-muted-foreground",
+                                  )}
+                                >
+                                  {AUDIENCE_LABEL[t.audience]}
+                                </span>
+                              ) : null}
+                            </div>
                             <div
                               className={cn(
                                 "mt-0.5 text-xs",
@@ -442,13 +518,16 @@ function TemplatePreview({ templateKey }: { templateKey: string | null }) {
 }
 
 const STATUS_STYLE: Record<EmailStatus, string> = {
+  // Blue rather than amber: waiting is the ordinary state of a queued message
+  // and not a thing to worry about, which "Held" beside it genuinely is.
+  queued: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
   sent: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
   failed: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
   skipped: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
 };
 
 function StatusChip({ status }: { status: EmailStatus }) {
-  const label = { sent: "Delivered", failed: "Failed", skipped: "Held" }[status] ?? status;
+  const label = { queued: "Sending", sent: "Delivered", failed: "Failed", skipped: "Held" }[status] ?? status;
   return (
     <span
       className={cn(

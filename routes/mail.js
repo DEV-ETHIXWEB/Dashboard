@@ -18,7 +18,39 @@ const messages = require('../utils/emailMessages');
 const admins = require('../utils/admins');
 const slaWatch = require('../utils/slaWatch');
 const domainWatch = require('../utils/domainWatch');
+const serviceDigest = require('../utils/serviceDigest');
+const serviceLaunch = require('../utils/serviceLaunch');
+const cronAuth = require('../utils/cronAuth');
 const roles = require('../utils/roles');
+
+/**
+ * The monthly service summaries, for a scheduler outside the app.
+ *
+ * Declared above the admin guard below, and therefore deliberately outside it:
+ * the caller is a cron with no session and no cookie, so it authenticates with
+ * a shared secret instead -- the same one the outbox sweep uses, see
+ * utils/cronAuth.js. This is the only route in this file that is not
+ * admin-only, and it is placed first so that fact is visible rather than
+ * buried three hundred lines down among the admin ones.
+ *
+ * Safe to call daily. The sweep itself decides what is actually due, sends each
+ * client at most one of each summary per calendar month, and does nothing at
+ * all after the tenth.
+ */
+async function serviceSweepCron(req, res, next) {
+  if (!cronAuth.authorisedCron(req)) return res.status(401).json({ error: 'Not authorised' });
+  try {
+    res.status(202).json(await serviceDigest.runSweep());
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Both verbs, for the same reason the outbox sweep takes both: Vercel's cron
+// fetches the path with a GET, and a POST-only endpoint would simply never run
+// on the platform this app deploys to.
+router.get('/cron/service-sweep', serviceSweepCron);
+router.post('/cron/service-sweep', serviceSweepCron);
 
 router.use(requireAuth, requireRole('admin'));
 
@@ -47,8 +79,17 @@ router.get('/status', async (req, res, next) => {
   }
 });
 
+/**
+ * Every template, and the grouping the page draws it under.
+ *
+ * `groups` is sent alongside the flat list rather than instead of it: the page
+ * renders the groups, and anything that wants one template by key -- the
+ * preview pane, a deep link -- still has the list. Both come from the server
+ * because the page used to keep its own hard-coded grouping, and every template
+ * added after it was written quietly stopped being drawn.
+ */
 router.get('/templates', (req, res) => {
-  res.json({ templates: messages.listTemplates() });
+  res.json({ templates: messages.listTemplates(), groups: messages.listGroups() });
 });
 
 /** JSON preview: subject, HTML, and the plain-text twin side by side. */
@@ -232,6 +273,11 @@ router.post('/test', requireCSRF, async (req, res, next) => {
       template: key || 'test',
       entity: 'user',
       entityId: req.user.id,
+      // Inline, not queued. The entire point of this button is to answer
+      // "does the transport work", and "it is in the queue" is not an answer
+      // to that -- the admin would have to go and look at the Mail page to
+      // find out what this request was for.
+      queue: false,
     });
     await audit(req.user.id, 'send', 'email_test', to, { template: key || 'test' });
 
@@ -247,6 +293,48 @@ router.post('/sla-sweep', requireCSRF, async (req, res, next) => {
   try {
     const result = await slaWatch.runSweep();
     await audit(req.user.id, 'send', 'sla_sweep', String(result.warned));
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Run the monthly service summaries now.
+ *
+ * The admin door to the same sweep the cron calls. `force` is what an admin
+ * reaches for after fixing whatever stopped a month going out: it ignores both
+ * the day-of-month window and the already-sent check, so it can and will send a
+ * second copy. That is why it is a deliberate flag rather than the default.
+ */
+router.post('/service-sweep', requireCSRF, async (req, res, next) => {
+  try {
+    const force = req.body?.force === true;
+    const result = await serviceDigest.runSweep({ force });
+    await audit(req.user.id, 'send', 'service_sweep', String(result.sent), force ? { force: true } : undefined);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Send one project's launch announcement now.
+ *
+ * For the project that went live before anybody set its service key, and for
+ * the one whose email failed while the mail server was down. `force` re-sends
+ * one the client has already had, which is occasionally what is wanted and
+ * never what is wanted by accident.
+ */
+router.post('/announce/:projectId', requireCSRF, async (req, res, next) => {
+  try {
+    const project = await db.find('projects', req.params.projectId);
+    if (!project) return res.status(404).json({ error: 'No such project' });
+
+    const result = await serviceLaunch.announce(project, { force: req.body?.force === true });
+    if (!result.sent) return res.status(409).json({ error: result.reason, ...result });
+
+    await audit(req.user.id, 'send', 'service_launch', project.id, { template: result.template });
     res.json(result);
   } catch (err) {
     next(err);
@@ -296,6 +384,9 @@ router.post('/digest/:clientId', requireCSRF, async (req, res, next) => {
     if (!result.ok && !result.skipped) return res.status(502).json({ error: result.error || 'The summary could not be sent.' });
     res.json({
       ok: Boolean(result.ok),
+      // Accepted into the outbound queue rather than already in the inbox, so
+      // the page can say "sending" instead of claiming it has landed.
+      queued: Boolean(result.queued),
       skipped: result.skipped || null,
       to: client.email,
       redirectedTo: result.redirectedTo || null,

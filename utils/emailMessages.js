@@ -12,6 +12,13 @@
 const t = require('./emailTemplates');
 const appUrl = require('./appUrl');
 
+// The service announcements -- "this is live, here is what it does for you" --
+// live in their own file. There are thirty-one of them and they share a shape
+// of their own, which would have buried the twenty-four operational templates
+// here under copy. They register into the same list, so the Mail page and
+// `renderMessage()` cannot tell the two files apart.
+const service = require('./serviceEmails');
+
 function baseUrl() {
   return appUrl.baseUrl();
 }
@@ -118,6 +125,7 @@ function newTicketForStaff({ ticket, clientName, assigneeName, clickupUrl }) {
     html: t.renderEmail({
       preheader: `${clientName || 'A client'} raised "${ticket.subject}"`,
       eyebrow: 'New ticket',
+      hero: 'badge-ticket-new',
       title: `${clientName || 'A client'} raised a ticket`,
       actor: {
         name: clientName || 'Client',
@@ -153,6 +161,7 @@ function ticketReceiptForClient({ ticket, clientName, assigneeName }) {
     html: t.renderEmail({
       preheader: `Ticket ${ticket.id} is open and assigned.`,
       eyebrow: 'Request received',
+      hero: 'badge-ticket',
       title: 'We got your request',
       blocks: [
         t.paragraph(
@@ -198,6 +207,7 @@ function ticketAssigned({ ticket, assigneeName, clientName, actorName, actor = n
     html: t.renderEmail({
       preheader: `${who} assigned you ${ticket.id}`,
       eyebrow: 'Assignment',
+      hero: 'badge-assign',
       title: `${who} assigned you a ticket`,
       actor: actorCard(actor, actorName, `${who} assigned this to you`),
       blocks: [
@@ -236,7 +246,10 @@ function ticketStatusChanged({ ticket, fromStatus, toStatus, clientName, assigne
     html: t.renderEmail({
       preheader: `${fromStatus || 'Open'} to ${toStatus}`,
       eyebrow: 'Status update',
-      hero: done ? 'check-badge' : null,
+      // The one message here whose badge depends on the news. A ticket reaching
+      // "resolved" has earned the tick; a move to "in progress" has not, and
+      // using the same mark for both is how a tick stops meaning anything.
+      hero: done ? 'badge-status' : 'badge-ticket',
       title: done ? 'Your request is resolved' : `Your request moved to ${toStatus}`,
       blocks: [
         t.paragraph(
@@ -282,6 +295,7 @@ function ticketComment({ ticket, authorName, body, progress, stage, forClient = 
     html: t.renderEmail({
       preheader: `${authorName} commented on ${ticket.id}`,
       eyebrow: 'New comment',
+      hero: 'badge-comment',
       title: `${authorName} posted an update`,
       actor: { name: authorName, line: `${authorName} commented on ${ticket.id}` },
       blocks: [
@@ -328,6 +342,7 @@ function ticketRequest({ ticket, kind, fromName, toName, note }) {
     html: t.renderEmail({
       preheader: `${fromName} sent you a ${handover ? 'handover' : 'collaboration'} request`,
       eyebrow: handover ? 'Handover request' : 'Collaboration request',
+      hero: 'badge-handover',
       title: handover
         ? `${fromName} wants to hand this ticket to you`
         : `${fromName} wants your help on this ticket`,
@@ -374,6 +389,7 @@ function slaWarning({ ticket, assigneeName, clientName, minutesLeft }) {
     html: t.renderEmail({
       preheader: overdue ? `${ticket.id} is past its first-response deadline` : `${minutesLeft} minutes left on ${ticket.id}`,
       eyebrow: overdue ? 'Overdue' : 'Due soon',
+      hero: 'badge-clock',
       title: overdue ? 'This ticket has no first response yet' : 'A first response is due soon',
       blocks: [
         t.callout({
@@ -423,6 +439,7 @@ function credentialsIssued({ user, temporaryPassword, expiresAt, sections, invit
     html: t.renderEmail({
       preheader: isReset ? 'A new password for your account' : 'Your password, or a one-tap link',
       eyebrow: isReset ? 'Password reset' : 'Welcome',
+      hero: 'badge-credentials',
       title: isReset ? 'Your password has been reset' : `Your ${roleWord} login`,
       actor: invitedBy ? { name: invitedBy, line: `${invitedBy} set this up for you` } : null,
       blocks: [
@@ -488,6 +505,7 @@ function loginCode({ user, code, expiresAt, ipAddress }) {
     html: t.renderEmail({
       preheader: `Your code expires in ${minutes} minutes.`,
       eyebrow: 'Verification',
+      hero: 'badge-key',
       title: 'Finish signing in',
       blocks: [
         t.paragraph(`Hi ${user.name}. Enter this code to finish signing in. It expires in ${minutes} minutes.`),
@@ -523,6 +541,7 @@ function adminRosterChanged({ actorName, targetName, targetEmail, change, adminC
     html: t.renderEmail({
       preheader: `${actorName} ${added ? 'promoted' : 'removed'} ${targetName}`,
       eyebrow: 'Administration',
+      hero: 'badge-admin',
       title: added ? 'A new administrator was added' : 'An administrator was removed',
       actor: { name: actorName, line: `${actorName} made this change` },
       blocks: [
@@ -580,6 +599,7 @@ function progressDigest({ clientName, tickets = [], projects = [], period = 'thi
     html: t.renderEmail({
       preheader: `${open.length} in flight, ${closed.length} finished ${period}`,
       eyebrow: 'Progress summary',
+      hero: 'badge-optimise',
       title: `Where your work stands ${period}`,
       blocks: [
         t.paragraph(`Hi ${clientName || 'there'}. Here is where your work stands.`),
@@ -653,6 +673,7 @@ function paymentReceived({ clientName, payment }) {
     html: t.renderEmail({
       preheader: `${amount} received. Nothing further is needed.`,
       eyebrow: 'Payment received',
+      hero: 'badge-payment',
       title: `Thank you - ${amount} received`,
       blocks: [
         t.paragraph(`Hi ${clientName || 'there'}. Your payment went through, and there is nothing else for you to do.`),
@@ -706,6 +727,7 @@ function paymentFailed({ clientName, payment }) {
     html: t.renderEmail({
       preheader: 'Your card was declined. Updating it takes about a minute.',
       eyebrow: 'Action needed',
+      hero: 'badge-payment-failed',
       title: 'We could not take your last payment',
       blocks: [
         t.paragraph(`Hi ${clientName || 'there'}. Your bank declined the payment below, so your plan is on hold. Nothing has been deleted and your work is untouched.`),
@@ -756,6 +778,7 @@ function paymentSummary({ clientName, payments = [], total, currency = 'usd', pe
     html: t.renderEmail({
       preheader: `${money(total, currency)} across ${paid.length} payment${paid.length === 1 ? '' : 's'}.`,
       eyebrow: 'Payment summary',
+      hero: 'badge-receipt',
       title: `${money(total, currency)} ${period}`,
       blocks: [
         t.paragraph(`Hi ${clientName || 'there'}. Here is every payment on your account ${period}, straight from our payment provider.`),
@@ -803,6 +826,7 @@ function approvalRequested({ requesterName, summary, actionLabel, requestedAt })
     html: t.renderEmail({
       preheader: `${requesterName} is waiting on a second signature.`,
       eyebrow: 'Approval needed',
+      hero: 'badge-approval',
       title: `${requesterName} needs a second signature`,
       blocks: [
         t.paragraph('An administrator has proposed a change that does not take effect until someone else signs it off. Nothing has happened yet.'),
@@ -843,6 +867,7 @@ function approvalDecided({ approverName, summary, decision, note }) {
     html: t.renderEmail({
       preheader: `${approverName} ${approved ? 'approved' : 'turned down'} your request.`,
       eyebrow: approved ? 'Approved' : 'Turned down',
+      hero: 'badge-decided',
       title: approved ? 'Your change went through' : 'Your change was turned down',
       blocks: [
         t.paragraph(
@@ -919,6 +944,7 @@ function domainExpiring({ domain, clientName, daysLeft, window }) {
         ? `${domain.domainName} has lapsed. It can usually still be recovered.`
         : `${domain.domainName} needs renewing ${window}.`,
       eyebrow: expired ? 'Needs attention' : urgent ? 'Renewal due' : 'Coming up',
+      hero: 'badge-domain',
       title: subject,
       blocks: [
         t.paragraph(opening),
@@ -970,6 +996,7 @@ function testEmail({ requestedBy }) {
     html: t.renderEmail({
       preheader: 'If you can read this, outbound email works.',
       eyebrow: 'Test message',
+      hero: 'badge-send',
       title: 'Outbound email is working',
       actor: requestedBy ? { name: requestedBy, line: `${requestedBy} sent this test` } : null,
       blocks: [
@@ -1039,6 +1066,7 @@ function accountActivation({ user, activationUrl, expiresAt, sections = null, in
         ? 'One link, one use, and you choose the password.'
         : `Choose a password and your ${roleWord} is ready.`,
       eyebrow: isReset ? 'Password setup' : 'Welcome',
+      hero: 'badge-activate',
       title: isReset ? 'Choose a new password' : `Set up your ${roleWord}`,
       actor: invitedBy ? { name: invitedBy, line: `${invitedBy} set this up for you` } : null,
       blocks: [
@@ -1095,6 +1123,7 @@ function passwordExpiring({ user, daysLeft, expiresAt, resetUrl = null }) {
     html: t.renderEmail({
       preheader: `Change it now and you will not be interrupted later.`,
       eyebrow: 'Security',
+      hero: 'badge-clock',
       title: `Your password expires ${when}`,
       blocks: [
         t.paragraph(
@@ -1137,6 +1166,7 @@ function passwordReset({ user, resetUrl, expiresAt, ipAddress = null, required =
     html: t.renderEmail({
       preheader: 'One link, good once, and it expires shortly.',
       eyebrow: 'Password reset',
+      hero: 'badge-lock',
       title: required ? 'Your password needs replacing' : 'Reset your password',
       blocks: [
         t.paragraph(
@@ -1193,6 +1223,7 @@ function passwordChanged({ user, at = Date.now(), ipAddress = null, via = 'self'
     html: t.renderEmail({
       preheader: 'If this was you, there is nothing to do.',
       eyebrow: 'Security',
+      hero: 'badge-lock-done',
       title: 'Your password was changed',
       blocks: [
         t.paragraph(`Hi ${user.name}. The password on your account was changed ${how}.`),
@@ -1238,6 +1269,7 @@ function credentialDeliveryFailed({ user, error, scheduledAt = null, attempts = 
     html: t.renderEmail({
       preheader: 'A scheduled credential delivery failed and is waiting to be retried.',
       eyebrow: 'Delivery failed',
+      hero: 'badge-alert',
       title: 'A login could not be delivered',
       blocks: [
         t.paragraph(
@@ -1310,6 +1342,8 @@ const SAMPLE_PAYMENT = {
 
 const TEMPLATES = {
   new_ticket_staff: {
+    audience: 'team',
+    group: 'Tickets',
     label: 'New ticket (team)',
     description: 'Sent to every admin and the assigned owner when a ticket is raised.',
     render: () => newTicketForStaff({
@@ -1320,11 +1354,15 @@ const TEMPLATES = {
     }),
   },
   ticket_receipt_client: {
+    audience: 'client',
+    group: 'Tickets',
     label: 'Ticket receipt (client)',
     description: "The client's confirmation that their request landed and has an owner.",
     render: () => ticketReceiptForClient({ ticket: SAMPLE_TICKET, clientName: 'David Shaw', assigneeName: 'Ryan Coleman' }),
   },
   ticket_assigned: {
+    audience: 'team',
+    group: 'Tickets',
     label: 'Ticket assigned',
     description: 'Sent to a team member when a ticket becomes theirs.',
     render: () => ticketAssigned({
@@ -1332,6 +1370,8 @@ const TEMPLATES = {
     }),
   },
   ticket_status: {
+    audience: 'client',
+    group: 'Tickets',
     label: 'Status changed',
     description: 'Sent to the client when a ticket moves status.',
     render: () => ticketStatusChanged({
@@ -1339,6 +1379,8 @@ const TEMPLATES = {
     }),
   },
   ticket_comment: {
+    audience: 'both',
+    group: 'Tickets',
     label: 'New comment',
     description: 'Sent when a note is posted on a ticket.',
     render: () => ticketComment({
@@ -1350,6 +1392,8 @@ const TEMPLATES = {
     }),
   },
   ticket_request: {
+    audience: 'team',
+    group: 'Tickets',
     label: 'Handover request',
     description: 'Sent when a teammate is asked to take over or help.',
     render: () => ticketRequest({
@@ -1358,6 +1402,8 @@ const TEMPLATES = {
     }),
   },
   sla_warning: {
+    audience: 'team',
+    group: 'Tickets',
     label: 'Response due',
     description: 'Sent to the owner and admins as the first-response clock runs out.',
     render: () => slaWarning({
@@ -1365,6 +1411,8 @@ const TEMPLATES = {
     }),
   },
   login_code: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Sign-in code',
     description: 'The one-time code sent to anyone signing in without an admin role.',
     render: () => loginCode({
@@ -1375,6 +1423,8 @@ const TEMPLATES = {
     }),
   },
   credentials: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Login issued',
     description: 'Sent to a person when an admin creates their account or resets the password.',
     render: () => credentialsIssued({
@@ -1389,6 +1439,8 @@ const TEMPLATES = {
     }),
   },
   admin_roster: {
+    audience: 'team',
+    group: 'Accounts & access',
     label: 'Admin roster change',
     description: 'Sent to every administrator when the admin list changes.',
     render: () => adminRosterChanged({
@@ -1396,6 +1448,8 @@ const TEMPLATES = {
     }),
   },
   progress_digest: {
+    audience: 'client',
+    group: 'Reports & summaries',
     label: 'Progress summary',
     description: 'Periodic client-facing summary of tickets and projects.',
     render: () => progressDigest({
@@ -1405,11 +1459,15 @@ const TEMPLATES = {
     }),
   },
   payment_received: {
+    audience: 'client',
+    group: 'Billing',
     label: 'Payment received',
     description: 'The receipt a client gets the first time Stripe reports an invoice paid.',
     render: () => paymentReceived({ clientName: 'David Shaw', payment: SAMPLE_PAYMENT }),
   },
   payment_failed: {
+    audience: 'client',
+    group: 'Billing',
     label: 'Payment failed',
     description: 'Sent when Stripe reports a declined card, with the one action that fixes it.',
     render: () => paymentFailed({
@@ -1422,6 +1480,8 @@ const TEMPLATES = {
     }),
   },
   payment_summary: {
+    audience: 'client',
+    group: 'Billing',
     label: 'Payment summary',
     description: 'Periodic client-facing summary of what they paid, read from Stripe.',
     render: () => paymentSummary({
@@ -1439,6 +1499,8 @@ const TEMPLATES = {
     }),
   },
   approval_requested: {
+    audience: 'team',
+    group: 'Internal approvals',
     label: 'Approval needed',
     description: 'Sent to every approver when an untrusted admin proposes a sensitive change.',
     render: () => approvalRequested({
@@ -1449,6 +1511,8 @@ const TEMPLATES = {
     }),
   },
   approval_decided: {
+    audience: 'team',
+    group: 'Internal approvals',
     label: 'Approval decided',
     description: 'The answer, sent to whoever raised the request.',
     render: () => approvalDecided({
@@ -1459,6 +1523,8 @@ const TEMPLATES = {
     }),
   },
   domain_expiring: {
+    audience: 'client',
+    group: 'Domains',
     label: 'Domain expiring',
     description: 'Automatic renewal reminders, from a month out to a week after the date.',
     render: () => domainExpiring({
@@ -1475,6 +1541,8 @@ const TEMPLATES = {
     }),
   },
   account_activation: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Account activation',
     description: 'A scheduled hand-over: the link that lets a new account choose its own password.',
     render: () => accountActivation({
@@ -1486,6 +1554,8 @@ const TEMPLATES = {
     }),
   },
   password_expiring: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Password expiring',
     description: 'The heads-up a few days before a password reaches the end of its month.',
     render: () => passwordExpiring({
@@ -1496,6 +1566,8 @@ const TEMPLATES = {
     }),
   },
   password_reset: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Password reset',
     description: 'The single-use link that sets a new password. Never carries a password itself.',
     render: () => passwordReset({
@@ -1506,6 +1578,8 @@ const TEMPLATES = {
     }),
   },
   password_changed: {
+    audience: 'both',
+    group: 'Accounts & access',
     label: 'Password changed',
     description: 'Confirmation that a password moved, so a takeover cannot happen quietly.',
     render: () => passwordChanged({
@@ -1516,6 +1590,8 @@ const TEMPLATES = {
     }),
   },
   credential_delivery_failed: {
+    audience: 'team',
+    group: 'Accounts & access',
     label: 'Credential delivery failed',
     description: 'Sent to administrators when a scheduled login email could not be delivered.',
     render: () => credentialDeliveryFailed({
@@ -1525,7 +1601,14 @@ const TEMPLATES = {
       attempts: 2,
     }),
   },
+  // Welcome, the twenty-two service launches, the four engagement steps and the
+  // four recurring summaries. Spread rather than re-declared so that adding one
+  // means touching serviceEmails.js and nothing else.
+  ...service.SERVICE_TEMPLATES,
+
   test: {
+    audience: 'team',
+    group: 'Diagnostics',
     label: 'Test message',
     description: 'Deliverability check sent from the Mail page.',
     render: () => testEmail({ requestedBy: 'Admin User' }),
@@ -1538,8 +1621,86 @@ function renderMessage(key) {
   return entry ? entry.render() : null;
 }
 
+/**
+ * The order the groups are shown in on the Mail page.
+ *
+ * Client-facing first and internal last, because that is the order an admin
+ * cares about them: the messages a paying customer reads are the ones worth
+ * proof-reading, and the ones this app sends itself are the ones you only look
+ * at when something is wrong.
+ *
+ * A group named here that holds nothing is simply not drawn. A group a template
+ * names that is NOT here is appended at the end rather than dropped -- see
+ * `listGroups` -- because a template vanishing from this page is exactly the
+ * failure this list is replacing.
+ */
+const GROUP_ORDER = [
+  'Welcome & onboarding',
+  'Service launches - Website',
+  'Service launches - AI',
+  'Service launches - Growth',
+  'Service launches - Data',
+  'Service launches - Accessibility',
+  'Service launches - Support',
+  'Engagement steps',
+  'Monthly updates',
+  'Tickets',
+  'Billing',
+  'Domains',
+  'Reports & summaries',
+  'Accounts & access',
+  'Internal approvals',
+  'Diagnostics',
+];
+
+/** Where a template with no group of its own ends up. */
+const UNGROUPED = 'Other';
+
+/** Who reads it: the paying client, our own team, or both depending on context. */
+const AUDIENCES = ['client', 'team', 'both'];
+
 function listTemplates() {
-  return Object.entries(TEMPLATES).map(([key, v]) => ({ key, label: v.label, description: v.description }));
+  return Object.entries(TEMPLATES).map(([key, v]) => ({
+    key,
+    label: v.label,
+    description: v.description,
+    // Defaulted rather than required. A template added without these still
+    // appears on the page, in Other, which is visible enough to get fixed --
+    // the alternative, silently not being drawn, is what went wrong before.
+    audience: AUDIENCES.includes(v.audience) ? v.audience : 'team',
+    group: v.group || UNGROUPED,
+  }));
+}
+
+/**
+ * The groups, in display order, each with its templates.
+ *
+ * Built from the templates themselves rather than from a list the page keeps
+ * of its own. That is the whole point of this function: the Mail page used to
+ * hold its own hard-coded set of groups and keys, and every template added
+ * since simply stopped appearing -- forty-one of fifty-four of them, in the
+ * end, including every payment, approval, domain and password message. The
+ * page now draws what the server says exists, so a template cannot be added
+ * without showing up somewhere.
+ */
+function listGroups() {
+  const templates = listTemplates();
+  const byGroup = new Map();
+  for (const template of templates) {
+    if (!byGroup.has(template.group)) byGroup.set(template.group, []);
+    byGroup.get(template.group).push(template);
+  }
+
+  const ordered = GROUP_ORDER.filter((heading) => byGroup.has(heading));
+  const extras = [...byGroup.keys()].filter((heading) => !GROUP_ORDER.includes(heading)).sort();
+
+  return [...ordered, ...extras].map((heading) => ({
+    heading,
+    templates: byGroup.get(heading),
+    // What the group as a whole is for, so the page can filter on it without
+    // opening every template in it.
+    audiences: [...new Set(byGroup.get(heading).map((t) => t.audience))],
+  }));
 }
 
 /**
@@ -1586,7 +1747,45 @@ module.exports = {
   approvalDecided,
   domainExpiring,
   testEmail,
+
+  // Service announcements, re-exported so callers have one place to require
+  // from. `service` keeps them grouped for anything that wants the whole set.
+  service,
+  servicesWelcome: service.servicesWelcome,
+  websiteRedesignLive: service.websiteRedesignLive,
+  headlessLive: service.headlessLive,
+  landingPageLive: service.landingPageLive,
+  maintenanceLive: service.maintenanceLive,
+  knowledgeChatbotLive: service.knowledgeChatbotLive,
+  llmChatbotLive: service.llmChatbotLive,
+  csrAutomationLive: service.csrAutomationLive,
+  humanHandoffLive: service.humanHandoffLive,
+  seoLive: service.seoLive,
+  googleAdsLive: service.googleAdsLive,
+  metaAdsLive: service.metaAdsLive,
+  socialReelsLive: service.socialReelsLive,
+  emailMarketingLive: service.emailMarketingLive,
+  crmIntegrationLive: service.crmIntegrationLive,
+  dashboardLive: service.dashboardLive,
+  analyticsLive: service.analyticsLive,
+  monthlyReportingLive: service.monthlyReportingLive,
+  accessibilityFixesLive: service.accessibilityFixesLive,
+  accessibilityAuditLive: service.accessibilityAuditLive,
+  techSupportLive: service.techSupportLive,
+  aiContextUpdateLive: service.aiContextUpdateLive,
+  apiMaintenanceLive: service.apiMaintenanceLive,
+  auditReady: service.auditReady,
+  planReady: service.planReady,
+  buildStarted: service.buildStarted,
+  optimizeDigest: service.optimizeDigest,
+  adsPerformanceUpdate: service.adsPerformanceUpdate,
+  seoRankingUpdate: service.seoRankingUpdate,
+  chatbotPerformanceUpdate: service.chatbotPerformanceUpdate,
+  accessibilityScoreUpdate: service.accessibilityScoreUpdate,
+
   listTemplates,
+  listGroups,
+  GROUP_ORDER,
   renderMessage,
   renderPreview,
   stageLabel,

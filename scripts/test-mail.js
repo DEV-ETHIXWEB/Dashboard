@@ -25,6 +25,18 @@ function check(label, ok, detail) {
   }
 }
 
+/**
+ * Run the outbound queue until it stops moving.
+ *
+ * One sweep sends everything that is due, but a message whose first transport
+ * failed is put back with a delay and is deliberately not due again yet, so
+ * looping until nothing moves would hang. One sweep is what "send it now"
+ * means here; the retry schedule has its own tests.
+ */
+async function drain() {
+  return require('../utils/outbox').runSweep();
+}
+
 /** A minimal but real ESMTP server: EHLO, AUTH LOGIN, MAIL, RCPT, DATA, QUIT. */
 function startSmtpServer() {
   const received = [];
@@ -143,7 +155,11 @@ async function main() {
   const verified = await mailer.verifyTransport();
   check('credentials verify against a live server', verified.ok === true, JSON.stringify(verified));
 
-  // Send through the normal application path, not a special test path.
+  // Send through the normal application path, not a special test path. That
+  // path now puts the message in the outbound queue rather than on the wire,
+  // so `drain` below is part of it -- see utils/outbox.js. Asserting after a
+  // real sweep tests strictly more than the old inline send did: the row, the
+  // claim, the transport and the log entry all have to be right.
   const result = await mailer.sendTemplate({
     to: ['client@example.com', 'owner@example.com'],
     message: messages.ticketReceiptForClient({
@@ -166,8 +182,16 @@ async function main() {
   });
 
   check('send reports success', result.ok === true, JSON.stringify(result));
-  check('send reports the smtp transport', result.transport === 'smtp', String(result.transport));
-  check('a message id came back from the server', Boolean(result.providerId));
+  check('an accepted message says it was queued', result.queued === true, JSON.stringify(result));
+  check('and it is on the Mail page already', Boolean(result.logId), String(result.logId));
+
+  // Nothing has been sent yet -- that is the point of a queue, and worth
+  // asserting rather than assuming, because a `sendMail` that quietly went
+  // inline would pass every test after this one.
+  check('nothing reached the server before the sweep', smtp.received.length === 0, `${smtp.received.length}`);
+
+  const firstSweep = await drain();
+  check('one sweep delivers it', firstSweep.sent === 1, JSON.stringify(firstSweep));
 
   // Give the server a moment to finish the DATA stanza.
   await new Promise((r) => setTimeout(r, 300));
@@ -255,9 +279,13 @@ async function main() {
     });
 
     check('a redirected send still reports success', result.ok === true, JSON.stringify(result));
-    check('it says where it actually went', result.redirectedTo === 'test-inbox@example.com', result.redirectedTo);
     check('it still reports who it was for', (result.recipients || []).includes('real.client@example.com'),
       JSON.stringify(result.recipients));
+
+    // The redirect is applied on the way to the wire, so it is the sweep that
+    // reports it, not the enqueue.
+    const swept = await drain();
+    check('the queued redirect went out on one sweep', swept.sent === 1, JSON.stringify(swept));
 
     const sent = smtp.received[before];
     check('exactly one message left', smtp.received.length === before + 1, `${smtp.received.length - before}`);

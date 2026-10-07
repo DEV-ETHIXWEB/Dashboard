@@ -39,7 +39,21 @@ const SCHEMAS = {
     // held for a second signature until a super admin vouches for them.
     'admin_trusted', 'admin_trusted_at', 'admin_trusted_by',
   ],
-  projects: ['id', 'name', 'type', 'client_id', 'assigned_pm_id', 'status', 'description', 'created_at'],
+  projects: [
+    'id', 'name', 'type', 'client_id', 'assigned_pm_id', 'status', 'description', 'created_at',
+    // Which of the twenty-two services this project delivers, and the details
+    // its launch email needs. `service` is one of the keys in
+    // utils/serviceEmails.js (SERVICE_KEYS); when the project reaches a live
+    // status, utils/serviceLaunch.js sends that service's announcement to the
+    // client, once. Empty means this project announces nothing, which is the
+    // right default -- an internal rebuild should not mail anybody.
+    //
+    // `service_context` is JSON holding the handful of specifics that make the
+    // announcement worth reading (the domain, the monthly budget, which CRM).
+    // It is deliberately a blob rather than twenty columns: every service wants
+    // different fields, and none of them is ever queried.
+    'service', 'service_context',
+  ],
   tasks: ['id', 'project_id', 'name', 'assignee_id', 'status', 'priority', 'due'],
   tickets: [
     'id', 'subject', 'category', 'client_id', 'assignee_id', 'status', 'description', 'created_at',
@@ -125,6 +139,31 @@ const SCHEMAS = {
     'attempts', 'last_attempt_at', 'last_error',
     'claimed_at', 'sent_at', 'cancelled_at',
     'created_by', 'created_at', 'updated_at',
+  ],
+  // Every outbound message that is waiting to go, being sent, or has given up.
+  //
+  // The queue exists because a send used to be one attempt: a provider blip,
+  // and the message was gone -- a row in `email_log` saying 'failed' and
+  // nobody told. A row here outlives the request that created it, so a
+  // transport that is down for ten minutes costs a delay rather than a
+  // message. See utils/outbox.js.
+  //
+  // `payload` is JSON and never holds a secret. Anything carrying a live
+  // credential -- a sign-in code, an activation link -- is refused by
+  // `enqueue` and sent inline instead, because a code retried half an hour
+  // later has expired anyway and a queue row holding one is a credential
+  // sitting at rest. utils/mailer.js names the templates that rule covers.
+  //
+  // `dedupe_key` carries a UNIQUE index. It is how a caller that may run
+  // twice -- a retried webhook, a double-clicked button -- queues a message
+  // once: the second insert is refused by the database rather than by the
+  // application remembering.
+  outbox: [
+    'id', 'channel', 'status', 'dedupe_key', 'payload',
+    'attempts', 'max_attempts', 'next_attempt_at',
+    'claimed_at', 'last_attempt_at', 'last_error',
+    'sent_at', 'transport', 'entity', 'entity_id',
+    'created_at', 'updated_at',
   ],
   // Account-activation and password-reset links. Same shape as login_links and
   // for the same reason: only the SHA-256 of the secret half is stored, so a
@@ -243,9 +282,13 @@ const SCHEMAS = {
  *   billing.client_id            one billing record per client, by definition.
  *   user_avatars.user_id         one picture per account -- a replacement is an
  *                                upsert, not a second row to choose between.
+ *   outbox.dedupe_key            a caller that may run twice queues the message
+ *                                once; the refused insert is how utils/outbox.js
+ *                                knows it has already been asked.
  */
 const UNIQUE_FIELDS = {
   users: ['email'],
+  outbox: ['dedupeKey'],
   billing: ['clientId'],
   payments: ['stripeObjectId'],
   user_avatars: ['userId'],

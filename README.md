@@ -168,6 +168,40 @@ Turn delivery on with any ONE of:
 Detection order is SMTP2GO, SMTP, webhook; `MAIL_TRANSPORT=smtp2go|smtp|webhook`
 forces one when more than one is configured.
 
+Configure **two** and they become a fallback chain rather than a preference: a
+transport that fails for a reason about the transport -- a refused connection,
+a timeout, a 5xx, a rate limit -- hands the message to the next one before the
+attempt is called a failure. A rejected recipient or an unverified sending
+domain stops there, because every transport will say the same thing.
+
+### The outbound queue
+
+Every email, text and Slack post goes into a queue before it goes out, so a
+provider having a bad ten minutes costs a delay instead of the message. A send
+is retried five times over roughly nine hours (1m, 5m, 30m, 2h, 6h); after that
+the administrators are told rather than the message disappearing. A failure
+that no retry could fix -- a bad API key, a recipient who replied STOP -- gives
+up on the first attempt instead of waiting out the schedule. See
+`utils/outbox.js`.
+
+Two things deliberately do **not** queue:
+
+- Anything carrying a live credential -- a sign-in code, an activation link, a
+  password reset. Queueing one would store a working credential in a database
+  column for hours, and a code retried half an hour later has expired anyway.
+  These send inline, where the caller finds out immediately and still gets the
+  transport fallback above. The rule is enforced on the message as well as by
+  name, so a new template that emails a link is safe by default.
+- The Mail page's "send a test email" button, which exists to report what
+  happened.
+
+The queue is driven by ordinary request traffic, so it needs no setup while
+somebody is using the dashboard. For the hours when nobody is, `vercel.json`
+runs `/api/outbox/sweep` every two minutes -- set `CRON_SECRET` on Vercel (or
+`OUTBOX_CRON_SECRET` anywhere else) or that endpoint answers 404 to everything,
+including the cron. On a host that keeps a process alive a timer is armed too.
+`GET /api/outbox` is the admin answer to "is mail stuck?".
+
 Also set `MAIL_FROM` (an address the mailbox may send as) and `APP_BASE_URL`
 (the public URL of this dashboard -- the buttons and the emblem in every email
 point at it).

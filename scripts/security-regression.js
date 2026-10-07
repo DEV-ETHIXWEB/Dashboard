@@ -945,6 +945,96 @@ async function main() {
   }
   check('revealing sign-in codes has its own rate limit', limited, 'no 429 after 25 attempts');
 
+  // ------------------------------------------------- the outbox cron --
+  section('The outbox sweep endpoint is not a way to make the app send');
+
+  // This endpoint runs the outbound queue, so reaching it means sending real
+  // messages on demand. It is authenticated by a shared secret rather than a
+  // session, which makes it a boundary of its own -- and one nothing else in
+  // this suite covers, because it is the only route in the app that works
+  // that way.
+  delete process.env.OUTBOX_CRON_SECRET;
+  delete process.env.CRON_SECRET;
+  const noSecretSet = await fetch(`${base}/api/outbox/sweep`, { method: 'POST' });
+  check('with no secret configured the endpoint is closed, not open',
+    noSecretSet.status === 404, String(noSecretSet.status));
+
+  process.env.OUTBOX_CRON_SECRET = 'a-long-test-cron-secret';
+
+  const noHeader = await fetch(`${base}/api/outbox/sweep`, { method: 'POST' });
+  check('a request with no secret is refused', noHeader.status === 404, String(noHeader.status));
+
+  const wrongSecret = await fetch(`${base}/api/outbox/sweep`, {
+    method: 'POST', headers: { Authorization: 'Bearer not-the-secret-at-all' },
+  });
+  check('a wrong secret is refused', wrongSecret.status === 404, String(wrongSecret.status));
+
+  // A shorter guess must be refused by the length check rather than throwing
+  // inside timingSafeEqual, which would answer 500 and confirm the length.
+  const shortSecret = await fetch(`${base}/api/outbox/sweep`, {
+    method: 'POST', headers: { Authorization: 'Bearer a' },
+  });
+  check('a shorter guess is refused without a 500', shortSecret.status === 404, String(shortSecret.status));
+
+  // The admin's own session must not reach it either: a logged-in admin is not
+  // the cron, and a CSRF-less POST that a session could trigger is exactly
+  // what this endpoint must not be.
+  const withSession = await trusted.req('POST', '/api/outbox/sweep');
+  check('an admin session cannot run the sweep', withSession.status === 404, String(withSession.status));
+
+  const rightSecret = await fetch(`${base}/api/outbox/sweep`, {
+    method: 'POST', headers: { Authorization: 'Bearer a-long-test-cron-secret' },
+  });
+  check('AUTHORIZED: the cron secret runs the sweep', rightSecret.status === 202, String(rightSecret.status));
+
+  // Vercel's cron issues a GET, so that has to work too or nothing is swept.
+  const viaGet = await fetch(`${base}/api/outbox/sweep`, {
+    headers: { Authorization: 'Bearer a-long-test-cron-secret' },
+  });
+  check('AUTHORIZED: a GET works too, because Vercel cron sends one',
+    viaGet.status === 202, String(viaGet.status));
+
+  // The header alternative, for anything that cannot send a bearer token.
+  const viaHeader = await fetch(`${base}/api/outbox/sweep`, {
+    method: 'POST', headers: { 'X-Outbox-Secret': 'a-long-test-cron-secret' },
+  });
+  check('AUTHORIZED: the explicit header works as well', viaHeader.status === 202, String(viaHeader.status));
+
+  // And the summary is the other way round: session-only, admin-only, and the
+  // cron secret is not a way in.
+  const summaryWithSecret = await fetch(`${base}/api/outbox`, {
+    headers: { Authorization: 'Bearer a-long-test-cron-secret' },
+  });
+  check('the cron secret cannot read the queue summary',
+    summaryWithSecret.status === 401 || summaryWithSecret.status === 403,
+    String(summaryWithSecret.status));
+
+  const summaryAsAdmin = await trusted.req('GET', '/api/outbox');
+  check('AUTHORIZED: an admin can read the queue summary', summaryAsAdmin.status === 200,
+    String(summaryAsAdmin.status));
+  check('and it says nothing about message contents',
+    !/to|subject|html|payload/i.test(JSON.stringify(summaryAsAdmin.data?.counts || {})),
+    JSON.stringify(summaryAsAdmin.data));
+
+  // Vercel names its own variable CRON_SECRET and will only send the bearer
+  // token when it is set, so that spelling has to work or nothing is ever
+  // swept on a Vercel deployment.
+  delete process.env.OUTBOX_CRON_SECRET;
+  process.env.CRON_SECRET = 'the-platform-cron-secret';
+  const viaPlatformName = await fetch(`${base}/api/outbox/sweep`, {
+    headers: { Authorization: 'Bearer the-platform-cron-secret' },
+  });
+  check("AUTHORIZED: Vercel's own CRON_SECRET works too", viaPlatformName.status === 202,
+    String(viaPlatformName.status));
+
+  const stillWrong = await fetch(`${base}/api/outbox/sweep`, {
+    headers: { Authorization: 'Bearer the-wrong-platform-secret' },
+  });
+  check('and a wrong one is still refused', stillWrong.status === 404, String(stillWrong.status));
+
+  delete process.env.OUTBOX_CRON_SECRET;
+  delete process.env.CRON_SECRET;
+
   // --------------------------------------------------------------- done --
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -217,6 +217,28 @@ app.use(dbReady);
 // before the routers so the finish handler is in place when they reply.
 app.use(require('./middleware/live').broadcastChanges);
 
+// Ordinary traffic drives the outbound queue.
+//
+// On a platform where no process is guaranteed to live between requests, a
+// timer at boot is not a scheduler, so the sweep has to be able to ride on a
+// request. Mounted here rather than inside one router because it is not any
+// one page's business: whichever request happens to arrive first after a
+// message came due is the one that sends it.
+//
+// Deliberately not awaited -- the reply must not wait on an SMTP handshake --
+// and throttled to once a minute inside `maybeSweep`, with an in-flight guard,
+// so a busy dashboard cannot start a second one. The atomic claim in
+// utils/outbox.js is what makes it safe for two *processes* to race here.
+app.use('/api', (req, res, next) => {
+  void require('./utils/outbox').maybeSweep();
+  // And the monthly service summaries, on the same principle and for the same
+  // reason: a deployment that never set up the cron should still send them.
+  // Throttled to once an hour and a no-op after the tenth of the month, so on
+  // the other twenty days of the year this costs one comparison.
+  void require('./utils/serviceDigest').maybeSweep();
+  next();
+});
+
 app.use('/api/events', require('./routes/events'));
 app.use('/api/config', require('./routes/config'));
 app.use('/api/auth', require('./routes/auth'));
@@ -235,6 +257,7 @@ app.use('/api/mail', require('./routes/mail'));
 app.use('/api/client', require('./routes/client'));
 app.use('/api/approvals', require('./routes/approvals'));
 app.use('/api/credentials', require('./routes/credentials'));
+app.use('/api/outbox', require('./routes/outbox'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -264,6 +287,10 @@ if (require.main === module) {
     // open on its own.
     require('./utils/credentialScheduler').startTimer();
     require('./utils/passwordWatch').startTimer();
+    // The outbound queue. Traffic drives it too, but a message that came due
+    // at 3am on a quiet workspace should not wait for the first person to
+    // sign in -- which, without this, is exactly what it would do.
+    require('./utils/outbox').startTimer();
     // Sign-in codes go out by email. With no transport configured, a client
     // cannot sign in without an admin reading a code out of the Login Codes
     // page -- which is the fallback, not the plan. Say so loudly at boot
@@ -279,6 +306,11 @@ if (require.main === module) {
           'Without a transport they cannot complete a sign-in either. Configure mail before restarting in production.',
       );
     }
+    // The three settings that decide whether a client's email arrives looking
+    // like a real message or like a broken one. Each is silent when wrong --
+    // the send succeeds, the inbox shows the damage -- so they are named at
+    // boot rather than discovered by a customer.
+    require('./utils/mailAutomation').warnIfRisky();
   });
 }
 
