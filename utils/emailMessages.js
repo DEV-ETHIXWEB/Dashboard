@@ -11,6 +11,10 @@
 
 const t = require('./emailTemplates');
 const appUrl = require('./appUrl');
+// Every price, period and discount that appears in an email comes from here.
+// A figure typed into a template is a second price list, and the one nobody
+// remembers to change.
+const plansConfig = require('../lib/plans');
 
 // The service announcements -- "this is live, here is what it does for you" --
 // live in their own file. There are thirty-one of them and they share a shape
@@ -633,6 +637,494 @@ function progressDigest({ clientName, tickets = [], projects = [], period = 'thi
 function billingLink() {
   const base = baseUrl();
   return base ? `${base}/portal/billing` : null;
+}
+
+function plansLink() {
+  const base = baseUrl();
+  return base ? `${base}/portal/billing/plans` : null;
+}
+
+/** A plain calendar date. Renewals and period ends are days, not moments. */
+function planDate(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+function ticketsLink() {
+  const base = baseUrl();
+  return base ? `${base}/portal/tickets` : null;
+}
+
+/**
+ * Where somebody changes what we send them.
+ *
+ * Required on commercial mail, and the honest version of it is a page they can
+ * actually act on rather than a dead anchor. Defaults to their own profile;
+ * MAIL_PREFERENCES_URL repoints it without a deploy if that moves.
+ */
+function preferencesLink() {
+  const override = String(process.env.MAIL_PREFERENCES_URL || '').trim();
+  if (override) return override;
+  const base = baseUrl();
+  return base ? `${base}/portal/profile` : null;
+}
+
+function legalLinks() {
+  const base = baseUrl();
+  if (!base) return [];
+  return [
+    { label: 'Terms of Service', url: `${base}/terms` },
+    { label: 'Privacy Policy', url: `${base}/privacy` },
+  ];
+}
+
+/**
+ * Which badge stands for each plan.
+ *
+ * From the set the rest of the app's email already uses, so the plan cards
+ * look like they come from the same place as every other message rather than
+ * from a stock icon pack. The glyph says what the plan *is* before a word is
+ * read: a team, a pair of hands, a website.
+ */
+const PLAN_ICON = {
+  unlimited: 'badge-people',
+  managed: 'badge-support',
+  basic: 'badge-website',
+};
+
+/**
+ * One plan, as a card.
+ *
+ * The price is the biggest thing on it, because it is what somebody skimming
+ * on a phone is actually looking for. Under it, three or four two-word lines
+ * rather than a sentence -- a pricing card has room for keywords, and a
+ * paragraph in a card is a paragraph nobody finishes.
+ *
+ * Built as a table with a solid `bgcolor` so Outlook, which drops the border
+ * radius and the gradient, is still left with a coloured box and a readable
+ * price. The featured plan is distinguished by weight and a tint rather than
+ * by being the only one with a border, so it survives a client that strips
+ * backgrounds.
+ */
+function planCard(plan, { featured = false } = {}) {
+  const tint = featured ? t.TOKENS.brandSoft : t.TOKENS.panel;
+  const edge = featured ? t.TOKENS.brand : t.TOKENS.border;
+  const priceColor = featured ? t.TOKENS.brandDeep : t.TOKENS.text;
+
+  const badge = plan.badge
+    ? `<div style="font-family:${t.TOKENS.font};font-size:10px;font-weight:700;letter-spacing:.09em;`
+      + `text-transform:uppercase;color:${featured ? t.TOKENS.brand : t.TOKENS.muted};padding:0 0 8px;">`
+      + `${t.escapeHtml(plan.badge)}</div>`
+    : `<div style="font-size:10px;line-height:18px;padding:0 0 8px;">&nbsp;</div>`;
+
+  // The marker in its own cell, not inline before the text.
+  //
+  // Inline, a line long enough to wrap -- "Priority support with a guaranteed
+  // response time" -- puts its second line hard against the left edge, under
+  // the bullet, and the list stops looking like a list. A separate narrow cell
+  // gives the text column its own left edge, so every wrapped line lands under
+  // the first word instead.
+  const lines = plan.highlights.map((h) => [
+    '<tr>',
+    `<td valign="top" width="10" style="width:10px;padding:0 6px 5px 0;font-family:${t.TOKENS.font};`
+      + `font-size:13px;line-height:1.5;color:${t.TOKENS.brand};">&bull;</td>`,
+    `<td valign="top" style="padding:0 0 5px;font-family:${t.TOKENS.font};font-size:13px;`
+      + `line-height:1.5;color:${t.TOKENS.soft};">${t.escapeHtml(h.label)}</td>`,
+    '</tr>',
+  ].join('')).join('');
+
+  return [
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${tint}" `
+      + `style="background:${tint};border:1px solid ${edge};border-radius:12px;">`,
+    '<tr><td align="center" style="padding:18px 14px 16px;">',
+    // The glyph. Decorative, so the alt is empty -- a client that blocks
+    // images loses a picture, not a word of meaning.
+    `<div style="padding:0 0 10px;">${t.iconTile({ size: 40, icon: PLAN_ICON[plan.key] || 'badge-website' })}</div>`,
+    badge,
+    `<div style="font-family:${t.TOKENS.font};font-size:15px;font-weight:600;color:${t.TOKENS.text};">${t.escapeHtml(plan.name)}</div>`,
+    `<div style="font-family:${t.TOKENS.font};font-size:34px;line-height:1.1;font-weight:700;letter-spacing:-.02em;`
+      + `color:${priceColor};padding:6px 0 0;">${t.escapeHtml(plansConfig.formatUsd(plan.monthlyUsd))}</div>`,
+    `<div style="font-family:${t.TOKENS.font};font-size:11px;letter-spacing:.06em;text-transform:uppercase;`
+      + `color:${t.TOKENS.muted};padding:2px 0 12px;">per month USD</div>`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto;text-align:left;">${lines}</table>`,
+    '</td></tr></table>',
+  ].join('');
+}
+
+/**
+ * The three cards side by side, stacking to one column on a phone.
+ *
+ * The gap is a spacer column, not padding on the cells.
+ *
+ * Padding on a `<td>` is added to its declared width in email HTML -- there is
+ * no box-sizing to rely on -- so three cells at 33% plus 10px of padding each
+ * came to more than the table could hold, and the row pushed past the right
+ * edge of the message. The third card lost its prices. Narrow cells with real
+ * spacer columns between them add up to exactly 100% and cannot do that.
+ *
+ * The spacers carry `ew-col` too, so on a phone they collapse into the same
+ * stacked flow as the cards and leave a gap between them rather than becoming
+ * a stray cell beside a block.
+ */
+function planCards(catalogue) {
+  const cells = [];
+  catalogue.plans.forEach((plan, i) => {
+    if (i > 0) {
+      cells.push('<td class="ew-col" width="2%" style="width:2%;font-size:0;line-height:0;">&nbsp;</td>');
+    }
+    cells.push(
+      `<td class="ew-col" width="32%" valign="top" style="width:32%;">`
+      + `${planCard(plan, { featured: plan.key === 'unlimited' })}</td>`,
+    );
+  });
+  return [
+    // Fixed layout so the declared widths are honoured rather than being
+    // renegotiated by the widest price in the row.
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+      + 'style="table-layout:fixed;width:100%;margin:0 0 18px;">',
+    `<tr>${cells.join('')}</tr>`,
+    '</table>',
+  ].join('');
+}
+
+/**
+ * One number, said once, as big as it deserves.
+ *
+ * Replaces a sentence like "You picked Unlimited (12 months), $278.40 USD" in
+ * the two emails that confirm something. The figure is the message; the words
+ * around it were doing nothing a label could not.
+ */
+function statBand({ label, value, sub = null }) {
+  return [
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${t.TOKENS.panel}" `
+      + `style="background:${t.TOKENS.panel};border:1px solid ${t.TOKENS.border};border-radius:12px;margin:0 0 18px;">`,
+    '<tr><td align="center" style="padding:20px 18px;">',
+    `<div style="font-family:${t.TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.08em;`
+      + `text-transform:uppercase;color:${t.TOKENS.muted};padding-bottom:6px;">${t.escapeHtml(label)}</div>`,
+    `<div style="font-family:${t.TOKENS.font};font-size:30px;line-height:1.15;font-weight:700;letter-spacing:-.02em;`
+      + `color:${t.TOKENS.text};">${t.escapeHtml(value)}</div>`,
+    sub
+      ? `<div style="font-family:${t.TOKENS.font};font-size:13px;color:${t.TOKENS.soft};padding-top:6px;">${t.escapeHtml(sub)}</div>`
+      : '',
+    '</td></tr></table>',
+  ].join('');
+}
+
+/**
+ * The sign-off, on two lines.
+ *
+ * The name and the company stacked rather than "Yash, Ethixweb" on one line --
+ * it reads as somebody signing a letter instead of as a byline, which is the
+ * difference between a message from a person and a message from a system.
+ */
+function signOff() {
+  return [
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 0;">`,
+    `<tr><td style="font-family:${t.TOKENS.font};font-size:14px;line-height:1.5;color:${t.TOKENS.text};">`,
+    'Yash',
+    `<div style="color:${t.TOKENS.muted};">${t.escapeHtml(t.brand().name)}</div>`,
+    '</td></tr></table>',
+  ].join('');
+}
+
+/** The small uppercase label above a grid. */
+function gridHeading(text) {
+  return `<div style="font-family:${t.TOKENS.font};font-size:11px;font-weight:600;letter-spacing:.08em;`
+    + `text-transform:uppercase;color:${t.TOKENS.muted};padding:0 0 10px;">${t.escapeHtml(text)}</div>`;
+}
+
+/** A compact grid of what a plan covers: two columns of short labels. */
+function perkGrid(perks, { columns: cols = 2 } = {}) {
+  if (!perks.length) return '';
+  const rows = [];
+  for (let i = 0; i < perks.length; i += cols) {
+    // Each cell holds its own two-column table, for the same hanging indent
+    // the plan cards use: a wrapped perk lines up under its own first word
+    // rather than under the bullet.
+    const cells = perks.slice(i, i + cols).map((p) => (
+      `<td class="ew-col" width="${Math.round(100 / cols)}%" valign="top" `
+      + `style="width:${Math.round(100 / cols)}%;padding:0 10px 8px 0;">`
+      + '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
+      + `<td valign="top" width="10" style="width:10px;padding:0 6px 0 0;font-family:${t.TOKENS.font};`
+      + `font-size:13px;line-height:1.5;color:${t.TOKENS.brand};">&bull;</td>`
+      + `<td valign="top" style="font-family:${t.TOKENS.font};font-size:13px;line-height:1.5;`
+      + `color:${t.TOKENS.soft};">${t.escapeHtml(p)}</td>`
+      + '</tr></table></td>'
+    ));
+    while (cells.length < cols) cells.push('<td class="ew-col">&nbsp;</td>');
+    rows.push(`<tr>${cells.join('')}</tr>`);
+  }
+  return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+    + `style="margin:0 0 18px;">${rows.join('')}</table>`;
+}
+
+/**
+ * The first thing a new client reads, and the one that asks them to pick.
+ *
+ * Sent once: immediately when an account is created, or on the first sign-in
+ * of a client who predates this feature. Every price in it is read from
+ * lib/plans.js rather than typed, so the figures here, the plans modal and the
+ * amount an admin asks for cannot drift apart.
+ *
+ * `existingFreeClient` adds the one line that explains why a site which has
+ * been running at no charge now needs a plan. It is stated plainly and once,
+ * with no deadline and no threat -- the sales playbook is explicit that
+ * hosting is linked to a plan calmly and never as a threat.
+ */
+function welcomeWithPlans({ firstName, existingFreeClient = false }) {
+  const base = baseUrl();
+  const catalogue = plansConfig.describeAll();
+  const byKey = (key) => catalogue.plans.find((p) => p.key === key);
+
+  const unlimited = byKey('unlimited');
+  const managed = byKey('managed');
+  const basic = byKey('basic');
+
+  const yearly = plansConfig.PERIODS.find((p) => p.months === 12);
+  const yearlyPct = Math.round(yearly.discount * 100);
+  const unlimitedYearly = unlimited.prices.find((p) => p.months === 12);
+
+  const usd = (n) => `${plansConfig.formatUsd(n)}`;
+
+  return {
+    subject: 'Your Ethixweb dashboard is ready, here are your plan options',
+    html: t.renderEmail({
+      preheader: 'Pick the plan that fits how much you want us to handle.',
+      eyebrow: 'Your dashboard is ready',
+      title: 'Your Ethixweb dashboard is ready',
+      // Three cards carry the plans. What used to be three long sentences is
+      // now a price, a glyph and four keywords each -- the comparison somebody
+      // actually makes, made visually instead of described.
+      blocks: [
+        t.paragraph(
+          `Hi ${firstName || 'there'}, your dashboard is ready. See your website, raise a request, `
+          + 'track it to done.',
+          { align: 'justify' },
+        ),
+        existingFreeClient
+          ? t.paragraph(
+            'Your site has been on our servers at no charge. To stay live and supported, it now '
+            + 'needs a plan.',
+            { align: 'justify' },
+          )
+          : '',
+        planCards(catalogue),
+        t.paragraph(
+          `12 months saves ${yearlyPct}%. The ${unlimited.name} plan works out at `
+          + `${usd(unlimitedYearly.perMonth)} a month.`,
+          { align: 'justify', muted: true, size: 13 },
+        ),
+        // The sign-off sits with the body, above the buttons. renderEmail puts
+        // the call to action last, and a name printed under a button reads as
+        // a caption on it rather than as somebody signing the message.
+        t.paragraph('Questions? Just reply to this email.', { align: 'justify' }),
+        signOff(),
+      ].filter(Boolean),
+      cta: plansLink() ? { label: 'Choose your plan', url: plansLink() } : null,
+      secondaryCta: base ? { label: 'Log in to your dashboard', url: base } : null,
+      reason: 'Sent once, because your Ethixweb dashboard was set up.',
+      links: [
+        ...legalLinks(),
+        preferencesLink() ? { label: 'Email preferences', url: preferencesLink() } : null,
+      ].filter(Boolean),
+    }),
+    // The plain-text twin keeps the same shape: a price, then keywords. A
+    // client whose mail reader strips HTML gets the comparison, not an essay.
+    text: t.renderText([
+      `Hi ${firstName || 'there'}, your dashboard is ready.`,
+      'See your website, raise a request, track it to done.',
+      '',
+      existingFreeClient
+        ? 'Your site has been on our servers at no charge. To stay live and supported, it now needs a plan.'
+        : null,
+      existingFreeClient ? '' : null,
+      ...catalogue.plans.flatMap((plan) => [
+        `${plan.name} - ${usd(plan.monthlyUsd)}/month USD${plan.badge ? ` (${plan.badge})` : ''}`,
+        ...plan.highlights.map((h) => `  - ${h.label}`),
+        '',
+      ]),
+      `12 months saves ${yearlyPct}%. The ${unlimited.name} plan works out at ${usd(unlimitedYearly.perMonth)} a month.`,
+      '',
+      plansLink() ? `Choose your plan: ${plansLink()}` : null,
+      base ? `Log in: ${base}` : null,
+      '',
+      'Questions? Just reply to this email.',
+      '',
+      'Yash',
+      t.brand().name,
+      '',
+      ...legalLinks().map((l) => `${l.label}: ${l.url}`),
+    ]),
+  };
+}
+
+/**
+ * Seven days before a multi-month plan comes up for renewal.
+ *
+ * Sent only for the 3, 6 and 12 month periods, because those are the ones paid
+ * upfront: a client who handed over $278.40 in January should not be surprised
+ * by the same request in December. A monthly plan is its own reminder.
+ *
+ * No urgency and no countdown. It says the date, the amount, and the two
+ * things they might want to do about it -- including cancelling, in the same
+ * voice and the same size as everything else. A renewal notice that hides the
+ * way out is the thing that turns an ordinary churn into a complaint.
+ */
+function renewalReminder({ clientName, planName, periodLabel, amountUsd, renewsAt }) {
+  const amount = money(amountUsd, 'usd');
+  const renews = planDate(renewsAt);
+  const base = baseUrl();
+
+  return {
+    subject: `Your ${planName} plan renews on ${renews}`,
+    html: t.renderEmail({
+      preheader: `${amount} USD for another ${periodLabel}. Nothing to do if you are happy.`,
+      eyebrow: 'Renewal coming up',
+      hero: 'badge-clock',
+      title: `Your ${planName} plan renews on ${renews}`,
+      blocks: [
+        // One number, said once. The four-cell panel this replaces was mostly
+        // repeating the title.
+        // "Renews in 7 days" was written into the label, not worked out. The
+        // sweep fires any time inside the week before a renewal, so it was
+        // only true on the day it happened to run first -- and it went stale
+        // again every day the message sat unread. The date in the title is the
+        // fact; this is the amount.
+        statBand({
+          label: 'Renewal amount',
+          value: `${amount} USD`,
+          sub: `${planName} plan, ${periodLabel}`,
+        }),
+        t.paragraph('Happy as you are? Nothing to do. We will send payment details nearer the date.', { align: 'justify' }),
+        // Akash asked how long somebody has to change their mind. The answer
+        // is "right up to the day", and not saying so invites the question.
+        t.paragraph(
+          `Want a different plan, or to stop? You can do either from your Billing page any time `
+          + `before ${renews}.`,
+          { align: 'justify', muted: true, size: 13 },
+        ),
+        signOff(),
+      ],
+      cta: billingLink() ? { label: 'Open Billing', url: billingLink() } : null,
+      secondaryCta: plansLink() ? { label: 'Change your plan', url: plansLink() } : null,
+      reason: 'Sent seven days before a multi-month plan renews.',
+      links: [
+        ...legalLinks(),
+        preferencesLink() ? { label: 'Email preferences', url: preferencesLink() } : null,
+      ].filter(Boolean),
+    }),
+    text: t.renderText([
+      `Hi ${clientName || 'there'},`,
+      '',
+      `Your ${planName} plan renews on ${renews}.`,
+      `${amount} USD for ${periodLabel}.`,
+      '',
+      'Happy as you are? Nothing to do. We will send payment details nearer the date.',
+      `Want a different plan, or to stop? You can do either from your Billing page any time before ${renews}.`,
+      '',
+      'Yash',
+      t.brand().name,
+      '',
+      billingLink() ? `Billing: ${billingLink()}` : null,
+      base ? `Log in: ${base}` : null,
+      ...legalLinks().map((l) => `${l.label}: ${l.url}`),
+    ]),
+  };
+}
+
+/**
+ * The plan is paid for and running.
+ *
+ * The sales playbook's confirmation message, as an email rather than something
+ * typed by hand after every sale. It answers the four questions a client has
+ * once they have parted with money: what did I buy, what did it cost, when
+ * does it happen again, and how do I use it. Then it says how to leave, in the
+ * same voice and the same size as everything else -- a cancellation route
+ * buried in small print is the thing that turns an ordinary churn into a
+ * complaint.
+ *
+ * Every figure is passed in from the subscription row, which is the same row
+ * the Billing page renders, so this email and that screen cannot disagree.
+ */
+function planConfirmed({ clientName, planName, periodLabel, amountUsd, renewsAt, creditUsd, fromPlanName, perks = [] }) {
+  const amount = money(amountUsd, 'usd');
+  // A date, with no time on it. `formatWhen` adds "2:05 PM", which on a
+  // renewal reads as the minute a card will be charged -- a detail nobody
+  // asked for and that invites a worried reply.
+  const renews = planDate(renewsAt);
+  const base = baseUrl();
+
+  return {
+    subject: `You're on the ${planName} plan, and your site is covered`,
+    html: t.renderEmail({
+      preheader: `${planName}, ${periodLabel}, ${amount} USD. Renews ${renews || 'at the end of your period'}.`,
+      eyebrow: 'Plan confirmed',
+      // The badge carries "this is good news" so the sentence that used to say
+      // it can go.
+      hero: 'badge-payment',
+      // 'You're on Unlimited' reads as an adjective with no noun -- Akash asked
+      // what Unlimited was. The word 'plan' is what makes it a thing.
+      title: `You're on the ${planName} plan`,
+      blocks: [
+        // The amount is the message. It used to be the fourth cell of a panel
+        // under two sentences explaining that a payment had been confirmed.
+        statBand({
+          label: 'Paid',
+          value: `${amount} USD`,
+          sub: renews ? `${planName} plan, ${periodLabel}, renews ${renews}` : `${planName} plan, ${periodLabel}`,
+        }),
+        creditUsd > 0 && fromPlanName
+          ? t.paragraph(
+            `After ${money(creditUsd, 'usd')} credited from your ${fromPlanName} plan.`,
+            { muted: true, size: 13 },
+          )
+          : '',
+        // Two short columns of keywords instead of a ten-line bulleted essay.
+        // `t.fact` renders nothing when its value is empty, so the heading is
+        // its own line rather than a fact with no fact in it.
+        perks.length ? gridHeading('What it covers') : '',
+        perks.length ? perkGrid(perks.slice(0, 8)) : '',
+        t.paragraph('Need something doing? Raise a request and it goes straight to the team.', { align: 'justify' }),
+        t.paragraph('Change or cancel any time from Billing. Hosting runs to the end of your period.', { align: 'justify', muted: true, size: 13 }),
+        signOff(),
+      ].filter(Boolean),
+      cta: base ? { label: 'Open your dashboard', url: base } : null,
+      secondaryCta: ticketsLink() ? { label: 'Raise a request', url: ticketsLink() } : null,
+      reason: 'Sent because your payment was confirmed and your plan started.',
+      links: [
+        billingLink() ? { label: 'Billing', url: billingLink() } : null,
+        plansLink() ? { label: 'Change your plan', url: plansLink() } : null,
+        ...legalLinks(),
+      ].filter(Boolean),
+    }),
+    text: t.renderText([
+      `You're on the ${planName} plan.`,
+      '',
+      `Paid: ${amount} USD`,
+      `Period: ${periodLabel}`,
+      renews ? `Renews: ${renews}` : null,
+      creditUsd > 0 && fromPlanName
+        ? `After ${money(creditUsd, 'usd')} credited from your ${fromPlanName} plan.`
+        : null,
+      '',
+      perks.length ? 'What it covers:' : null,
+      ...perks.slice(0, 8).map((p) => `  - ${p}`),
+      '',
+      'Need something doing? Raise a request and it goes straight to the team.',
+      ticketsLink() ? `Raise a request: ${ticketsLink()}` : null,
+      '',
+      'Change or cancel any time from Billing. Hosting runs to the end of your period.',
+      billingLink() ? `Billing: ${billingLink()}` : null,
+      '',
+      'Yash',
+      t.brand().name,
+      '',
+      base ? `Log in: ${base}` : null,
+      ...legalLinks().map((l) => `${l.label}: ${l.url}`),
+    ]),
+  };
 }
 
 /** Money exactly as Stripe reports it, in the currency Stripe reported it in. */
@@ -1458,6 +1950,42 @@ const TEMPLATES = {
       projects: [{ name: 'BrightPath Website Redesign', status: 'In Progress' }],
     }),
   },
+  welcome_with_plans: {
+    audience: 'client',
+    group: 'Welcome & onboarding',
+    label: 'Welcome and plan options',
+    description: 'Sent once when a client account is created, or on the first sign-in of a client who predates plans.',
+    render: () => welcomeWithPlans({ firstName: 'David', existingFreeClient: true }),
+  },
+  renewal_reminder: {
+    audience: 'client',
+    group: 'Billing',
+    label: 'Renewal reminder',
+    description: 'Sent seven days before a 3, 6 or 12 month plan renews.',
+    render: () => renewalReminder({
+      clientName: 'David Shaw',
+      planName: 'Unlimited',
+      periodLabel: '12 months',
+      amountUsd: 278.40,
+      renewsAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+    }),
+  },
+  plan_confirmed: {
+    audience: 'client',
+    group: 'Billing',
+    label: 'Plan confirmed',
+    description: 'Sent once when a payment is confirmed and the plan starts.',
+    render: () => planConfirmed({
+      clientName: 'David Shaw',
+      planName: 'Unlimited',
+      periodLabel: '12 months',
+      amountUsd: 278.40,
+      renewsAt: new Date(Date.now() + 365 * 86400000).toISOString(),
+      creditUsd: 0,
+      fromPlanName: null,
+      perks: require('../lib/plans').entitlementsFor('unlimited').map((e) => e.short),
+    }),
+  },
   payment_received: {
     audience: 'client',
     group: 'Billing',
@@ -1531,7 +2059,7 @@ const TEMPLATES = {
       domain: {
         domainName: 'brightpath-retail.com',
         expiresAt: 'Sep 14, 2026',
-        registrar: 'Registered with EthixWeb',
+        registrar: 'Registered with Ethixweb',
         autoRenew: false,
         sslStatus: 'Valid',
       },
@@ -1740,6 +2268,9 @@ module.exports = {
   credentialDeliveryFailed,
   adminRosterChanged,
   progressDigest,
+  welcomeWithPlans,
+  planConfirmed,
+  renewalReminder,
   paymentReceived,
   paymentFailed,
   paymentSummary,

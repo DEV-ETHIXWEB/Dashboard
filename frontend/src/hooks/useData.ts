@@ -186,9 +186,29 @@ export function useTickets() {
 export function useCreateTicket() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { subject: string; category: string; description: string; priority?: string; clientId?: string }) =>
-      api<{ ticket: Ticket }>("POST", "/tickets", body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tickets"] }),
+    mutationFn: (body: {
+      subject: string;
+      category: string;
+      description: string;
+      priority?: string;
+      clientId?: string;
+      /** Agree to be quoted for one past the included allowance. */
+      acceptExtraCharge?: boolean;
+      /** Hold it until the allowance resets instead. */
+      queueForNextPeriod?: boolean;
+    }) =>
+      api<{ ticket?: Ticket; chargedAsExtra?: boolean; queued?: { id: string }; message?: string }>(
+        "POST",
+        "/tickets",
+        body,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tickets"] });
+      // The meter on the billing page and the one in this form read the same
+      // record, so both have to notice that an update was just spent.
+      qc.invalidateQueries({ queryKey: ["membership"] });
+      qc.invalidateQueries({ queryKey: ["queued-requests"] });
+    },
   });
 }
 

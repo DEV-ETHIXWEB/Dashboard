@@ -14,6 +14,8 @@ const mailer = require('../utils/mailer');
 const messages = require('../utils/emailMessages');
 const slaWatch = require('../utils/slaWatch');
 const ticketStatus = require('../utils/ticketStatus');
+const updateRequests = require('../utils/updateRequests');
+const upsellTracking = require('../utils/upsell');
 
 router.use(requireAuth);
 router.use(requirePage('tickets'));
@@ -84,19 +86,43 @@ router.get('/', async (req, res, next) => {
     // should wait on outbound email to see their ticket list.
     if (['admin', 'project_manager'].includes(req.user.role)) void slaWatch.maybeSweep();
 
-    const all = await db.all('tickets');
-
-    // An employee's visibility depends on the collaborator table, which
-    // canView reads one ticket at a time. Read it once here instead: the list
-    // used to run a full scan of ticket_collaborators per ticket on the page.
-    if (req.user.role === 'employee') {
-      const mine = await db.filter('ticket_collaborators', (c) => c.userId === req.user.id);
-      const onTickets = new Set(mine.map((c) => c.ticketId));
+    /**
+     * Each role is asked for from the database rather than filtered out of
+     * the whole table in memory.
+     *
+     * A client sees their own tickets and nothing else, so that is an indexed
+     * lookup on client_id -- not a read of every ticket in the workspace
+     * followed by a per-ticket permission check. With real data behind it the
+     * old shape read tens of thousands of rows to answer with two, and on
+     * Firestore every one of those reads is billed.
+     */
+    if (req.user.role === 'client') {
       return res.json({
-        tickets: all.filter((t) => t.assigneeId === req.user.id || onTickets.has(t.id)),
+        tickets: await db.where('tickets', { clientId: req.user.id }, { orderBy: 'createdAt' }),
       });
     }
 
+    // An employee sees what they are assigned plus what they were invited
+    // onto. Both are small, known sets, so neither needs a scan.
+    if (req.user.role === 'employee') {
+      const assigned = await db.where('tickets', { assigneeId: req.user.id }, { orderBy: 'createdAt' });
+      const seen = new Set(assigned.map((t) => t.id));
+
+      const invites = await db.where('ticket_collaborators', { userId: req.user.id });
+      for (const invite of invites) {
+        if (seen.has(invite.ticketId)) continue;
+        const ticket = await db.find('tickets', invite.ticketId);
+        if (ticket) { assigned.push(ticket); seen.add(ticket.id); }
+      }
+
+      return res.json({
+        tickets: assigned.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
+      });
+    }
+
+    // Managers and sales see everything, which is the one case that genuinely
+    // has to read the table.
+    const all = await db.all('tickets');
     const visible = [];
     for (const t of all) if (await visibleTo(req.user, t)) visible.push(t);
     res.json({ tickets: visible });
@@ -117,6 +143,42 @@ router.get('/requests/mine', async (req, res, next) => {
 
 router.get('/stages', (req, res) => res.json({ stages: workflow.STAGES }));
 
+/**
+ * Requests this client chose to hold until their allowance resets.
+ *
+ * Deliberately a separate list from the ticket queue: these are not work the
+ * team owes an answer on yet, and showing them there would start an SLA clock
+ * nobody agreed to. The client sees what they are holding and when it lands.
+ */
+router.get('/queued', async (req, res, next) => {
+  try {
+    const clientId = req.user.role === 'client' ? req.user.id : req.query.clientId;
+    if (!clientId) return res.json({ queued: [] });
+    if (req.user.role === 'client' && clientId !== req.user.id) return res.json({ queued: [] });
+
+    res.json({ queued: await updateRequests.queuedFor(clientId) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Change their mind about holding one. It was never a ticket, so nothing closes. */
+router.delete('/queued/:id', requireCSRF, async (req, res, next) => {
+  try {
+    const held = await db.find('queued_requests', req.params.id);
+    if (!held) return res.status(404).json({ error: 'That request is not being held.' });
+    if (req.user.role === 'client' && held.clientId !== req.user.id) {
+      return res.status(403).json({ error: 'That is not your request.' });
+    }
+
+    await db.update('queued_requests', held.id, { cancelledAt: new Date().toISOString() });
+    res.locals.liveAudience = [held.clientId];
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/', requireCSRF, async (req, res, next) => {
   try {
     const { subject, category, description } = req.body || {};
@@ -125,15 +187,94 @@ router.post('/', requireCSRF, async (req, res, next) => {
     const clientId = req.user.role === 'client' ? req.user.id : req.body.clientId;
     if (!clientId) return res.status(400).json({ error: 'clientId is required' });
 
-    const allTickets = await db.all('tickets');
-    const numbers = allTickets
-      .map((t) => parseInt(String(t.id).replace('ticket-', ''), 10))
-      .filter((n) => !isNaN(n));
-    const nextNumber = (numbers.length ? Math.max(...numbers) : 1000) + 1;
+    /**
+     * What the client's plan allows.
+     *
+     * Only a client is gated. Staff raise tickets on a client's behalf all the
+     * time -- after a phone call, off the back of a text -- and refusing those
+     * would mean the plan limits the team rather than the customer. The limit
+     * is on what a client may ask for unprompted, not on what we may record.
+     *
+     * The answers come back as decisions rather than refusals: out of
+     * allowance offers paying for the extra, waiting, or upgrading, and every
+     * one of them keeps what they typed. Nothing in here ever discards the
+     * body of the request.
+     */
+    let gate = { ok: true, counts: false };
+    if (req.user.role === 'client') {
+      gate = await updateRequests.check(req.user, { category });
+
+      if (!gate.ok && req.body.queueForNextPeriod === true && gate.reason === 'allowance_used') {
+        const held = await updateRequests.queue(clientId, {
+          subject, category, description, priority: req.body.priority,
+          releaseAt: gate.resetsAt,
+        });
+        res.locals.liveAudience = [clientId];
+        return res.status(202).json({
+          queued: held,
+          message: `Saved. We will pick this up on ${new Date(gate.resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}, `
+            + 'when your next updates unlock.',
+        });
+      }
+
+      // Paying for one past the allowance. The work gets done and we quote it
+      // per job, so nothing here names a price -- the client is agreeing to be
+      // quoted, not to a number we invented.
+      const payingExtra = !gate.ok
+        && gate.reason === 'allowance_used'
+        && gate.chargeable
+        && req.body.acceptExtraCharge === true;
+
+      if (!gate.ok && !payingExtra) {
+        // This is an upgrade prompt, so it spends the week's budget. A client
+        // who was offered Unlimited here on Monday must not also get a modal
+        // about it on Wednesday -- the ceiling in utils/upsell.js counts these
+        // alongside its own. Not awaited: the refusal is the answer, and an
+        // analytics write is not a reason to delay it.
+        if (gate.reason === 'allowance_used' || gate.reason === 'category_not_included') {
+          void upsellTracking.markShown(req.user, {
+            messageKey: null,
+            trigger: gate.reason,
+          }).catch(() => {});
+        }
+
+        return res.status(gate.reason === 'allowance_used' ? 409 : 403).json({
+          error: gate.message,
+          upgradeRequired: true,
+          reason: gate.reason,
+          recommended: gate.recommended || null,
+          resetsAt: gate.resetsAt || null,
+          chargeable: Boolean(gate.chargeable),
+          usage: gate.usage || null,
+        });
+      }
+
+      if (payingExtra) {
+        await updateRequests.consumeExtra(clientId, gate.state);
+        gate = { ...gate, ok: true, counts: false, extra: true };
+      } else if (gate.counts) {
+        // Atomic, and the last line of defence: if two requests were submitted
+        // in the same second, the second one loses here rather than quietly
+        // becoming a third free update.
+        const took = await updateRequests.consume(clientId, gate.state);
+        if (!took) {
+          const fresh = await updateRequests.check(req.user, { category });
+          return res.status(409).json({
+            error: fresh.message || 'That used the last of your updates for this month.',
+            upgradeRequired: true,
+            reason: 'allowance_used',
+            recommended: fresh.recommended || null,
+            resetsAt: fresh.resetsAt || null,
+            chargeable: Boolean(fresh.chargeable),
+            usage: fresh.usage || null,
+          });
+        }
+      }
+    }
 
     const priority = intake.normalizePriority(req.body.priority);
     const ticket = await db.insert('tickets', {
-      id: `ticket-${nextNumber}`,
+      id: await intake.nextTicketId(),
       subject, category: category || 'General', clientId, assigneeId: null,
       status: 'Open', description: description || '', createdAt: new Date().toISOString(),
       priority, responseDueAt: intake.responseDueAt(priority), firstResponseAt: null,
@@ -146,7 +287,7 @@ router.post('/', requireCSRF, async (req, res, next) => {
     // and over email -- all handled in one place.
     const routed = await intake.onTicketCreated(ticket);
 
-    res.status(201).json({ ticket: routed });
+    res.status(201).json({ ticket: routed, chargedAsExtra: Boolean(gate.extra) });
   } catch (err) {
     next(err);
   }

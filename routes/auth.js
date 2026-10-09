@@ -742,6 +742,21 @@ router.post('/logout', requireAuth, async (req, res, next) => {
 });
 
 router.get('/me', requireAuth, (req, res) => {
+  // The first sign-in of a client who predates membership.
+  //
+  // Hooked here rather than in verify-otp because there are four ways into
+  // this app -- a code, a backup code, a one-tap link and Google -- and a
+  // client who came in through any of them is equally owed the welcome. Every
+  // signed-in tab reads this endpoint on mount, so it is the one place they
+  // all pass through.
+  //
+  // Costs one truthiness check per request once it has run. Deliberately not
+  // awaited: nobody should wait on an SMTP handshake to find out who they are,
+  // and sendWelcome swallows its own failures.
+  if (req.user.role === 'client' && !req.user.firstLoginAt) {
+    void markFirstLogin(req.user);
+  }
+
   // Capabilities travel with the session so the UI never has to re-derive the
   // rules. The server checks them again on every route regardless.
   res.json({
@@ -750,5 +765,22 @@ router.get('/me', requireAuth, (req, res) => {
     csrfToken: req.session.csrfToken,
   });
 });
+
+/**
+ * Stamp the first sign-in, and greet a client who was never greeted.
+ *
+ * The stamp is written first and unconditionally. A client who signed in
+ * before this feature existed has no welcome email on record and gets one; a
+ * client created after it does, and `sendWelcome` declines on the timestamp.
+ * So the same call covers both without either having to know about the other.
+ */
+async function markFirstLogin(user) {
+  try {
+    await db.update('users', user.id, { firstLoginAt: new Date().toISOString() });
+    await require('../utils/subscriptions').sendWelcome(user, { reason: 'first_login' });
+  } catch (err) {
+    console.error(`Could not record the first sign-in for ${user.id}:`, err.message);
+  }
+}
 
 module.exports = router;

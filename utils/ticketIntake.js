@@ -28,6 +28,23 @@ const ASSIGNABLE_ROLES = ['project_manager', 'employee'];
 
 const OPEN_STATUSES = ['Open', 'In Progress'];
 
+/**
+ * The next ticket number.
+ *
+ * Lived inline in the create route until a second caller needed it -- a
+ * request a client held until their allowance reset becomes a real ticket when
+ * it lands, and it has to be numbered the same way as every other one rather
+ * than by a second copy of this that drifts.
+ */
+async function nextTicketId() {
+  const { db } = require('../db/setup');
+  const all = await db.all('tickets');
+  const numbers = all
+    .map((t) => parseInt(String(t.id).replace('ticket-', ''), 10))
+    .filter((n) => !Number.isNaN(n));
+  return `ticket-${(numbers.length ? Math.max(...numbers) : 1000) + 1}`;
+}
+
 function normalizePriority(value) {
   if (typeof value !== 'string') return 'Normal';
   const match = PRIORITIES.find((p) => p.toLowerCase() === value.trim().toLowerCase());
@@ -246,6 +263,7 @@ module.exports = {
   PRIORITIES,
   RESPONSE_HOURS,
   startInClickUp,
+  nextTicketId,
   normalizePriority,
   responseDueAt,
   pickAssignee,

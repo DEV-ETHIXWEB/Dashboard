@@ -209,17 +209,29 @@ router.put('/me', requireCSRF, async (req, res, next) => {
   try {
     const { name, email, password, currentPassword } = req.body || {};
     const patch = {};
-    if (name) patch.name = name;
+
+    if (name !== undefined && name !== null && name !== '') {
+      const cleanName = userFields.normalizeName(name);
+      if (!cleanName) return res.status(400).json({ error: 'Name must be some text.' });
+      patch.name = cleanName;
+    }
 
     // Changing the email must not collide with another account, or that
-    // account could no longer sign in.
-    if (email && email.toLowerCase() !== req.user.email.toLowerCase()) {
-      const taken = await db.filter(
-        'users',
-        (u) => u.id !== req.user.id && u.email.toLowerCase() === email.toLowerCase(),
-      );
-      if (taken.length > 0) return res.status(409).json({ error: 'That email is already in use' });
-      patch.email = email;
+    // account could no longer sign in -- and it must be an address at all.
+    // This used to call .toLowerCase() on whatever arrived, so a body with a
+    // number or an object in `email` was a 500 rather than a refusal.
+    if (email !== undefined && email !== null && email !== '') {
+      const cleanEmail = userFields.normalizeEmail(email);
+      if (!cleanEmail) return res.status(400).json({ error: 'That is not a valid email address.' });
+
+      if (cleanEmail !== String(req.user.email).toLowerCase()) {
+        const taken = await db.filter(
+          'users',
+          (u) => u.id !== req.user.id && String(u.email).toLowerCase() === cleanEmail,
+        );
+        if (taken.length > 0) return res.status(409).json({ error: 'That email is already in use' });
+        patch.email = cleanEmail;
+      }
     }
 
     // A new password requires proving the current one, so a borrowed session
@@ -646,17 +658,30 @@ router.get('/', async (req, res, next) => {
 router.post('/', requireCSRF, requireRole('admin'), credentialIssueLimiter, async (req, res, next) => {
   try {
     const {
-      name, email, role, company, password, passwordExpiresAt, allowedPages, sendEmail,
+      role, company, password, passwordExpiresAt, allowedPages, sendEmail,
       slackChannelId, slackChannelName,
     } = req.body || {};
-    if (!name || !email || !role) return res.status(400).json({ error: 'name, email, and role are required' });
+    const { name: rawName, email: rawEmail } = req.body || {};
+    if (!rawName || !rawEmail || !role) return res.status(400).json({ error: 'name, email, and role are required' });
     const validRoles = ['admin', 'sales', 'project_manager', 'employee', 'client'];
     if (!validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' });
     if (passwordExpiresAt !== undefined && passwordExpiresAt !== null && !Number.isFinite(Number(passwordExpiresAt))) {
       return res.status(400).json({ error: 'passwordExpiresAt must be a timestamp or null' });
     }
 
-    const existing = await db.filter('users', (u) => u.email.toLowerCase() === email.toLowerCase());
+    // The address has to be an address before anything else happens, because
+    // everything downstream assumes it is one: it is how this person signs in,
+    // and it is where their password is about to be sent. A body carrying a
+    // number or an object here used to reach `email.toLowerCase()` below and
+    // come back as a 500; worse, on the editing routes it was stored, and an
+    // account whose address is the string "true" can never be reached or
+    // logged into again.
+    const name = userFields.normalizeName(rawName);
+    if (!name) return res.status(400).json({ error: 'Name must be some text.' });
+    const email = userFields.normalizeEmail(rawEmail);
+    if (!email) return res.status(400).json({ error: 'That is not a valid email address.' });
+
+    const existing = await db.filter('users', (u) => String(u.email).toLowerCase() === email);
     if (existing.length > 0) return res.status(409).json({ error: 'A user with that email already exists' });
 
     // Appointing an administrator is the one thing an ordinary admin cannot do
@@ -702,6 +727,11 @@ router.post('/', requireCSRF, requireRole('admin'), credentialIssueLimiter, asyn
     // Get the bot into the channel now, while an admin is here to read the
     // answer, rather than at the moment the client first opens Messages.
     const joined = await provisioning.joinAssignedChannel(user);
+
+    // Their dashboard and the plans, in one message. Sent now because intent
+    // is highest the moment an account exists, and sent once -- the timestamp
+    // on the account is what stops the first-login trigger repeating it.
+    await provisioning.welcomeNewClient(user);
 
     // Default to emailing the credentials; an admin can opt out and hand them
     // over in person instead.
@@ -796,13 +826,32 @@ router.put('/:id', requireCSRF, requireRole('admin'), credentialIssueLimiter, ha
   }
   if (patch.passwordExpiresAt != null) patch.passwordExpiresAt = Number(patch.passwordExpiresAt);
 
+  // An address is how somebody signs in, so it has to be an address.
+  //
+  // Without this, `{"email": true}` was written to the row as the string
+  // "true" and `{"email": {}}` as "{}" -- both of which lock the account out
+  // of the product as well as out of its inbox, and neither of which anybody
+  // notices until that client tries to sign in. The same applied to `name`,
+  // which is printed on every screen and in every message we send them.
+  if (patch.name !== undefined) {
+    const cleanName = userFields.normalizeName(patch.name);
+    if (!cleanName) return res.status(400).json({ error: 'Name must be some text.' });
+    patch.name = cleanName;
+  }
+
+  if (patch.email !== undefined) {
+    const cleanEmail = userFields.normalizeEmail(patch.email);
+    if (!cleanEmail) return res.status(400).json({ error: 'That is not a valid email address.' });
+    patch.email = cleanEmail;
+  }
+
   // Taking an address another account already uses would lock that account
   // out. The self-service profile screen has always said so; this one used to
   // let the database raise it as a 500 instead.
-  if (patch.email && String(patch.email).toLowerCase() !== String(before.email).toLowerCase()) {
+  if (patch.email && patch.email !== String(before.email).toLowerCase()) {
     const taken = await db.filter(
       'users',
-      (u) => u.id !== req.params.id && String(u.email).toLowerCase() === String(patch.email).toLowerCase(),
+      (u) => u.id !== req.params.id && String(u.email).toLowerCase() === patch.email,
     );
     if (taken.length > 0) return res.status(409).json({ error: 'That email is already in use' });
   }

@@ -19,6 +19,8 @@ import {
 import { plainDate } from "@/lib/money";
 import type { Domain } from "@/lib/entities";
 import { impactFeedback } from "@/lib/haptics";
+import { cn } from "@/lib/utils";
+import { SitePanel } from "@/components/plans/SitePanel";
 
 const RENEWAL_WARNING_DAYS = 45;
 
@@ -347,6 +349,38 @@ export default function Domains() {
           </DataList>
         </MoneyPanel>
       )}
+
+      {/* What we do to the site, as opposed to what the site is. A client sees
+          their own records where their plan includes them and a labelled
+          example of the panel where it does not, so the thing they would be
+          paying for is a real screen rather than a line on a pricing table.
+          Staff see every panel with the real rows in it. */}
+      <SitePanels className={bento(4)} />
     </BentoGrid>
   );
 }
+
+/**
+ * The seven panels an Unlimited plan unlocks, in the order a client would ask
+ * about them: is it safe, is it up, is it secure, is it being looked after,
+ * and is it getting better.
+ */
+function SitePanels({ className, clientId }: { className?: string; clientId?: string }) {
+  return (
+    <div className={cn("grid grid-cols-1 gap-4 lg:grid-cols-2", className)}>
+      {PANEL_ORDER.map((kind) => (
+        <SitePanel key={kind} kind={kind} clientId={clientId} />
+      ))}
+    </div>
+  );
+}
+
+const PANEL_ORDER = [
+  "daily_backups",
+  "uptime_monitoring",
+  "advanced_security",
+  "software_plugin_updates",
+  "monthly_health_check",
+  "organic_seo",
+  "speed_optimisation",
+] as const;

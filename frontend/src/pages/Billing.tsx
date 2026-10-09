@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { CreditCard, CheckCircle2, Loader2, RefreshCw, Settings2, Wallet } from "lucide-react";
+import { CreditCard, Loader2, RefreshCw, Settings2, Wallet } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -17,6 +17,9 @@ import { api } from "@/lib/api";
 import { MoneyPanel, DataList, DataRow, PanelEmpty, BentoGrid, BentoColumns, bento } from "@/components/money/Money";
 import { AttentionNotice, FeeBreakdown, TrustFooter } from "@/components/money/Trust";
 import { PaymentList, PlanSummary, paymentMoney } from "@/components/money/Payments";
+import { PlanStatusCard, PlanStatusCardSkeleton } from "@/components/plans/PlanStatusCard";
+import { PendingPayments } from "@/components/plans/PendingPayments";
+import { useMembership } from "@/hooks/useMembership";
 import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -60,6 +63,11 @@ export default function Billing() {
   const isStaff = user != null && ["admin", "sales", "project_manager"].includes(user.role);
   const isAdmin = user?.role === "admin";
   const { data, isLoading, isError, error, refetch } = useBillingStatus();
+  // Which plan they are on, which is a different question from what Stripe has
+  // seen. A client can be on Managed with no Stripe history at all, because
+  // under PAYMENT_MODE=manual the money arrives by bank transfer and an admin
+  // confirms it -- so this is its own read rather than a field on the above.
+  const { data: membership, isLoading: membershipLoading } = useMembership();
   const { data: users } = useUsers();
   const sync = useSyncStripe();
   const portal = useBillingPortal();
@@ -171,6 +179,10 @@ export default function Billing() {
             </Button>
           )}
         </header>
+
+        {/* Who chose a plan and is waiting on us. Above the account list
+            because it is the only thing on this page with a deadline. */}
+        {isAdmin && <PendingPayments className={bento(4)} />}
 
         <MoneyPanel
           className={bento(4)}
@@ -292,6 +304,16 @@ export default function Billing() {
   const enabled = data?.enabled;
   const state = describeStatus(billing?.status);
   const needsAction = billing?.status ? NEEDS_ACTION.has(billing.status) : false;
+  // Whether Stripe knows this client at all. Under PAYMENT_MODE=manual most
+  // clients will never have one, and the payment-method card has to read
+  // sensibly for them rather than reporting a missing Stripe record as a
+  // missing plan.
+  // `no_subscription` is the sentinel /billing/status returns for a client
+  // Stripe has never heard of, so it has to be read as "no record" rather than
+  // as a status, or this reports a missing Stripe customer as a missing plan.
+  const hasStripeRecord = Boolean(
+    billing?.stripeCustomerId || (billing?.status && billing.status !== "no_subscription"),
+  );
 
   return (
     <BentoGrid className="mx-auto w-full max-w-6xl">
@@ -326,19 +348,43 @@ export default function Billing() {
             {
               key: "plan",
               node: (
-                <section className="rounded-2xl bg-card px-4 py-4 ring-1 ring-foreground/10 sm:px-5 sm:py-5">
-                  <p className="text-sm font-medium text-muted-foreground">Your plan</p>
-                  <p className="mt-1 t-title">
-                    {billing?.plan ?? "No plan yet"}
-                  </p>
+                <div className="flex flex-col gap-4">
+                  {/* Which plan they are on, what it costs, when it renews, and
+                      how to change or cancel it. Reads from the membership
+                      record rather than from Stripe, because under
+                      PAYMENT_MODE=manual the money never goes through Stripe
+                      and the plan would otherwise read "No plan yet" to a
+                      client who has been paying us for six months. */}
+                  {membershipLoading && !membership ? (
+                    <PlanStatusCardSkeleton />
+                  ) : membership ? (
+                    <PlanStatusCard membership={membership} />
+                  ) : null}
 
-                  {!needsAction && (
+                {/* Everything below is Stripe's half: the card on file, and
+                    the Stripe-hosted page where it gets changed. Untouched,
+                    and still the only thing that knows about cards. */}
+                <section className="rounded-2xl bg-card px-4 py-4 ring-1 ring-foreground/10 sm:px-5 sm:py-5">
+                  <p className="text-sm font-medium text-muted-foreground">Payment method</p>
+                  {/* This card is about the card on file, not about the plan.
+                      describeStatus answers "what is Stripe's view of this
+                      subscription", and with no Stripe record it answers "you
+                      do not have a plan yet" -- which, printed directly below
+                      a card saying the client is on Managed, reads as a
+                      contradiction and an alarming one. So it only speaks when
+                      Stripe has something to say about. */}
+                  {hasStripeRecord ? (
                     <>
-                      <p className="mt-3 flex items-start gap-2 text-base leading-snug font-medium">
-                        <CheckCircle2 aria-hidden className="mt-0.5 size-4 shrink-0 text-money-in" />
-                        {state.headline}
-                      </p>
+                      <p className="mt-1 t-heading">{state.headline}</p>
                       <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{state.detail}</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="mt-1 t-heading">No card stored for you</p>
+                      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                        We send payment details by email when your plan is due, and you pay from
+                        your side. We never hold your card.
+                      </p>
                     </>
                   )}
 
@@ -392,6 +438,7 @@ export default function Billing() {
                     )
                   )}
                 </section>
+                </div>
               ),
             },
             {

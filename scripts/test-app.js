@@ -197,6 +197,74 @@ async function main() {
   r = await admin.req('PUT', `/api/users/${me.id}`, { role: 'employee' });
   check('last admin cannot be demoted', r.status === 409, `${r.status} ${r.text.slice(0, 200)}`);
 
+  /* --- an address has to be an address ----------------------------------
+     JSON has types, and every one of them used to reach the row. A body
+     carrying {"email": true} was stored as the string "true" -- and because
+     an address is how somebody signs in, that locked the account out of the
+     product as well as out of its inbox, silently, until they next tried to
+     log in. {"name": {}} became a client called "{}" on every screen and in
+     every message. The self-service version of the same screen did not store
+     rubbish; it raised a 500 trying to lowercase it.                      */
+  {
+    // Exhaustively at the rule itself, which costs no requests. The write
+    // routes sit behind a credential rate limiter, and spending forty of its
+    // forty attempts proving the same rule twelve times would starve the
+    // fixtures the rest of this suite builds.
+    const userFieldsLib = require('../utils/userFields');
+    for (const [label, value] of [
+      ['a boolean', true], ['a number', 42], ['an array', ['a@b.c']],
+      ['an object', { a: 1 }], ['null', null], ['undefined', undefined],
+      ['text that is not an address', 'not-an-address'],
+      ['an address with a space', 'two words@example.com'],
+      ['no domain dot', 'someone@localhost'],
+      ['two at signs', 'a@b@c.com'], ['empty', ''], ['only spaces', '   '],
+    ]) {
+      check(`an email of ${label} is refused`, userFieldsLib.normalizeEmail(value) === null,
+        JSON.stringify(userFieldsLib.normalizeEmail(value)));
+    }
+    for (const [label, value, want] of [
+      ['a plain address', 'someone@example.com', 'someone@example.com'],
+      ['mixed case', 'Someone@Example.COM', 'someone@example.com'],
+      ['surrounding space', '  a@b.co  ', 'a@b.co'],
+      ['a plus tag', 'a+tag@b.co', 'a+tag@b.co'],
+      ['a long new TLD', 'a@b.marketing', 'a@b.marketing'],
+    ]) {
+      check(`a real address (${label}) survives`, userFieldsLib.normalizeEmail(value) === want,
+        String(userFieldsLib.normalizeEmail(value)));
+    }
+    for (const [label, value] of [
+      ['a number', 123], ['an object', {}], ['an array', []],
+      ['only spaces', '   '], ['empty', ''], ['null', null],
+    ]) {
+      check(`a name of ${label} is refused`, userFieldsLib.normalizeName(value) === null);
+    }
+    check('a real name survives, with its spacing tidied',
+      userFieldsLib.normalizeName('  Ada   Lovelace ') === 'Ada Lovelace');
+
+    // And three requests to prove the routes actually apply it.
+    const victim = (await admin.req('POST', '/api/users', {
+      name: 'Shape Probe', email: 'shape.probe@example.com', role: 'client',
+      password: 'ShapeProbe#1',
+    })).data.user;
+    check('a probe account is created', Boolean(victim?.id));
+
+    r = await admin.req('PUT', `/api/users/${victim.id}`, { email: true });
+    check('the admin editor refuses a non-address instead of storing "true"',
+      r.status === 400, `${r.status} ${r.text.slice(0, 90)}`);
+
+    const after = (await admin.req('GET', '/api/users')).data.users.find((u) => u.id === victim.id);
+    check('so the account can still be signed into and reached',
+      after.email === 'shape.probe@example.com' && after.name === 'Shape Probe',
+      `${after.name} / ${after.email}`);
+
+    // The self-service screen answers the same way rather than with a 500.
+    r = await admin.req('PUT', '/api/users/me', { email: { nope: 1 } });
+    check('the profile screen refuses one rather than crashing',
+      r.status === 400, `${r.status} ${r.text.slice(0, 90)}`);
+
+    await admin.req('DELETE', `/api/users/${victim.id}`);
+  }
+
   // --- client login with page toggles --------------------------------------
   r = await admin.req('POST', '/api/users', {
     name: 'Test Client', email: 'qa.client@example.com', role: 'client', company: 'QA Co',
@@ -706,6 +774,1334 @@ async function main() {
     await admin.req('PUT', `/api/users/${clientId}`, {
       allowedPages: ['tickets', 'progress', 'projects', 'billing'],
     });
+  }
+
+  // --- membership: the plan catalogue and what one client is on ------------
+  {
+    const { db } = require('../db/setup');
+    const iso = (ms) => new Date(ms).toISOString();
+
+    r = await client.req('GET', '/api/plans');
+    check('a client can read the plan catalogue', r.status === 200, `${r.status}`);
+    check('it offers exactly three plans', r.data.plans?.length === 3, `${r.data.plans?.length}`);
+    check('highest plan first', r.data.plans?.[0]?.key === 'unlimited', r.data.plans?.[0]?.key);
+    check('and the cheapest last', r.data.plans?.[2]?.key === 'basic', r.data.plans?.[2]?.key);
+    check('prices are in USD and nothing else', r.data.currency === 'USD', r.data.currency);
+    check('the yearly price matches the playbook',
+      r.data.plans?.[0]?.prices?.find((p) => p.months === 12)?.total === 278.40,
+      JSON.stringify(r.data.plans?.[0]?.prices?.find((p) => p.months === 12)));
+    check('manual payment is the default mode', r.data.paymentMode === 'manual', r.data.paymentMode);
+
+    // Signed out, a price list is still not something this app answers to.
+    r = await makeClient(base).req('GET', '/api/plans');
+    check('the catalogue needs a session', r.status === 401, `${r.status}`);
+
+    // --- the grandfather clause -------------------------------------------
+    // Every client in the workspace is in this position on the morning this
+    // ships, and the one thing that must not happen is their dashboard
+    // closing. They are asked, not cut off.
+    r = await client.req('GET', '/api/membership/status');
+    check('a client with no plan can read their membership', r.status === 200, `${r.status}`);
+    check('they are asked to choose one', r.data.membership?.needsPlan === true);
+    check('and nothing is gated for them yet', r.data.membership?.grandfathered === true);
+    check('so they still read the dashboard as Unlimited',
+      r.data.membership?.effectivePlanKey === 'unlimited', r.data.membership?.effectivePlanKey);
+    check('with no locked panels', r.data.membership?.locked?.length === 0,
+      String(r.data.membership?.locked?.length));
+    check('but no plan they are paying for', r.data.membership?.planKey === null,
+      JSON.stringify(r.data.membership?.planKey));
+
+    // Membership is deliberately NOT behind the Billing page toggle: the
+    // "choose a plan" banner lives on the dashboard, which everybody keeps,
+    // and an admin hiding Billing must not 403 the banner.
+    await admin.req('PUT', `/api/users/${clientId}`, { allowedPages: ['tickets'] });
+    r = await client.req('GET', '/api/membership/status');
+    check('switching Billing off does not hide their own plan', r.status === 200, `${r.status}`);
+    await admin.req('PUT', `/api/users/${clientId}`, {
+      allowedPages: ['tickets', 'progress', 'projects', 'billing'],
+    });
+
+    // --- choosing a plan takes nothing away -------------------------------
+    const pending = await db.insert('subscriptions', {
+      clientId, planKey: 'managed', period: 6, amountUsd: 96.90,
+      status: 'pending_payment', createdAt: iso(Date.now()),
+    });
+    r = await client.req('GET', '/api/membership/status');
+    check('an unpaid plan is reported as awaiting payment',
+      r.data.membership?.awaitingPayment === true);
+    check('it unlocks nothing on its own', r.data.membership?.planKey === null,
+      JSON.stringify(r.data.membership?.planKey));
+    // The whole point: saying yes must not cost them the dashboard they had
+    // five minutes ago, in the exact window they might change their mind.
+    check('but choosing it does not take their dashboard away',
+      r.data.membership?.effectivePlanKey === 'unlimited', r.data.membership?.effectivePlanKey);
+    check('and the amount they were quoted is reported',
+      r.data.membership?.subscription?.amountUsd === 96.90,
+      String(r.data.membership?.subscription?.amountUsd));
+
+    // --- paid ---------------------------------------------------------------
+    await db.update('subscriptions', pending.id, {
+      status: 'active', markedPaidAt: iso(Date.now()), markedPaidBy: 'admin',
+      startedAt: iso(Date.now()), renewsAt: iso(Date.now() + 180 * 86400000),
+    });
+    r = await client.req('GET', '/api/membership/status');
+    check('a paid plan is the one that governs', r.data.membership?.planKey === 'managed',
+      r.data.membership?.planKey);
+    check('they are no longer asked to choose', r.data.membership?.needsPlan === false);
+    check('the grandfather clause stops applying', r.data.membership?.grandfathered === false);
+    check('Managed unlocks the plugin updates', r.data.membership?.entitlements?.includes('software_plugin_updates'));
+    check('and the monthly health check', r.data.membership?.entitlements?.includes('monthly_health_check'));
+    check('but not daily backups', !r.data.membership?.entitlements?.includes('daily_backups'));
+    check('nor the priority SLA', !r.data.membership?.entitlements?.includes('priority_sla'));
+    check('so backups are offered as a locked panel',
+      r.data.membership?.locked?.some((l) => l.key === 'daily_backups'));
+    check('they are pointed at Unlimited', r.data.membership?.upgradeTo === 'unlimited',
+      r.data.membership?.upgradeTo);
+    check('the allowance is two a month', r.data.membership?.usage?.included === 2,
+      String(r.data.membership?.usage?.included));
+    check('none of it used yet', r.data.membership?.usage?.used === 0);
+    check('so two remain', r.data.membership?.usage?.remaining === 2);
+    check('and it has a reset date', Boolean(r.data.membership?.usage?.resetsAt));
+
+    // --- a card that failed keeps the lights on ---------------------------
+    await db.update('subscriptions', pending.id, { status: 'past_due' });
+    r = await client.req('GET', '/api/membership/status');
+    check('a failed payment is flagged', r.data.membership?.pastDue === true);
+    check('but does not switch their plan off',
+      r.data.membership?.effectivePlanKey === 'managed', r.data.membership?.effectivePlanKey);
+
+    // --- cancellation runs to the end of the period -----------------------
+    await db.update('subscriptions', pending.id, {
+      status: 'cancelled', cancelledAt: iso(Date.now()),
+      renewsAt: iso(Date.now() + 10 * 86400000),
+    });
+    r = await client.req('GET', '/api/membership/status');
+    check('a cancelled plan says when it ends', Boolean(r.data.membership?.endingAt));
+    check('and keeps working until then',
+      r.data.membership?.effectivePlanKey === 'managed', r.data.membership?.effectivePlanKey);
+
+    await db.update('subscriptions', pending.id, { renewsAt: iso(Date.now() - 86400000) });
+    r = await client.req('GET', '/api/membership/status');
+    check('once the period has run out it grants nothing',
+      r.data.membership?.effectivePlanKey === null, r.data.membership?.effectivePlanKey);
+
+    // --- one client never reads another -----------------------------------
+    const other = await admin.req('POST', '/api/users', {
+      name: 'Other Client', email: 'other.member@example.com', role: 'client',
+      password: 'OtherPass#1', company: 'Other Co',
+    });
+    const otherId = other.data.user?.id;
+    await db.insert('subscriptions', {
+      clientId: otherId, planKey: 'unlimited', period: 1, amountUsd: 29,
+      status: 'active', markedPaidAt: iso(Date.now()), startedAt: iso(Date.now()),
+      createdAt: iso(Date.now()),
+    });
+    // The clientId parameter is read for staff and ignored for everybody else,
+    // so this is not "asked and refused" -- it is unreachable.
+    r = await client.req('GET', `/api/membership/status?clientId=${otherId}`);
+    check('a client naming another client still gets their own membership',
+      r.status === 200 && r.data.membership?.clientId === clientId,
+      `${r.status} ${JSON.stringify(r.data.membership?.clientId)}`);
+    check('and never the other one\'s plan', r.data.membership?.planKey !== 'unlimited',
+      JSON.stringify(r.data.membership?.planKey));
+
+    r = await admin.req('GET', `/api/membership/status?clientId=${otherId}`);
+    check('an admin can read a named client', r.data.membership?.planKey === 'unlimited',
+      r.data.membership?.planKey);
+
+    // The funnel is staff-only: a client reading back how many upgrade
+    // prompts they were shown would be unsettling rather than useful.
+    r = await client.req('GET', '/api/membership/events');
+    check('the funnel is not readable by a client', r.status === 403, `${r.status}`);
+    r = await admin.req('GET', '/api/membership/events');
+    check('but an admin can read it', r.status === 200, `${r.status}`);
+
+    r = await client.req('GET', '/api/membership/history');
+    check('a client can read their own plan history', r.status === 200, `${r.status}`);
+    check('which holds the plan they had', r.data.subscriptions?.some((s) => s.planKey === 'managed'));
+    check('and nobody else\'s', r.data.subscriptions?.every((s) => s.clientId === clientId));
+
+    // Leave the account as the rest of the suite expects to find it.
+    await db.remove('subscriptions', pending.id);
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+  }
+
+  // --- membership: choosing a plan -----------------------------------------
+  {
+    const { db } = require('../db/setup');
+    const plans = require('../lib/plans');
+    const iso = (ms) => new Date(ms).toISOString();
+
+    // --- what it would cost -----------------------------------------------
+    r = await client.req('GET', '/api/membership/quote?planKey=unlimited&period=12');
+    check('a client can price a plan before committing', r.status === 200, `${r.status}`);
+    check('the yearly price is the playbook figure', r.data.quote?.listAmountUsd === 278.40,
+      String(r.data.quote?.listAmountUsd));
+    check('a first purchase is priced as new', r.data.quote?.kind === 'new', r.data.quote?.kind);
+    check('with nothing to credit', r.data.quote?.creditUsd === 0, String(r.data.quote?.creditUsd));
+
+    r = await client.req('GET', '/api/membership/quote?planKey=enterprise&period=12');
+    check('an invented plan is refused', r.status === 400, `${r.status}`);
+    r = await client.req('GET', '/api/membership/quote?planKey=unlimited&period=9');
+    check('an invented period is refused', r.status === 400, `${r.status}`);
+
+    // --- choosing ----------------------------------------------------------
+    r = await client.req('POST', '/api/membership/select', { planKey: 'managed', period: 6 });
+    check('a client can choose a plan', r.status === 201, `${r.status} ${r.text.slice(0, 200)}`);
+    check('it is created awaiting payment', r.data.subscription?.status === 'pending_payment',
+      r.data.subscription?.status);
+    check('priced from the config, not the request', r.data.subscription?.amountUsd === 96.90,
+      String(r.data.subscription?.amountUsd));
+    const firstChoiceId = r.data.subscription?.id;
+
+    // The line the whole feature rests on.
+    r = await client.req('GET', '/api/membership/status');
+    check('choosing unlocks nothing on its own', r.data.membership?.planKey === null,
+      JSON.stringify(r.data.membership?.planKey));
+    check('and the pending choice is reported separately',
+      r.data.membership?.pendingSubscription?.planKey === 'managed',
+      r.data.membership?.pendingSubscription?.planKey);
+
+    // The team has to hear about it, or a sale dies in an inbox.
+    const alerts = await db.filter('notifications', (n) => n.type === 'billing'
+      && String(n.message).includes('chose Managed'));
+    check('the team is told to send payment details', alerts.length > 0, String(alerts.length));
+
+    const chose = await db.filter('membership_events', (e) => e.type === 'plan_selected'
+      && e.clientId === clientId);
+    check('the choice is logged for the funnel', chose.length === 1, String(chose.length));
+    check('with what was chosen', chose[0]?.metadata?.planKey === 'managed',
+      JSON.stringify(chose[0]?.metadata));
+
+    // --- pressing the button twice ----------------------------------------
+    r = await client.req('POST', '/api/membership/select', { planKey: 'managed', period: 6 });
+    check('choosing the same plan again is answered, not duplicated',
+      r.status === 200 && r.data.alreadyChosen === true, `${r.status}`);
+    check('and it is the same subscription', r.data.subscription?.id === firstChoiceId);
+    let pendingRows = await db.filter('subscriptions', (s) => s.clientId === clientId
+      && s.status === 'pending_payment');
+    check('so there is still only one thing for an admin to chase', pendingRows.length === 1,
+      String(pendingRows.length));
+
+    // --- changing their mind before paying --------------------------------
+    r = await client.req('POST', '/api/membership/select', { planKey: 'unlimited', period: 1 });
+    check('a different choice replaces the first', r.status === 201, `${r.status}`);
+    pendingRows = await db.filter('subscriptions', (s) => s.clientId === clientId
+      && s.status === 'pending_payment');
+    check('leaving one pending choice, not two', pendingRows.length === 1, String(pendingRows.length));
+    check('and it is the newer one', pendingRows[0]?.planKey === 'unlimited', pendingRows[0]?.planKey);
+
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+
+    // --- upgrading part way through a period you paid for -----------------
+    const start = Date.now() - 90 * 86400000;
+    await db.insert('subscriptions', {
+      clientId, planKey: 'managed', period: 6, amountUsd: 96.90, status: 'active',
+      markedPaidAt: iso(start), startedAt: iso(start),
+      renewsAt: plans.renewalDate(iso(start), 6).toISOString(), createdAt: iso(start),
+    });
+
+    r = await client.req('GET', '/api/membership/quote?planKey=unlimited&period=6');
+    check('an upgrade is recognised as one', r.data.quote?.kind === 'upgrade', r.data.quote?.kind);
+    check('the unused days are credited', r.data.quote?.creditUsd > 40 && r.data.quote?.creditUsd < 60,
+      String(r.data.quote?.creditUsd));
+    check('so they pay the difference, not the full price',
+      r.data.quote?.amountUsd === plans.money(147.90 - r.data.quote.creditUsd),
+      `${r.data.quote?.amountUsd} vs ${147.90 - r.data.quote?.creditUsd}`);
+
+    // --- downgrading is scheduled, never refunded -------------------------
+    // Crediting ~$49 of Managed against $9 of Basic would hand out a free
+    // month and quietly burn the other $40. The cheaper plan starts when the
+    // paid period ends instead.
+    r = await client.req('GET', '/api/membership/quote?planKey=basic&period=1');
+    check('a downgrade is recognised as one', r.data.quote?.kind === 'downgrade', r.data.quote?.kind);
+    check('nothing is credited against it', r.data.quote?.creditUsd === 0,
+      String(r.data.quote?.creditUsd));
+    check('nothing is due today', r.data.quote?.dueNowUsd === 0, String(r.data.quote?.dueNowUsd));
+    check('it starts when the paid period ends', Boolean(r.data.quote?.startsAt));
+
+    // --- an upgrade does not cancel what they already paid for ------------
+    r = await client.req('POST', '/api/membership/select', { planKey: 'unlimited', period: 6 });
+    check('an upgrade can be chosen', r.status === 201, `${r.status}`);
+    r = await client.req('GET', '/api/membership/status');
+    check('the plan they paid for keeps running', r.data.membership?.planKey === 'managed',
+      r.data.membership?.planKey);
+    check('and still unlocks exactly what Managed unlocks',
+      r.data.membership?.entitlements?.includes('monthly_health_check')
+      && !r.data.membership?.entitlements?.includes('daily_backups'));
+    check('while the upgrade waits on payment',
+      r.data.membership?.pendingSubscription?.planKey === 'unlimited',
+      r.data.membership?.pendingSubscription?.planKey);
+    check('with the credit recorded on it', r.data.membership?.pendingSubscription?.creditUsd > 0,
+      String(r.data.membership?.pendingSubscription?.creditUsd));
+
+    // --- one client never chooses for another -----------------------------
+    const victim = (await db.filter('users', (u) => u.role === 'client' && u.id !== clientId))[0];
+    if (victim) {
+      const before = (await db.filter('subscriptions', (s) => s.clientId === victim.id)).length;
+      r = await client.req('POST', '/api/membership/select', {
+        planKey: 'basic', period: 1, clientId: victim.id,
+      });
+      const after = (await db.filter('subscriptions', (s) => s.clientId === victim.id)).length;
+      check('a client naming another client cannot put a plan on them', after === before,
+        `${before} -> ${after}`);
+    }
+
+    // --- the modal is shown once ------------------------------------------
+    r = await client.req('POST', '/api/membership/modal-seen', {});
+    check('the modal can be marked seen', r.status === 200, `${r.status}`);
+    let me = await db.find('users', clientId);
+    const seenAt = me.plansModalSeenAt;
+    check('and the moment is recorded', Boolean(seenAt));
+    r = await client.req('POST', '/api/membership/modal-seen', {});
+    me = await db.find('users', clientId);
+    check('a second call does not move the timestamp', me.plansModalSeenAt === seenAt,
+      `${seenAt} -> ${me.plansModalSeenAt}`);
+    const shown = await db.filter('membership_events', (e) => e.type === 'plans_modal_shown'
+      && e.clientId === clientId);
+    check('so the funnel counts one showing, not two', shown.length === 1, String(shown.length));
+
+    // Leave the account as the rest of the suite expects to find it.
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+    await db.update('users', clientId, { plansModalSeenAt: null });
+  }
+
+  // --- membership: confirming the money ------------------------------------
+  {
+    const { db } = require('../db/setup');
+    const plans = require('../lib/plans');
+    const subscriptionsUtil = require('../utils/subscriptions');
+    const iso = (ms) => new Date(ms).toISOString();
+
+    r = await client.req('POST', '/api/membership/select', { planKey: 'managed', period: 6 });
+    const subId = r.data.subscription?.id;
+    check('a plan is waiting on payment', r.data.subscription?.status === 'pending_payment');
+
+    // --- who may confirm a payment ----------------------------------------
+    r = await client.req('POST', `/api/membership/${subId}/mark-paid`, {});
+    check('a client cannot mark their own plan paid', r.status === 403, `${r.status}`);
+    let still = await db.find('subscriptions', subId);
+    check('and nothing moved when they tried', still.status === 'pending_payment', still.status);
+
+    r = await admin.req('GET', '/api/membership/pending');
+    check('an admin sees who is waiting', r.status === 200 && r.data.pending?.length >= 1,
+      `${r.status} ${r.data.pending?.length}`);
+    const waiting = r.data.pending?.find((p) => p.id === subId);
+    check('with the name to send details to', Boolean(waiting?.clientEmail));
+    check('and the amount to ask for', waiting?.amountUsd === 96.90, String(waiting?.amountUsd));
+
+    r = await client.req('GET', '/api/membership/pending');
+    check('a client cannot read the payment queue', r.status === 403, `${r.status}`);
+
+    // --- confirming it -----------------------------------------------------
+    r = await admin.req('POST', `/api/membership/${subId}/mark-paid`, {});
+    check('an admin can confirm the payment', r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+    check('the plan starts', r.data.subscription?.status === 'active', r.data.subscription?.status);
+    check('and it is a first purchase, not an upgrade', r.data.kind === 'new', r.data.kind);
+    check('a renewal date is set', Boolean(r.data.subscription?.renewsAt));
+
+    const renewsAt = r.data.subscription.renewsAt;
+    const startedAt = r.data.subscription.startedAt;
+    check('six months out from the day it started',
+      renewsAt.slice(0, 10) === plans.renewalDate(startedAt, 6).toISOString().slice(0, 10),
+      `${startedAt} -> ${renewsAt}`);
+
+    // --- now, and only now, the perks ------------------------------------
+    r = await client.req('GET', '/api/membership/status');
+    check('the client is on the plan they paid for', r.data.membership?.planKey === 'managed',
+      r.data.membership?.planKey);
+    check('and is no longer asked to choose', r.data.membership?.needsPlan === false);
+    check('the grandfather clause has stopped applying',
+      r.data.membership?.grandfathered === false);
+    check('Managed perks are unlocked',
+      r.data.membership?.entitlements?.includes('monthly_health_check'));
+    check('Unlimited ones are not',
+      !r.data.membership?.entitlements?.includes('daily_backups'));
+    check('the unlock moment has not been shown yet',
+      r.data.membership?.subscription?.unlockSeenAt === null,
+      JSON.stringify(r.data.membership?.subscription?.unlockSeenAt));
+
+    const told = await db.filter('notifications', (n) => n.userId === clientId
+      && String(n.message).includes('Payment confirmed'));
+    check('the client is told their plan started', told.length === 1, String(told.length));
+
+    const confirmed = await db.filter('membership_events', (e) => e.type === 'payment_confirmed'
+      && e.clientId === clientId);
+    check('the confirmation is logged for the funnel', confirmed.length === 1, String(confirmed.length));
+
+    // --- a double click must not move their renewal date ------------------
+    r = await admin.req('POST', `/api/membership/${subId}/mark-paid`, {});
+    check('confirming twice is answered, not replayed', r.status === 200 && r.data.alreadyActive === true,
+      `${r.status}`);
+    still = await db.find('subscriptions', subId);
+    check('and the renewal date did not move a month into the future',
+      still.renewsAt === renewsAt, `${renewsAt} -> ${still.renewsAt}`);
+
+    // --- upgrading, and what happens to the plan being replaced -----------
+    r = await client.req('POST', '/api/membership/select', { planKey: 'unlimited', period: 6 });
+    const upgradeId = r.data.subscription?.id;
+    check('an upgrade is credited for the days already paid for',
+      r.data.subscription?.creditUsd > 0, String(r.data.subscription?.creditUsd));
+
+    r = await admin.req('POST', `/api/membership/${upgradeId}/mark-paid`, {});
+    check('the upgrade is confirmed as an upgrade', r.data.kind === 'upgrade', r.data.kind);
+    check('and the plan it replaced is named', r.data.superseded?.planKey === 'managed',
+      r.data.superseded?.planKey);
+
+    const actives = await db.filter('subscriptions', (s) => s.clientId === clientId
+      && s.status === 'active');
+    // The partial unique index in db/setup.js is the backstop; this is the
+    // code that is supposed to make it never fire.
+    check('a client is on exactly one plan, never two', actives.length === 1, String(actives.length));
+    check('and it is the one they just upgraded to', actives[0]?.planKey === 'unlimited',
+      actives[0]?.planKey);
+
+    const superseded = await db.find('subscriptions', subId);
+    check('the replaced plan is expired, not cancelled', superseded.status === 'expired',
+      superseded.status);
+
+    r = await client.req('GET', '/api/membership/status');
+    check('every Unlimited perk is now unlocked', r.data.membership?.entitlements?.length === 15,
+      String(r.data.membership?.entitlements?.length));
+    check('and nothing is locked any more', r.data.membership?.locked?.length === 0);
+
+    const upgradedEvents = await db.filter('membership_events', (e) => e.type === 'upgraded'
+      && e.clientId === clientId);
+    check('the upgrade is logged so churn after it can be measured',
+      upgradedEvents.length === 1, String(upgradedEvents.length));
+
+    // --- the unlock moment, and the email that goes with it ---------------
+    {
+      // Confirming the Managed plan above should have produced exactly one of
+      // each, and the upgrade to Unlimited a second of each.
+      r = await client.req('GET', '/api/membership/status');
+      const unlock = r.data.membership?.unlock;
+      check('the unlock moment is owed after an upgrade', Boolean(unlock));
+      check('it names the plan they moved to', unlock?.planName === 'Unlimited', unlock?.planName);
+      check('and the one they came from', unlock?.fromPlanName === 'Managed', unlock?.fromPlanName);
+      check('it knows this was a step up', unlock?.isUpgrade === true);
+
+      const keys = (unlock?.gained || []).map((g) => g.key);
+      // Only the difference. Reading somebody their whole plan after an
+      // upgrade makes the step they just paid for look like nothing changed.
+      check('it lists what is new', keys.includes('daily_backups') && keys.includes('priority_sla'));
+      check('and not what they already had', !keys.includes('hosting')
+        && !keys.includes('monthly_health_check'), keys.join(','));
+      check('every perk with a panel points at it',
+        (unlock?.gained || []).filter((g) => g.surface).every((g) => g.surface.to.startsWith('/portal')));
+      check('and Unlimited can raise a request', unlock?.canRaiseRequest === true);
+
+      // --- shown once -----------------------------------------------------
+      r = await client.req('POST', '/api/membership/unlock-seen', {});
+      check('the unlock moment can be marked seen', r.status === 200, `${r.status}`);
+      r = await client.req('GET', '/api/membership/status');
+      check('and is not owed twice', r.data.membership?.unlock === null,
+        JSON.stringify(r.data.membership?.unlock));
+
+      // The stamp is on the subscription, not the account, so an upgrade
+      // later is a second unlock rather than one swallowed by a flag.
+      const activeNow = (await db.filter('subscriptions', (s) => s.clientId === clientId
+        && s.status === 'active'))[0];
+      check('the stamp sits on the subscription', Boolean(activeNow?.unlockSeenAt));
+
+      // --- the confirmation email ----------------------------------------
+      const confirmations = (await db.all('email_log'))
+        .filter((e) => e.template === 'plan_confirmed');
+      check('a confirmation went out for each plan that started',
+        confirmations.length === 2, String(confirmations.length));
+      check('addressed to the client',
+        confirmations.every((e) => String(e.toEmails).includes('qa.client@example.com')),
+        confirmations.map((e) => e.toEmails).join(' '));
+
+      // Sent once per subscription. A client reading the same confirmation
+      // twice has a reason to wonder whether they were charged twice.
+      const stamped = await db.filter('subscriptions', (s) => s.clientId === clientId
+        && s.confirmationSentAt);
+      check('each one is stamped so it cannot send again', stamped.length === 2,
+        String(stamped.length));
+
+      const resent = await subscriptionsUtil.sendConfirmation(activeNow);
+      check('asking again declines rather than sending a second', resent === false);
+      check('and no second message was queued',
+        (await db.all('email_log')).filter((e) => e.template === 'plan_confirmed').length === 2);
+
+      // A client whose plan has not been confirmed is owed nothing.
+      r = await admin.req('GET', `/api/membership/status?clientId=u-client`);
+      check('a client with no active plan is owed no unlock moment',
+        r.data.membership?.unlock === null, JSON.stringify(r.data.membership?.unlock));
+    }
+
+    // --- an admin nobody has vouched for yet ------------------------------
+    // Confirming a payment starts a billing period, retires the plan they were
+    // on and unlocks everything, on the strength of a bank notification
+    // somebody read out. A five-minute-old admin account doing that alone is
+    // exactly what the second-signature queue is for.
+    {
+      const rookie = makeClient(base);
+      let a = await admin.req('POST', '/api/users', {
+        name: 'Rookie Admin', email: 'rookie.admin@ethixweb.local', role: 'admin',
+        password: 'RookieAdmin#1',
+      });
+      check('a rookie admin can be appointed', a.status === 201, `${a.status}`);
+      a = await signIn(rookie, 'rookie.admin@ethixweb.local', 'RookieAdmin#1');
+      check('and can sign in', a.status === 200, `${a.status}`);
+
+      // A renewal, not a downgrade. A downgrade is deliberately *not* payable
+      // on the day it is chosen -- it is recorded as `scheduled` and starts
+      // when the period already paid for runs out -- so it would never reach
+      // the signature queue this block exists to test. The gate being checked
+      // here is the one on confirming money, and a renewal is money.
+      a = await client.req('POST', '/api/membership/select', { planKey: 'unlimited', period: 3 });
+      const rookieTarget = a.data.subscription?.id;
+      check('a renewal is payable now, so there is something to confirm',
+        a.data.subscription?.status === 'pending_payment', a.data.subscription?.status);
+
+      a = await rookie.req('POST', `/api/membership/${rookieTarget}/mark-paid`, {});
+      check('a rookie admin cannot confirm a payment alone', a.status === 202, `${a.status}`);
+      check('and is told nothing has changed yet', a.data.pendingApproval === true);
+      check('the proposal says what it would do in plain words',
+        /Confirm \$78\.30 USD from .* and start their Unlimited plan/.test(a.data.request?.summary || ''),
+        a.data.request?.summary);
+
+      const held = await db.find('subscriptions', rookieTarget);
+      check('the plan did NOT start while it waits for a signature',
+        held.status === 'pending_payment', held.status);
+      let m = (await client.req('GET', '/api/membership/status')).data.membership;
+      check('and the client is still on the plan they had', m.planKey === 'unlimited', m.planKey);
+      check('no money is counted while it waits', held.markedPaidAt == null,
+        String(held.markedPaidAt));
+
+      // A second admin signs it off, and only then does the money count.
+      a = await admin.req('POST', `/api/approvals/${a.data.request.id}/approve`, {});
+      check('a trusted admin can sign it off', a.status === 200, `${a.status} ${a.text.slice(0, 200)}`);
+
+      const released = await db.find('subscriptions', rookieTarget);
+      check('and the plan starts only then', released.status === 'active', released.status);
+      check('the money is counted at that point, not before',
+        Boolean(released.markedPaidAt));
+      m = (await client.req('GET', '/api/membership/status')).data.membership;
+      check('the client is moved onto it', m.planKey === 'unlimited', m.planKey);
+      check('with the new period running', m.subscription?.id === rookieTarget,
+        String(m.subscription?.id));
+
+      const stillOne = await db.filter('subscriptions', (s) => s.clientId === clientId
+        && s.status === 'active');
+      check('and they are still on exactly one plan', stillOne.length === 1, String(stillOne.length));
+    }
+
+    // --- a downgrade is scheduled, and nobody can collect for it yet ------
+    // The client is told "your current plan runs until <date>, and the cheaper
+    // one starts after that. There is nothing to pay now." Confirming it today
+    // would bill them for a plan they were told they did not owe for, and cut
+    // short the period of the dearer one they had already paid for.
+    {
+      let d = await client.req('POST', '/api/membership/select', { planKey: 'basic', period: 1 });
+      check('a client may choose a cheaper plan', d.status === 201, `${d.status}`);
+      const scheduled = d.data.subscription;
+      check('it is scheduled rather than awaiting payment',
+        scheduled?.status === 'scheduled', scheduled?.status);
+      check('and it says when it begins', Boolean(scheduled?.startsAt), String(scheduled?.startsAt));
+
+      d = await admin.req('GET', '/api/membership/pending');
+      check('it is not on the admin list of payments to collect',
+        !(d.data.pending || []).some((p) => p.id === scheduled.id));
+
+      d = await admin.req('POST', `/api/membership/${scheduled.id}/mark-paid`, {});
+      check('EXPLOIT BLOCKED: an admin cannot start it early', d.status === 409, `${d.status}`);
+      check('and is told when it does start', /starts on/.test(d.data.error || ''), d.data.error);
+
+      const m = (await client.req('GET', '/api/membership/status')).data.membership;
+      check('the client keeps the plan they paid for', m.planKey === 'unlimited', m.planKey);
+      check('with every perk of it still unlocked', m.entitlements.length === 15,
+        String(m.entitlements.length));
+      check('the scheduled change is reported on its own',
+        m.scheduledSubscription?.planKey === 'basic', String(m.scheduledSubscription?.planKey));
+      check('and is not reported as a payment we are waiting on',
+        m.awaitingPayment === false, String(m.awaitingPayment));
+    }
+
+    // --- nothing to confirm -----------------------------------------------
+    r = await admin.req('POST', `/api/membership/${subId}/mark-paid`, {});
+    check('an expired plan cannot be revived by confirming it', r.status === 409, `${r.status}`);
+    r = await admin.req('POST', '/api/membership/does-not-exist/mark-paid', {});
+    check('an unknown subscription is a 404, not a crash', r.status === 404, `${r.status}`);
+
+    // Leave the account as the rest of the suite expects to find it.
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+    void iso;
+  }
+
+  // --- membership: the legal pages ------------------------------------------
+  {
+    const messages = require('../utils/emailMessages');
+
+    // They are React routes, so the server answers them with the app shell and
+    // the router takes it from there. What matters here is that they are not
+    // behind the auth guard: every email footer links to them, and somebody
+    // deciding whether to buy is as likely to be signed out as in.
+    for (const path of ['/terms', '/privacy']) {
+      const anon = makeClient(base);
+      const res = await anon.req('GET', path);
+      check(`${path} is readable without signing in`, res.status === 200, `${res.status}`);
+      check(`${path} serves the app rather than a redirect`,
+        typeof res.text === 'string' && res.text.includes('<div id="root">'),
+        res.text.slice(0, 80));
+    }
+
+    // And the links that point at them actually say those paths, so a rename
+    // here would fail the suite rather than quietly producing dead links in
+    // every email we send.
+    for (const key of ['welcome_with_plans', 'plan_confirmed', 'renewal_reminder']) {
+      const preview = messages.renderPreview(key);
+      check(`${key} links to the terms`, preview.html.includes('/terms'), key);
+      check(`${key} links to the privacy policy`, preview.html.includes('/privacy'), key);
+    }
+  }
+
+  // --- membership: leaving ---------------------------------------------------
+  {
+    const { db } = require('../db/setup');
+    const plans = require('../lib/plans');
+    const subs = require('../utils/subscriptions');
+    const iso = (ms) => new Date(ms).toISOString();
+    const DAY = 86400000;
+
+    const onPlan = async (planKey, period, { renewsInDays = 90 } = {}) => {
+      for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+        await db.remove('subscriptions', s.id);
+      }
+      const start = Date.now() - 30 * DAY;
+      return db.insert('subscriptions', {
+        clientId, planKey, period, amountUsd: plans.amountFor(planKey, period),
+        status: 'active', markedPaidAt: iso(start), startedAt: iso(start),
+        renewsAt: iso(Date.now() + renewsInDays * DAY),
+        confirmationSentAt: iso(start), unlockSeenAt: iso(start), createdAt: iso(start),
+      });
+    };
+
+    // --- cancelling ---------------------------------------------------------
+    await onPlan('unlimited', 12);
+    r = await client.req('POST', '/api/membership/cancel', { reason: 'Too expensive' });
+    check('a client can cancel their own plan', r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+    check('and it is recorded as cancelled', r.data.subscription?.status === 'cancelled',
+      r.data.subscription?.status);
+    check('with the reason they gave', r.data.subscription?.cancelReason === 'Too expensive',
+      r.data.subscription?.cancelReason);
+
+    // The promise the playbook makes: hosting runs to the end of the period
+    // they paid for. Switching anything off today would break it.
+    r = await client.req('GET', '/api/membership/status');
+    check('nothing is switched off today',
+      r.data.membership?.effectivePlanKey === 'unlimited', r.data.membership?.effectivePlanKey);
+    check('every perk still works', r.data.membership?.entitlements?.length === 15,
+      String(r.data.membership?.entitlements?.length));
+    check('and the client is told when it ends', Boolean(r.data.membership?.endingAt));
+
+    const told = await db.filter('notifications', (n) => n.type === 'billing'
+      && /cancelled their Unlimited plan/.test(String(n.message)));
+    check('the team hears about it', told.length > 0, String(told.length));
+    const cancelLogged = await db.filter('membership_events', (e) => e.type === 'cancelled'
+      && e.clientId === clientId);
+    check('and it is logged so churn can be measured', cancelLogged.length === 1,
+      String(cancelLogged.length));
+
+    // --- a lapsed plan grants nothing --------------------------------------
+    {
+      const current = (await db.filter('subscriptions', (s) => s.clientId === clientId
+        && s.status === 'cancelled'))[0];
+      await db.update('subscriptions', current.id, { renewsAt: iso(Date.now() - DAY) });
+      r = await client.req('GET', '/api/membership/status');
+      check('once the paid period runs out it grants nothing',
+        r.data.membership?.effectivePlanKey === null, r.data.membership?.effectivePlanKey);
+    }
+
+    // --- cancelling drops a pending upgrade too ----------------------------
+    await onPlan('managed', 6);
+    await client.req('POST', '/api/membership/select', { planKey: 'unlimited', period: 6 });
+    r = await client.req('POST', '/api/membership/cancel', {});
+    check('cancelling is allowed with no reason given', r.status === 200, `${r.status}`);
+    const stillPending = await db.filter('subscriptions', (s) => s.clientId === clientId
+      && s.status === 'pending_payment');
+    // Leaving one behind would put somebody who is leaving on an admin's list
+    // of people to chase for money.
+    check('a pending upgrade does not survive the cancellation', stillPending.length === 0,
+      String(stillPending.length));
+
+    // --- the website files --------------------------------------------------
+    r = await client.req('POST', '/api/membership/handover', {});
+    check('a leaving client can ask for their website files', r.status === 200, `${r.status}`);
+    check('and the moment is recorded', Boolean(r.data.requestedAt));
+    r = await client.req('POST', '/api/membership/handover', {});
+    check('asking twice does not raise it twice', r.data.alreadyRequested === true);
+    const handovers = await db.filter('membership_events', (e) => e.type === 'handover_requested'
+      && e.clientId === clientId);
+    check('so the team is told once', handovers.length === 1, String(handovers.length));
+
+    // --- nothing to cancel ---------------------------------------------------
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+    r = await client.req('POST', '/api/membership/cancel', {});
+    check('cancelling with no plan is refused cleanly', r.status === 409, `${r.status}`);
+
+    // --- one client never cancels another ----------------------------------
+    {
+      const victim = (await db.filter('users', (u) => u.role === 'client' && u.id !== clientId))[0];
+      if (victim) {
+        const theirs = await db.insert('subscriptions', {
+          clientId: victim.id, planKey: 'managed', period: 1, amountUsd: 19,
+          status: 'active', markedPaidAt: iso(Date.now()), startedAt: iso(Date.now()),
+          renewsAt: iso(Date.now() + 30 * DAY), createdAt: iso(Date.now()),
+        });
+        await client.req('POST', '/api/membership/cancel', { clientId: victim.id });
+        const after = await db.find('subscriptions', theirs.id);
+        check('a client naming another client cannot cancel their plan',
+          after.status === 'active', after.status);
+        await db.remove('subscriptions', theirs.id);
+      }
+    }
+
+    // --- the renewal reminder ------------------------------------------------
+    {
+      // Six days out, on a twelve month plan: inside the window.
+      const sub = await onPlan('unlimited', 12, { renewsInDays: 6 });
+      const sent = await subs.sendRenewalReminders();
+      check('a multi-month plan renewing in a week is reminded', sent === 1, String(sent));
+
+      const mailed = (await db.all('email_log')).filter((e) => e.template === 'renewal_reminder');
+      check('the reminder was addressed to the client',
+        mailed.some((e) => String(e.toEmails).includes('qa.client@example.com')));
+
+      const after = await db.find('subscriptions', sub.id);
+      check('and stamped so it cannot send again', Boolean(after.renewalReminderSentAt));
+      check('a second sweep sends nothing', (await subs.sendRenewalReminders()) === 0);
+
+      // A monthly plan is its own reminder; mailing one every four weeks is
+      // nagging, so it is out of scope by period rather than by chance.
+      await onPlan('managed', 1, { renewsInDays: 6 });
+      check('a monthly plan is never reminded', (await subs.sendRenewalReminders()) === 0);
+
+      // And a renewal still months away is not due yet.
+      await onPlan('unlimited', 12, { renewsInDays: 60 });
+      check('and neither is one two months out', (await subs.sendRenewalReminders()) === 0);
+    }
+
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+  }
+
+  // --- membership: when we are allowed to ask -------------------------------
+  {
+    const { db } = require('../db/setup');
+    const plans = require('../lib/plans');
+    const upsell = require('../utils/upsell');
+    const iso = (ms) => new Date(ms).toISOString();
+    const DAY = 86400000;
+
+    /** Put the client on a plan that started long enough ago to be askable. */
+    const onPlan = async (planKey, { startedDaysAgo = 60 } = {}) => {
+      for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+        await db.remove('subscriptions', s.id);
+      }
+      for (const e of await db.filter('membership_events', (e) => e.clientId === clientId)) {
+        await db.remove('membership_events', e.id);
+      }
+      await db.update('users', clientId, {
+        upsellDismissStreak: 0, upsellSnoozedUntil: null,
+        upsellLastShownAt: null, upsellLastMessage: null,
+      });
+      const start = Date.now() - startedDaysAgo * DAY;
+      return db.insert('subscriptions', {
+        clientId, planKey, period: 1, amountUsd: plans.amountFor(planKey, 1),
+        status: 'active', markedPaidAt: iso(start), startedAt: iso(start),
+        renewsAt: iso(Date.now() + 30 * DAY),
+        confirmationSentAt: iso(start), unlockSeenAt: iso(start), createdAt: iso(start),
+      });
+    };
+    const fresh = () => db.find('users', clientId);
+
+    // --- who never sees one ------------------------------------------------
+    await onPlan('unlimited');
+    let why = await upsell.eligibility(await fresh());
+    check('Unlimited is never asked to upgrade', why.ok === false && why.reason === 'top_plan',
+      why.reason);
+    r = await client.req('GET', '/api/membership/upsell');
+    check('and the endpoint hands over nothing', r.data.prompt === null,
+      JSON.stringify(r.data.prompt));
+
+    await onPlan('managed', { startedDaysAgo: 2 });
+    why = await upsell.eligibility(await fresh());
+    // Somebody who decided two days ago is not somebody to sell to.
+    check('nobody is asked in the first week of a plan',
+      why.ok === false && why.reason === 'settling_in', why.reason);
+
+    {
+      const sub = await onPlan('managed');
+      await db.update('subscriptions', sub.id, { status: 'past_due' });
+      why = await upsell.eligibility(await fresh());
+      check('a client behind on payment is never upsold',
+        why.ok === false && ['past_due', 'no_active_plan'].includes(why.reason), why.reason);
+    }
+
+    {
+      const sub = await onPlan('managed');
+      await db.update('subscriptions', sub.id, {
+        status: 'cancelled', cancelledAt: iso(Date.now()), renewsAt: iso(Date.now() + 10 * DAY),
+      });
+      why = await upsell.eligibility(await fresh());
+      check('and neither is one who is leaving',
+        why.ok === false && why.reason === 'cancelling', why.reason);
+    }
+
+    // --- who does ----------------------------------------------------------
+    await onPlan('managed');
+    why = await upsell.eligibility(await fresh());
+    check('a settled Managed client may be asked', why.ok === true, why.reason);
+
+    r = await client.req('GET', '/api/membership/upsell');
+    check('and gets a prompt', Boolean(r.data.prompt));
+    check('pointed at Unlimited', r.data.prompt?.to?.key === 'unlimited', r.data.prompt?.to?.key);
+    check('with the monthly difference worked out', r.data.prompt?.differenceUsd === 10,
+      String(r.data.prompt?.differenceUsd));
+    // Only the difference. Repeating what they already have makes the step up
+    // look smaller than it is.
+    const gainedKeys = (r.data.prompt?.gained || []).map((g) => g.key);
+    check('listing only what the upgrade adds',
+      gainedKeys.includes('daily_backups') && !gainedKeys.includes('hosting'),
+      gainedKeys.join(','));
+    const firstMessage = r.data.prompt?.messageKey;
+
+    // Basic is sold Managed, not Unlimited: the step that describes their life.
+    await onPlan('basic');
+    r = await client.req('GET', '/api/membership/upsell');
+    check('a Basic client is sold Managed first', r.data.prompt?.to?.key === 'managed',
+      r.data.prompt?.to?.key);
+
+    // --- fetching is not showing -------------------------------------------
+    await onPlan('managed');
+    await client.req('GET', '/api/membership/upsell');
+    await client.req('GET', '/api/membership/upsell');
+    let shownEvents = await db.filter('membership_events', (e) => e.type === 'upsell_shown'
+      && e.clientId === clientId);
+    // A tab opened in the background and never looked at must not spend the
+    // week's one prompt.
+    check('asking twice does not count as showing twice', shownEvents.length === 0,
+      String(shownEvents.length));
+
+    // --- the ceiling -------------------------------------------------------
+    r = await client.req('POST', '/api/membership/upsell/shown', { messageKey: firstMessage });
+    check('the browser reports when it actually appears', r.status === 200, `${r.status}`);
+    why = await upsell.eligibility(await fresh());
+    check('and we may not ask again this week',
+      why.ok === false && why.reason === 'asked_recently', why.reason);
+    r = await client.req('GET', '/api/membership/upsell');
+    check('so the endpoint hands over nothing', r.data.prompt === null);
+
+    // --- the ticket form spends the same budget ---------------------------
+    await onPlan('managed');
+    // Use up the allowance, then get turned away -- which is an upgrade
+    // prompt, and must count.
+    await client.req('POST', '/api/tickets', { subject: 'A', category: 'Website', description: 'x' });
+    await client.req('POST', '/api/tickets', { subject: 'B', category: 'Website', description: 'y' });
+    r = await client.req('POST', '/api/tickets', { subject: 'C', category: 'Website', description: 'z' });
+    check('the third request is turned away', r.status === 409, `${r.status}`);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    shownEvents = await db.filter('membership_events', (e) => e.type === 'upsell_shown'
+      && e.clientId === clientId);
+    check('and that counts as having asked them', shownEvents.length === 1, String(shownEvents.length));
+    why = await upsell.eligibility(await fresh());
+    // A client offered Unlimited on the ticket form on Monday must not also
+    // get a modal about it on Wednesday.
+    check('so no modal follows it the same week',
+      why.ok === false && why.reason === 'asked_recently', why.reason);
+
+    // --- the ways out ------------------------------------------------------
+    await onPlan('managed');
+    r = await client.req('POST', '/api/membership/upsell/snoozed', { messageKey: 'managed-seo' });
+    check('"Remind me in 30 days" is accepted', r.status === 200 && Boolean(r.data.until));
+    why = await upsell.eligibility(await fresh());
+    check('and honoured', why.ok === false && why.reason === 'snoozed', why.reason);
+    let me = await fresh();
+    check('a snooze is not counted as a refusal', Number(me.upsellDismissStreak || 0) === 0,
+      String(me.upsellDismissStreak));
+
+    // --- three refusals in a row --------------------------------------------
+    await onPlan('managed');
+    for (let i = 1; i <= 3; i += 1) {
+      r = await client.req('POST', '/api/membership/upsell/dismissed', { messageKey: `m${i}` });
+      check(`"Not now" number ${i} is counted`, r.data.streak === i, String(r.data.streak));
+    }
+    me = await fresh();
+    check('after three in a row the gap widens to 30 days',
+      upsell.gapDaysFor(me) === upsell.BACKED_OFF_GAP_DAYS, String(upsell.gapDaysFor(me)));
+
+    // Eight days on, the ordinary ceiling would allow another. The backed-off
+    // one does not.
+    await db.update('users', clientId, { upsellSnoozedUntil: null });
+    for (const e of await db.filter('membership_events', (e) => e.clientId === clientId
+      && e.type === 'upsell_shown')) {
+      await db.update('membership_events', e.id, { createdAt: iso(Date.now() - 8 * DAY) });
+    }
+    await db.insert('membership_events', {
+      clientId, type: 'upsell_shown', createdAt: iso(Date.now() - 8 * DAY),
+    });
+    why = await upsell.eligibility(await fresh());
+    check('so a prompt eight days later is still held back',
+      why.ok === false && why.reason === 'asked_recently', why.reason);
+
+    // --- clicking through forgives the streak ------------------------------
+    r = await client.req('POST', '/api/membership/upsell/clicked', { messageKey: 'managed-seo' });
+    check('clicking through is recorded', r.status === 200);
+    me = await fresh();
+    check('and resets the streak', Number(me.upsellDismissStreak || 0) === 0,
+      String(me.upsellDismissStreak));
+    check('and clears any snooze', !me.upsellSnoozedUntil, String(me.upsellSnoozedUntil));
+    check('so the ordinary weekly ceiling applies again',
+      upsell.gapDaysFor(me) === upsell.NORMAL_GAP_DAYS, String(upsell.gapDaysFor(me)));
+
+    // --- never the same line twice in a row --------------------------------
+    {
+      const list = upsell.MESSAGES.managed;
+      for (const current of list) {
+        const next = upsell.pickMessage('managed', current.key);
+        check(`a message after ${current.key} is a different one`, next.key !== current.key,
+          next.key);
+      }
+    }
+
+    // --- only true statements ----------------------------------------------
+    {
+      await onPlan('managed');
+      const atLimit = await upsell.monthsAtLimit(clientId, 2);
+      check('a client with no history is not told they hit their limit', atLimit === 0,
+        String(atLimit));
+
+      // Two finished months where they used both updates. Now it is true.
+      const subs = require('../utils/subscriptions');
+      for (const back of [1, 2]) {
+        const periodStart = iso(Date.now() - back * 31 * DAY);
+        await db.insert('update_request_usage', {
+          id: subs.usageId(clientId, periodStart),
+          clientId, periodStart, periodEnd: iso(Date.now() - (back - 1) * 31 * DAY - DAY),
+          count: 2, extraCount: 0, updatedAt: periodStart,
+        });
+      }
+      check('but a client who really did is', (await upsell.monthsAtLimit(clientId, 2)) === 2,
+        String(await upsell.monthsAtLimit(clientId, 2)));
+
+      for (const u of await db.filter('update_request_usage', (u) => u.clientId === clientId)) {
+        await db.remove('update_request_usage', u.id);
+      }
+    }
+
+    // --- staff are not customers -------------------------------------------
+    r = await admin.req('GET', '/api/membership/upsell');
+    check('staff are never shown an upgrade prompt', r.data.prompt === null);
+
+    r = await client.req('POST', '/api/membership/upsell/nonsense', {});
+    check('an unknown action is refused', r.status === 400, `${r.status}`);
+
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+    await db.update('users', clientId, {
+      upsellDismissStreak: 0, upsellSnoozedUntil: null,
+      upsellLastShownAt: null, upsellLastMessage: null,
+    });
+  }
+
+  // --- membership: the locked panels ---------------------------------------
+  {
+    const { db } = require('../db/setup');
+    const plans = require('../lib/plans');
+    const iso = (ms) => new Date(ms).toISOString();
+
+    const onPlan = async (planKey) => {
+      for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+        await db.remove('subscriptions', s.id);
+      }
+      const start = Date.now();
+      return db.insert('subscriptions', {
+        clientId, planKey, period: 1, amountUsd: plans.amountFor(planKey, 1),
+        status: 'active', markedPaidAt: iso(start), startedAt: iso(start),
+        renewsAt: plans.renewalDate(iso(start), 1).toISOString(),
+        confirmationSentAt: iso(start), unlockSeenAt: iso(start), createdAt: iso(start),
+      });
+    };
+
+    // Something real to be refused.
+    r = await admin.req('POST', '/api/site-records', {
+      clientId, kind: 'daily_backups', title: 'Full site backup',
+      detail: 'Files and database', status: 'Stored',
+    });
+    check('staff can log work on a site', r.status === 201, `${r.status} ${r.text.slice(0, 200)}`);
+    const recordId = r.data.record?.id;
+
+    r = await admin.req('POST', '/api/site-records', {
+      clientId, kind: 'not_a_panel', title: 'Nonsense',
+    });
+    check('an unknown panel is refused', r.status === 400, `${r.status}`);
+
+    // --- Unlimited sees it -------------------------------------------------
+    await onPlan('unlimited');
+    r = await client.req('GET', '/api/site-records?kind=daily_backups');
+    check('an Unlimited client sees their backups', r.status === 200 && r.data.locked === false,
+      `${r.status} ${r.data.locked}`);
+    check('with the row we logged', r.data.records?.[0]?.title === 'Full site backup',
+      r.data.records?.[0]?.title);
+
+    // --- Managed does not --------------------------------------------------
+    await onPlan('managed');
+    r = await client.req('GET', '/api/site-records?kind=daily_backups');
+    check('a Managed client is told the panel is locked', r.data.locked === true);
+    // This is the line that matters. Hiding a panel in the browser while the
+    // API still hands the rows over is not a lock, it is a cover.
+    check('and is sent no rows at all', (r.data.records || []).length === 0,
+      JSON.stringify(r.data.records));
+    check('they are pointed at Unlimited', r.data.recommended === 'unlimited', r.data.recommended);
+
+    // The panels Managed does include still work.
+    r = await client.req('GET', '/api/site-records?kind=monthly_health_check');
+    check('but a panel Managed does include is not locked', r.data.locked === false);
+
+    // --- Basic sees even less ----------------------------------------------
+    await onPlan('basic');
+    for (const kind of ['daily_backups', 'uptime_monitoring', 'monthly_health_check']) {
+      r = await client.req(`GET`, `/api/site-records?kind=${kind}`);
+      check(`Basic is locked out of ${kind}`, r.data.locked === true, JSON.stringify(r.data.locked));
+      check(`and sent no ${kind} rows`, (r.data.records || []).length === 0);
+    }
+
+    // --- one client never reads another ------------------------------------
+    await onPlan('unlimited');
+    const stranger = (await db.filter('users', (u) => u.role === 'client' && u.id !== clientId))[0];
+    if (stranger) {
+      await db.insert('site_records', {
+        clientId: stranger.id, kind: 'daily_backups', title: 'Not yours',
+        occurredAt: iso(Date.now()), createdAt: iso(Date.now()),
+      });
+      r = await client.req('GET', `/api/site-records?kind=daily_backups&clientId=${stranger.id}`);
+      check('a client naming another client still gets their own rows',
+        (r.data.records || []).every((x) => x.title !== 'Not yours'),
+        JSON.stringify((r.data.records || []).map((x) => x.title)));
+    }
+
+    // --- only staff write --------------------------------------------------
+    r = await client.req('POST', '/api/site-records', {
+      clientId, kind: 'daily_backups', title: 'I did this myself',
+    });
+    check('a client cannot write their own history', r.status === 403, `${r.status}`);
+
+    // --- every locked entitlement has a panel behind it --------------------
+    const panelKinds = require('../routes/siteRecords').PANEL_KINDS;
+    check('every lockable entitlement is a real panel',
+      plans.ENTITLEMENTS.filter((e) => e.locked).every((e) => panelKinds.includes(e.key)),
+      panelKinds.join(','));
+    for (const kind of panelKinds) {
+      r = await client.req('GET', `/api/site-records?kind=${kind}`);
+      check(`${kind} answers rather than erroring`, r.status === 200, `${r.status}`);
+    }
+
+    await db.remove('site_records', recordId);
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+  }
+
+  // --- membership: the welcome email ---------------------------------------
+  {
+    const { db } = require('../db/setup');
+    const subscriptionsUtil = require('../utils/subscriptions');
+
+    const welcomes = () => db.filter('email_log', (e) => e.template === 'welcome_with_plans');
+
+    // --- a brand new client is greeted at once ----------------------------
+    r = await admin.req('POST', '/api/users', {
+      name: 'Welcome Tester', email: 'welcome.tester@example.com', role: 'client',
+      password: 'WelcomePass#1', company: 'Welcome Co',
+    });
+    check('a new client account is created', r.status === 201, `${r.status}`);
+    const welcomedId = r.data.user?.id;
+
+    let sent = (await welcomes()).filter((e) => String(e.toEmails).includes('welcome.tester@example.com'));
+    check('and is sent the welcome email straight away', sent.length === 1, String(sent.length));
+    check('with the subject from the brief',
+      sent[0]?.subject === 'Your Ethixweb dashboard is ready, here are your plan options',
+      sent[0]?.subject);
+
+    let record = await db.find('users', welcomedId);
+    check('the send is stamped on the account', Boolean(record.welcomeEmailSentAt));
+
+    const logged = await db.filter('membership_events', (e) => e.type === 'welcome_email_sent'
+      && e.clientId === welcomedId);
+    check('and logged for the funnel', logged.length === 1, String(logged.length));
+    check('as a signup rather than a first login', logged[0]?.metadata?.reason === 'signup',
+      JSON.stringify(logged[0]?.metadata));
+
+    // --- and never twice --------------------------------------------------
+    const resent = await subscriptionsUtil.sendWelcome(record, { reason: 'first_login' });
+    check('asking again declines rather than sending a second', resent === false);
+    sent = (await welcomes()).filter((e) => String(e.toEmails).includes('welcome.tester@example.com'));
+    check('so there is still only one', sent.length === 1, String(sent.length));
+
+    // --- a client who predates the feature gets it on first sign-in -------
+    // Exactly the state every existing client is in on the morning this ships:
+    // an account, no welcome on record, and no first login stamped.
+    await db.update('users', welcomedId, { welcomeEmailSentAt: null, firstLoginAt: null });
+    const existing = await db.find('users', welcomedId);
+    const greeted = await subscriptionsUtil.sendWelcome(existing, { reason: 'first_login' });
+    check('a client who predates plans is greeted on first sign-in', greeted === true);
+
+    const firstLogin = await db.filter('membership_events', (e) => e.type === 'welcome_email_sent'
+      && e.clientId === welcomedId && e.metadata?.reason === 'first_login');
+    check('and it is recorded as a first login, not a signup', firstLogin.length === 1,
+      String(firstLogin.length));
+
+    // --- staff are never sent it ------------------------------------------
+    const staff = await db.find('users', 'u-pm');
+    check('staff are never sent a client welcome',
+      (await subscriptionsUtil.sendWelcome(staff, { reason: 'signup' })) === false);
+
+    // --- the figures come from the config, not the template ---------------
+    const messages = require('../utils/emailMessages');
+    const preview = messages.renderPreview('welcome_with_plans');
+    const plansConfig = require('../lib/plans');
+    // Asserts that the figure came from the config and reached the message,
+    // not that any particular sentence survives a copy edit.
+    for (const plan of plansConfig.PLANS) {
+      const money = plansConfig.formatUsd(plan.monthlyUsd);
+      check(`the welcome quotes ${plan.name} at ${money}`,
+        preview.text.includes(plan.name) && preview.text.includes(`${money}/month USD`),
+        plan.key);
+      check(`and ${plan.name} leads with what it includes`,
+        plansConfig.highlightsFor(plan.key).every((h) => preview.text.includes(h.label)),
+        plansConfig.highlightsFor(plan.key).map((h) => h.label).join(' | '));
+    }
+    const yearly = plansConfig.priceFor(29, 12);
+    check('and the yearly figure matches the playbook',
+      preview.text.includes(`${plansConfig.formatUsd(yearly.perMonth)} a month`),
+      plansConfig.formatUsd(yearly.perMonth));
+    check('it points at the plans page', preview.text.includes('/portal/billing/plans'));
+    check('and offers a way back to the dashboard', /Log in:/.test(preview.text));
+
+    // The brief is explicit about both of these.
+    check('no checkmark glyphs anywhere in it',
+      !/&#10003;|&check;|✓|✔/.test(preview.html));
+    check('and no discount maths in the subject line',
+      !/%|save|off/i.test(preview.subject), preview.subject);
+
+    await db.remove('users', welcomedId);
+  }
+
+  // --- membership: what a plan lets you ask for ----------------------------
+  {
+    const { db } = require('../db/setup');
+    const plans = require('../lib/plans');
+    const updateRequests = require('../utils/updateRequests');
+    const iso = (ms) => new Date(ms).toISOString();
+
+    const onPlan = async (planKey, period = 1) => {
+      for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+        await db.remove('subscriptions', s.id);
+      }
+      for (const u of await db.filter('update_request_usage', (u) => u.clientId === clientId)) {
+        await db.remove('update_request_usage', u.id);
+      }
+      const start = Date.now();
+      return db.insert('subscriptions', {
+        clientId, planKey, period, amountUsd: plans.amountFor(planKey, period),
+        status: 'active', markedPaidAt: iso(start), startedAt: iso(start),
+        renewsAt: plans.renewalDate(iso(start), period).toISOString(),
+        confirmationSentAt: iso(start), unlockSeenAt: iso(start), createdAt: iso(start),
+      });
+    };
+
+    // --- a grandfathered client is not gated at all ------------------------
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+    r = await client.req('POST', '/api/tickets', {
+      subject: 'Grandfathered change', category: 'Website', description: 'Still works.',
+    });
+    check('a client with no plan can still raise a request', r.status === 201, `${r.status}`);
+
+    // --- Basic: hosting only ----------------------------------------------
+    await onPlan('basic');
+
+    r = await client.req('POST', '/api/tickets', {
+      subject: 'Please change the homepage banner',
+      category: 'Website',
+      description: 'Swap the photo for the new one.',
+    });
+    check('Basic cannot raise a change request', r.status === 403, `${r.status}`);
+    check('and is offered Managed rather than a closed door',
+      r.data.recommended === 'managed', r.data.recommended);
+    check('the reason is machine readable', r.data.reason === 'category_not_included', r.data.reason);
+    check('the message explains it in plain words',
+      /hosting only/i.test(r.data.error || ''), r.data.error);
+
+    // An outage always gets through. A client whose site is down must be able
+    // to reach us whatever they pay.
+    r = await client.req('POST', '/api/tickets', {
+      subject: 'Site is down', category: 'Site down', description: 'Nothing loads at all.',
+    });
+    check('but an outage always gets through on Basic', r.status === 201, `${r.status}`);
+
+    r = await client.req('POST', '/api/tickets', {
+      subject: 'Question about my invoice', category: 'Billing', description: 'What is this line?',
+    });
+    check('and so does a billing question', r.status === 201, `${r.status}`);
+
+    // --- Managed: two a month, then a decision ----------------------------
+    await onPlan('managed', 6);
+
+    r = await client.req('POST', '/api/tickets', {
+      subject: 'Change one', category: 'Website', description: 'First change.',
+    });
+    check('Managed can raise the first of two', r.status === 201, `${r.status}`);
+    r = await client.req('POST', '/api/tickets', {
+      subject: 'Change two', category: 'Website', description: 'Second change.',
+    });
+    check('and the second', r.status === 201, `${r.status}`);
+
+    r = await client.req('GET', '/api/membership/status');
+    check('the meter reads two of two used', r.data.membership?.usage?.used === 2,
+      String(r.data.membership?.usage?.used));
+    check('with none remaining', r.data.membership?.usage?.remaining === 0);
+
+    // An outage still gets through, and does NOT eat an update.
+    r = await client.req('POST', '/api/tickets', {
+      subject: 'Site down again', category: 'Site down', description: 'Down since 9am.',
+    });
+    check('an outage still gets through with the allowance spent', r.status === 201, `${r.status}`);
+    r = await client.req('GET', '/api/membership/status');
+    check('and an outage never eats an update', r.data.membership?.usage?.used === 2,
+      String(r.data.membership?.usage?.used));
+
+    // --- the third change ---------------------------------------------------
+    const third = {
+      subject: 'Change three',
+      category: 'Website',
+      description: 'The long paragraph a client typed and must not lose.',
+    };
+    r = await client.req('POST', '/api/tickets', third);
+    check('the third change is held for a decision, not refused', r.status === 409, `${r.status}`);
+    check('it is flagged as the allowance running out',
+      r.data.reason === 'allowance_used', r.data.reason);
+    check('it says when the next two unlock', Boolean(r.data.resetsAt));
+    check('and that an extra can be paid for', r.data.chargeable === true);
+    check('with Unlimited offered too', r.data.recommended === 'unlimited', r.data.recommended);
+
+    let madeIt = await db.filter('tickets', (t) => t.subject === 'Change three');
+    check('nothing was created while they decide', madeIt.length === 0, String(madeIt.length));
+
+    // --- option one: wait for the reset -----------------------------------
+    r = await client.req('POST', '/api/tickets', { ...third, queueForNextPeriod: true });
+    check('they can save it for next month', r.status === 202, `${r.status}`);
+    check('and the text they typed is kept word for word',
+      r.data.queued?.description === third.description, r.data.queued?.description);
+
+    r = await client.req('GET', '/api/tickets/queued');
+    check('it shows in what they are holding', r.data.queued?.length === 1,
+      String(r.data.queued?.length));
+
+    // A held request is NOT a ticket. Putting it in the queue would start an
+    // SLA clock nobody agreed to and bury the real queue.
+    madeIt = await db.filter('tickets', (t) => t.subject === 'Change three');
+    check('and it is still not in the ticket queue', madeIt.length === 0, String(madeIt.length));
+
+    const heldId = r.data.queued[0].id;
+    r = await client.req('DELETE', `/api/tickets/queued/${heldId}`);
+    check('they can change their mind about holding it', r.status === 200, `${r.status}`);
+    r = await client.req('GET', '/api/tickets/queued');
+    check('and it stops being held', r.data.queued?.length === 0, String(r.data.queued?.length));
+
+    // --- option two: pay for it -------------------------------------------
+    r = await client.req('POST', '/api/tickets', { ...third, acceptExtraCharge: true });
+    check('or they can agree to be quoted for an extra', r.status === 201, `${r.status}`);
+    check('and the ticket says it is a chargeable extra', r.data.chargedAsExtra === true);
+
+    r = await client.req('GET', '/api/membership/status');
+    check('the extra is counted separately', r.data.membership?.usage?.extraUsed === 1,
+      String(r.data.membership?.usage?.extraUsed));
+    // "2 of 2 used" and "1 extra" are different facts. Adding them together
+    // would tell a Managed client they had used three of two.
+    check('and never added to the included two', r.data.membership?.usage?.used === 2,
+      String(r.data.membership?.usage?.used));
+
+    const bought = await db.filter('membership_events', (e) => e.type === 'extra_update_purchased'
+      && e.clientId === clientId);
+    check('paying for an extra is logged', bought.length === 1, String(bought.length));
+
+    // --- a held request becomes a ticket when it lands --------------------
+    {
+      await onPlan('managed', 6);
+      const held = await updateRequests.queue(clientId, {
+        subject: 'Held until the reset', category: 'Website',
+        description: 'Kept exactly as typed.', priority: 'Normal',
+        releaseAt: iso(Date.now() - 60_000),
+      });
+      const count = await updateRequests.releaseDue();
+      check('a held request is released once its date passes', count === 1, String(count));
+
+      const now = await db.find('queued_requests', held.id);
+      check('it is marked released rather than released twice', Boolean(now.releasedAt));
+      check('and points at the ticket it became', Boolean(now.ticketId));
+      const asTicket = await db.find('tickets', now.ticketId);
+      check('which carries the text they typed',
+        asTicket?.description === 'Kept exactly as typed.', asTicket?.description);
+      check('and is numbered like every other ticket', /^ticket-\d+$/.test(now.ticketId),
+        now.ticketId);
+
+      // Releasing spends one of the new month's updates: the client chose to
+      // spend a future allowance rather than pay for an extra.
+      r = await client.req('GET', '/api/membership/status');
+      check('releasing it spends one of the new allowance',
+        r.data.membership?.usage?.used === 1, String(r.data.membership?.usage?.used));
+
+      check('and a second sweep releases nothing', (await updateRequests.releaseDue()) === 0);
+    }
+
+    // --- Unlimited is never counted ---------------------------------------
+    await onPlan('unlimited', 12);
+    for (let i = 0; i < 4; i += 1) {
+      r = await client.req('POST', '/api/tickets', {
+        subject: `Unlimited change ${i}`, category: 'Website', description: 'No limit here.',
+      });
+      if (r.status !== 201) break;
+    }
+    check('Unlimited can raise as many as they like', r.status === 201, `${r.status}`);
+    r = await client.req('GET', '/api/membership/status');
+    check('and sees no meter at all', r.data.membership?.usage?.unlimited === true);
+    check('with nothing counted against them', r.data.membership?.usage?.included === null,
+      String(r.data.membership?.usage?.included));
+
+    // --- the limit is on the client, never on us --------------------------
+    await onPlan('basic');
+    r = await admin.req('POST', '/api/tickets', {
+      clientId, subject: 'Logged after a phone call', category: 'Website',
+      description: 'Raised by the team on their behalf.',
+    });
+    // Staff raise tickets for clients constantly -- after a call, off a text.
+    // Refusing those would mean the plan limits the team, not the customer.
+    check('staff can still raise a ticket for a Basic client', r.status === 201, `${r.status}`);
+
+    // Leave the account as the rest of the suite expects to find it.
+    for (const s of await db.filter('subscriptions', (s) => s.clientId === clientId)) {
+      await db.remove('subscriptions', s.id);
+    }
+    for (const u of await db.filter('update_request_usage', (u) => u.clientId === clientId)) {
+      await db.remove('update_request_usage', u.id);
+    }
   }
 
   // --- the client's own Slack channel --------------------------------------

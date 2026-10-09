@@ -13,11 +13,15 @@ import {
   Loader2,
   FileText,
   Flame,
+  Siren,
   X,
 } from "lucide-react";
 import { TICKET_PRIORITIES, type TicketPriority } from "@/lib/tickets";
 import { useAuth } from "@/context/AuthContext";
 import { useCreateTicket, useUsers } from "@/hooks/useData";
+import { useNavigate } from "react-router-dom";
+import { ApiError } from "@/lib/api";
+import { AllowancePanel, type RequestBlock } from "@/components/plans/AllowancePanel";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -37,6 +41,12 @@ const CATEGORIES = [
   { name: "Website", icon: Globe, description: "Bugs, layout, or content updates" },
   { name: "Mobile App", icon: Smartphone, description: "iOS or Android app issues" },
   { name: "Marketing", icon: Megaphone, description: "SEO, campaigns, or social media" },
+  // Its own category rather than a Website bug. An outage is the one thing
+  // every plan can always report -- a client whose site is down must be able
+  // to reach us whatever they pay -- and it must never eat one of a Managed
+  // client's two monthly updates. Both of those rules key off this name; see
+  // NON_UPDATE_CATEGORIES in lib/plans.js.
+  { name: "Site down", icon: Siren, description: "Your site is offline or unreachable" },
   { name: "Billing", icon: CreditCard, description: "Invoices, payments, or subscriptions" },
   { name: "Other", icon: HelpCircle, description: "General inquiries & support" },
 ];
@@ -68,6 +78,7 @@ export function CreateTicketModal({
   const { user } = useAuth();
   const { data: users } = useUsers();
   const createTicket = useCreateTicket();
+  const navigate = useNavigate();
 
   const isStaff = user && ["admin", "sales", "project_manager", "employee"].includes(user.role);
   const clients = (users ?? []).filter((u) => u.role === "client");
@@ -83,7 +94,16 @@ export function CreateTicketModal({
   const [clientId, setClientId] = useState("");
   const [priority, setPriority] = useState<TicketPriority>("Normal");
 
-  function submit() {
+  /**
+   * What the plan said when it would not take this request as it stands.
+   *
+   * Held in state rather than thrown away, because the whole point is that the
+   * form stays exactly as the client left it while they decide. Nothing they
+   * typed is cleared on a refusal -- only on a send that actually succeeded.
+   */
+  const [block, setBlock] = useState<RequestBlock | null>(null);
+
+  function send(extra?: { acceptExtraCharge?: boolean; queueForNextPeriod?: boolean }) {
     if (!subject.trim()) {
       toast.error("Subject is required");
       return;
@@ -92,20 +112,54 @@ export function CreateTicketModal({
       toast.error("Select a client");
       return;
     }
+
     createTicket.mutate(
-      { subject, category, description, priority, ...(isStaff ? { clientId } : {}) },
+      { subject, category, description, priority, ...(isStaff ? { clientId } : {}), ...extra },
       {
-        onSuccess: () => {
-          toast.success("Ticket created - the team has been alerted");
+        onSuccess: (result) => {
+          toast.success(
+            result.queued
+              ? result.message || "Saved for when your next updates unlock"
+              : result.chargedAsExtra
+                ? "Sent. We will quote this one before any work starts."
+                : "Ticket created - the team has been alerted",
+          );
           setOpen?.(false);
+          setBlock(null);
           setSubject("");
           setDescription("");
           setClientId("");
           setPriority("Normal");
         },
-        onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to create ticket"),
+        onError: (err) => {
+          // A plan limit is a decision for the client to make, not a failure.
+          // It comes back with everything the panel needs to offer the three
+          // ways forward, and the form keeps every word they typed.
+          const payload = err instanceof ApiError ? err.payload : null;
+          if (payload?.upgradeRequired) {
+            setBlock({
+              error: String(payload.error ?? err.message),
+              reason: String(payload.reason ?? "allowance_used"),
+              recommended: (payload.recommended as RequestBlock["recommended"]) ?? null,
+              resetsAt: (payload.resetsAt as string | null) ?? null,
+              chargeable: Boolean(payload.chargeable),
+            });
+            return;
+          }
+          toast.error(err instanceof Error ? err.message : "Failed to create ticket");
+        },
       },
     );
+  }
+
+  const submit = () => send();
+
+  // Changing the category after being turned away clears the panel: a client
+  // who switches from a change request to "Site down" is asking something the
+  // plan does allow, and leaving the refusal on screen would say otherwise.
+  function chooseCategory(name: string) {
+    setCategory(name);
+    setBlock(null);
   }
 
   return (
@@ -220,7 +274,7 @@ export function CreateTicketModal({
                   <button
                     key={cat.name}
                     type="button"
-                    onClick={() => setCategory(cat.name)}
+                    onClick={() => chooseCategory(cat.name)}
                     className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-left text-xs font-medium transition-all duration-150 cursor-pointer ${
                       isSelected
                         ? "border-primary bg-primary/10 text-primary shadow-xs ring-1 ring-primary/30"
@@ -264,6 +318,24 @@ export function CreateTicketModal({
           </div>
           </div>
         </div>
+
+        {/* Sits between the form and the send button, so it is the last thing
+            read before deciding -- and so the form above it is visibly intact,
+            which is the reassurance that matters here. */}
+        {block && (
+          <div className="px-6 pb-4">
+            <AllowancePanel
+              block={block}
+              busy={createTicket.isPending}
+              onUpgrade={(plan) => {
+                setOpen?.(false);
+                navigate(`/portal/billing/plans?plan=${plan}`);
+              }}
+              onPayExtra={() => send({ acceptExtraCharge: true })}
+              onQueue={() => send({ queueForNextPeriod: true })}
+            />
+          </div>
+        )}
 
         <DialogFooter className="m-0 px-6 py-4 bg-muted/30 border-t border-border/40 flex flex-row items-center justify-end gap-3 rounded-b-2xl sm:justify-end">
           <DialogClose render={<Button variant="ghost" className="h-9 text-xs px-3.5 text-muted-foreground hover:text-foreground cursor-pointer" />}>

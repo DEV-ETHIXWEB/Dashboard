@@ -34,6 +34,11 @@ const TOPIC_PAGE = {
   // Always-on sections: everyone signed in may hear these.
   notifications: 'notifications',
   session: 'settings',
+  // Which plan somebody is on. Deliberately an always-on section rather than
+  // 'billing': an admin can switch a client's Billing page off, and that is a
+  // decision about a page, not about whether their own dashboard may notice
+  // that their plan was just confirmed. See routes/membership.js.
+  membership: 'settings',
   // Staff-only topics. `null` here is not "everyone" -- STAFF_ONLY below is the
   // list that decides, and anything in it never reaches a client.
   users: null,

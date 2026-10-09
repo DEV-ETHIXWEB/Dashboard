@@ -308,7 +308,8 @@ function withBrandOverride(patch, fn) {
 function brand() {
   return {
     ...brandOverride,
-    name: process.env.MAIL_BRAND_NAME || 'EthixWeb',
+    // Capital E, lowercase w. Akash's call, and the spelling the company uses.
+    name: process.env.MAIL_BRAND_NAME || 'Ethixweb',
     color: process.env.MAIL_BRAND_COLOR || TOKENS.brand,
     // The wordmark now comes from object storage rather than the app's own
     // public/ folder, so it no longer depends on this deployment being
@@ -778,7 +779,12 @@ function ctaGroup(primary, secondary) {
   if (secondary) rows.push(`<tr><td align="center">${button({ ...secondary, tone: 'secondary' })}</td></tr>`);
   if (!rows.length) return '';
   return [
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 4px;">',
+    // 4px above the first button was too little anywhere and badly too little
+    // on a phone, where the body text runs full width and the button lands
+    // directly under the last line of it -- close enough to look like part of
+    // the sentence, and close enough to mis-tap. The gap is the separation
+    // between "what this says" and "what you can do about it".
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 6px;">',
     rows.join(''),
     '</table>',
   ].join('');
@@ -843,6 +849,32 @@ function header() {
  * between them is a border on the right-hand cell, so it disappears by itself
  * when the columns stack on a phone.
  */
+/**
+ * The two words the tagline turns on, in the brand red.
+ *
+ * "We run the tech. You run the business." is a sentence about a division of
+ * labour, and the whole line reading in one flat grey says nothing about which
+ * half is which. Colouring the two nouns makes the point before the sentence
+ * is read -- which is the job a tagline has in a footer nobody reads twice.
+ *
+ * Escapes first and only then injects the markup, so a tagline set from the
+ * environment still cannot carry HTML into the message. Words are matched on
+ * their own, so a tagline that happens not to contain them is simply left
+ * alone rather than mangled.
+ */
+function emphasiseTagline(tagline) {
+  const safe = escapeHtml(tagline).replace(/\n/g, '<br />');
+  return safe.replace(
+    /\b(tech|business)\b/gi,
+    (word) => `<span style="color:${brand().color};font-weight:600;">${word}</span>`,
+  );
+}
+
+/** The registered postal address, on one line. Empty until it is configured. */
+function companyAddress() {
+  return String(process.env.MAIL_COMPANY_ADDRESS || '').trim().replace(/\s*\n\s*/g, ', ');
+}
+
 function footer({ reason, links = [], actor = null }) {
   const b = brand();
   const tagline = process.env.MAIL_BRAND_TAGLINE
@@ -877,7 +909,7 @@ function footer({ reason, links = [], actor = null }) {
   const brandCol = [
     `<div style="padding-bottom:12px;line-height:1;">${signOff}</div>`,
     `<div style="font-family:${TOKENS.font};font-size:13px;line-height:1.6;color:${FOOT.mutedSolid};">`
-      + `${escapeHtml(tagline).replace(/\n/g, '<br />')}</div>`,
+      + `${emphasiseTagline(tagline)}</div>`,
     social
       ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:16px 0 0;"><tr>${social}</tr></table>`
       : '',
@@ -924,6 +956,13 @@ function footer({ reason, links = [], actor = null }) {
       : '',
     linkHtml ? `<div style="font-family:${TOKENS.font};font-size:12px;padding-bottom:10px;">${linkHtml}</div>` : '',
     `<div style="font-family:${TOKENS.font};font-size:11px;color:${FOOT.mutedSolid};">&copy; ${new Date().getFullYear()} ${escapeHtml(b.name)}</div>`,
+    // The postal address. Commercial mail is required to carry one, and the
+    // plan emails are commercial whatever else they also are. Rendered only
+    // when MAIL_COMPANY_ADDRESS is set, so a deployment that has not filled it
+    // in looks exactly as it did before rather than printing an empty line.
+    companyAddress()
+      ? `<div style="font-family:${TOKENS.font};font-size:11px;line-height:1.6;color:${FOOT.mutedSolid};padding-top:6px;">${escapeHtml(companyAddress())}</div>`
+      : '',
     '</td></tr></table>',
   ].join('');
 }
@@ -1069,6 +1108,7 @@ function renderText(lines) {
 
 module.exports = {
   heroBadge,
+  iconTile,
   ruleAccent,
   ICON_CID_PREFIX,
   ICONS,

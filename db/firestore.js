@@ -196,6 +196,55 @@ const firestoreDb = {
     return rows.filter(predicate);
   },
 
+  /**
+   * The Postgres driver's `where`, with the equality criteria pushed into the
+   * Firestore query so the documents that do not match are never read.
+   *
+   * That is the whole point here: Firestore bills per document read, so a
+   * client's tickets page scanning the entire ticket collection is a line on
+   * an invoice as well as a slow page.
+   *
+   * Ordering and the limit are deliberately applied in memory rather than in
+   * the query. An equality filter combined with an `orderBy` on a different
+   * field needs a composite index in Firestore, and a missing one is a
+   * run-time failure on a live deployment rather than something that shows up
+   * in testing. The documents have already been narrowed by then, so sorting
+   * the handful that came back costs nothing worth having.
+   */
+  async where(collection, criteria = {}, { limit = null, orderBy = null, direction = 'desc' } = {}) {
+    let query = getDb().collection(collection);
+
+    for (const [key, value] of Object.entries(criteria)) {
+      if (!isWritableField(collection, key)) {
+        throw new Error(`db.where: ${collection}.${key} is not a column`);
+      }
+      query = query.where(key, '==', value);
+    }
+
+    const snap = await query.get();
+    let rows = snap.docs.map(docToObj);
+
+    if (orderBy) {
+      if (!isWritableField(collection, orderBy)) {
+        throw new Error(`db.where: ${collection}.${orderBy} is not a column`);
+      }
+      // Ascending, with a missing value counting as smaller than any real one.
+      // That is the same order the SQL side asks for with NULLS FIRST on an
+      // ascending sort and NULLS LAST on a descending one, so a row with no
+      // timestamp lands in the same place on both drivers.
+      const ascending = (x, y) => {
+        if (x == null && y == null) return 0;
+        if (x == null) return -1;
+        if (y == null) return 1;
+        return x < y ? -1 : x > y ? 1 : 0;
+      };
+      const dir = direction === 'asc' ? 1 : -1;
+      rows = rows.slice().sort((a, b) => dir * ascending(a[orderBy], b[orderBy]));
+    }
+
+    return limit == null ? rows : rows.slice(0, Number(limit));
+  },
+
   async recent(collection, limit = 100) {
     const snap = await getDb()
       .collection(collection)
@@ -498,6 +547,23 @@ const firestoreDb = {
   },
 
   /** See the Postgres driver: take one queued message, once. */
+  /**
+   * The Postgres driver's `claimStatus`, as a transaction: move a row from
+   * one status to another and tell exactly one caller it was theirs to move.
+   */
+  async claimStatus(collection, id, fromStatus, patch = {}) {
+    const ref = getDb().collection(collection).doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data.status !== fromStatus) return null;
+      const clean = sanitize(collection, patch);
+      tx.update(ref, clean);
+      return { id: doc.id, ...data, ...clean };
+    });
+  },
+
   async claimOutboxMessage(id) {
     const ref = getDb().collection('outbox').doc(String(id));
     return getDb().runTransaction(async (tx) => {
