@@ -7,6 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { MonthlyReports } from "@/components/plans/MonthlyReports";
 import { MoneyPanel, DataList, DataRow, BentoGrid, bento } from "@/components/money/Money";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -190,6 +191,11 @@ export default function Reports() {
           }
         />
       </div>
+
+      {/* The monthly report lives here rather than on a page of its own: the
+          client already knows where their documents are, and a second page
+          also called Reports is how you generate a phone call. */}
+      <MonthlyReports reports={reports} className={bento(4)} />
 
       {isLoading ? (
         <Skeleton className={`h-64 w-full rounded-2xl ${bento(4)}`} />

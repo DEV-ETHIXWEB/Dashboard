@@ -136,10 +136,28 @@ async function createUserRecord({
   });
 }
 
+/**
+ * The welcome email, for a client account that has just been created.
+ *
+ * Here rather than in the route because two paths create a client: the direct
+ * one, and an approval released after a second admin signed it off. Both go
+ * through createUserRecord, so both should greet the client -- and a client
+ * created by the approval queue who never heard from us is the failure this
+ * avoids.
+ *
+ * Deliberately not awaited by its callers for its result: the account exists
+ * either way, and sendWelcome swallows its own failures.
+ */
+async function welcomeNewClient(user) {
+  if (!user || user.role !== 'client') return false;
+  return require('./subscriptions').sendWelcome(user, { reason: 'signup' });
+}
+
 module.exports = {
   generatePassword,
   sectionLabels,
   emailCredentials,
   joinAssignedChannel,
   createUserRecord,
+  welcomeNewClient,
 };

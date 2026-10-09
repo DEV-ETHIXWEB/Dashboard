@@ -57,11 +57,28 @@ function rowToCamel(row, collection) {
   if (collection === 'outbox' && typeof out.payload === 'string') {
     try { out.payload = JSON.parse(out.payload); } catch { out.payload = null; }
   }
+  // What a membership event carries beyond its type: the plan chosen, the
+  // trigger an upsell fired on, the reason a plan was cancelled. Stored as
+  // JSON text because the shape differs per event type and none of it is ever
+  // queried; handed back as an object so no caller has to remember to parse
+  // it. An unreadable blob reads as "no detail" rather than failing the row --
+  // this is an analytics trail, and losing one event's detail must never stop
+  // somebody reading their own billing page.
+  if (collection === 'membership_events' && typeof out.metadata === 'string') {
+    try { out.metadata = JSON.parse(out.metadata); } catch { out.metadata = null; }
+  }
   if (collection === 'sessions') {
     if ('expiresAt' in out) out.expiresAt = Number(out.expiresAt);
     if ('createdAt' in out) out.createdAt = Number(out.createdAt);
   }
   if ('amount' in out && out.amount !== null) out.amount = Number(out.amount);
+  // `pg` hands NUMERIC back as a string so no precision is lost in transit.
+  // Every one of these is money or a count that gets compared and arithmetic
+  // done on it -- `'51.30' > 29` is false and `'1' + 1` is '11', so a string
+  // here is a wrong answer rather than a type annoyance.
+  for (const key of ['amountUsd', 'creditUsd', 'period', 'count', 'extraCount', 'upsellDismissStreak']) {
+    if (key in out && out[key] !== null && out[key] !== undefined) out[key] = Number(out[key]);
+  }
   if ('sizeBytes' in out && out.sizeBytes !== null) out.sizeBytes = Number(out.sizeBytes);
   if ('passwordExpiresAt' in out && out.passwordExpiresAt !== null) out.passwordExpiresAt = Number(out.passwordExpiresAt);
   // `pg` hands BIGINT back as a string so no precision is lost on the way out.
@@ -69,10 +86,20 @@ function rowToCamel(row, collection) {
   // Date.now(), and a string compares false against every number there.
   for (const key of [
     'passwordChangedAt', 'passwordResetAt', 'avatarUpdatedAt',
-    'scheduledAt', 'lastAttemptAt', 'claimedAt', 'sentAt', 'cancelledAt', 'consumedAt',
+    'scheduledAt', 'lastAttemptAt', 'claimedAt', 'sentAt', 'consumedAt',
     'nextAttemptAt',
   ]) {
     if (key in out && out[key] !== null && out[key] !== undefined) out[key] = Number(out[key]);
+  }
+  // `cancelled_at` is the one name two kinds of column answer to, so it cannot
+  // be coerced by name alone. credential_deliveries stores an epoch
+  // millisecond BIGINT; subscriptions and queued_requests store an ISO string,
+  // and running Number() over one of those produces NaN -- which then reads as
+  // a truthy "yes, cancelled" at every call site that checks the field, while
+  // printing as "NaN" on a billing page.
+  if (collection === 'credential_deliveries'
+    && 'cancelledAt' in out && out.cancelledAt !== null && out.cancelledAt !== undefined) {
+    out.cancelledAt = Number(out.cancelledAt);
   }
   if (collection === 'password_tokens' && 'expiresAt' in out && out.expiresAt !== null) {
     out.expiresAt = Number(out.expiresAt);
@@ -97,6 +124,10 @@ function objToSnakeEntries(collection, obj) {
     if (k === 'meta' && value !== null && typeof value === 'object') value = JSON.stringify(value);
     if (k === 'allowedPages' && Array.isArray(value)) value = JSON.stringify(value);
     if (k === 'payload' && value !== null && typeof value === 'object') value = JSON.stringify(value);
+    // A membership event's detail blob. Firestore stores the object as it is;
+    // this column is TEXT, so it goes in as JSON and comes back out parsed by
+    // rowToCamel, and callers on either driver read the same object.
+    if (k === 'metadata' && value !== null && typeof value === 'object') value = JSON.stringify(value);
     entries.push([snakeKey, value]);
   }
   return entries;
@@ -114,6 +145,60 @@ const pgDb = {
   async filter(collection, predicate) {
     const rows = await pgDb.all(collection);
     return rows.filter(predicate);
+  },
+  /**
+   * The same question as `filter`, asked of the database instead of of the
+   * whole table in memory.
+   *
+   * `filter` reads every row in the collection and throws away the ones that
+   * do not match. That is fine for a table with a hundred rows in it and
+   * ruinous for one with fifty thousand: a client opening their tickets page
+   * was reading the entire ticket table of every client in the workspace to
+   * find their own two. On Firestore it is worse than slow, because every one
+   * of those documents is billed.
+   *
+   * So: equality criteria become a WHERE clause against indexed columns, and
+   * `limit` becomes a LIMIT rather than a `.slice()` after the fact.
+   *
+   * Column names come from the same gate the writes use, so a caller cannot
+   * reach a column that is not in the schema and cannot smuggle SQL through a
+   * key. Values are always parameters.
+   */
+  async where(collection, criteria = {}, { limit = null, orderBy = null, direction = 'desc' } = {}) {
+    const clauses = [];
+    const values = [];
+
+    for (const [key, value] of Object.entries(criteria)) {
+      if (!isWritableField(collection, key)) {
+        throw new Error(`db.where: ${collection}.${key} is not a column`);
+      }
+      const col = toSnake(key);
+      // `= NULL` matches nothing in SQL, which would silently return an empty
+      // list rather than the rows the caller meant.
+      if (value === null) { clauses.push(`${col} IS NULL`); continue; }
+      values.push(value);
+      clauses.push(`${col} = $${values.length}`);
+    }
+
+    let sql = `SELECT * FROM ${collection}`;
+    if (clauses.length) sql += ` WHERE ${clauses.join(' AND ')}`;
+    if (orderBy) {
+      if (!isWritableField(collection, orderBy)) {
+        throw new Error(`db.where: ${collection}.${orderBy} is not a column`);
+      }
+      // NULLS LAST so a row with no timestamp sorts as the oldest thing there
+      // is rather than as the newest, which is what Postgres does by default
+      // on a DESC sort and is never what a "newest first" list wants.
+      sql += ` ORDER BY ${toSnake(orderBy)} ${direction === 'asc' ? 'ASC' : 'DESC'}`
+        + `${direction === 'asc' ? ' NULLS FIRST' : ' NULLS LAST'}`;
+    }
+    if (limit != null) {
+      values.push(Number(limit));
+      sql += ` LIMIT $${values.length}`;
+    }
+
+    const res = await getPool().query(sql, values);
+    return res.rows.map((row) => rowToCamel(row, collection));
   },
   async recent(collection, limit = 100) {
     const res = await getPool().query(`SELECT * FROM ${collection} ORDER BY created_at DESC LIMIT $1`, [limit]);
@@ -299,6 +384,34 @@ const pgDb = {
    * Without it, "at least once" delivery becomes "sometimes twice", which for
    * an email to a client is worse than late.
    */
+  /**
+   * Move a row from one status to another, and say whether this caller is the
+   * one that moved it.
+   *
+   * The same compare-and-set the outbox claim below uses, for the same
+   * reason: `read the status, decide, then write` is not a decision at all
+   * when two requests run it at once. Both read `pending_payment`, both
+   * decide the payment needs confirming, and both go on to do the work.
+   *
+   * On a subscription that means two "payment confirmed" events, two audit
+   * entries and two sets of side effects for one payment -- which is the kind
+   * of thing that is invisible on a quiet afternoon and happens the first
+   * time two admins are told the money has landed, or somebody's connection
+   * retries the request.
+   *
+   * Returns the updated row to the single winner and null to everybody else.
+   */
+  async claimStatus(collection, id, fromStatus, patch = {}) {
+    const entries = objToSnakeEntries(collection, { ...patch });
+    const sets = entries.map(([k], i) => `${k} = $${i + 3}`);
+    const values = entries.map(([, v]) => v);
+    const res = await getPool().query(
+      `UPDATE ${collection} SET ${sets.join(', ')}
+        WHERE id = $1 AND status = $2 RETURNING *`,
+      [id, fromStatus, ...values],
+    );
+    return rowToCamel(res.rows[0], collection) || null;
+  },
   async claimOutboxMessage(id) {
     const now = Date.now();
     const res = await getPool().query(
@@ -377,10 +490,22 @@ async function initPostgresSchema() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_ticket_updates_ticket ON ticket_updates(ticket_id)`,
     `CREATE INDEX IF NOT EXISTS idx_ticket_collaborators_ticket ON ticket_collaborators(ticket_id)`,
+    // "My tickets" for a client and "my tickets" for an employee are the two
+    // reads behind the busiest page in the dashboard, and both were answered
+    // by reading every ticket in the workspace before db.where existed.
+    `CREATE INDEX IF NOT EXISTS idx_tickets_client ON tickets(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(assignee_id)`,
+    // The other half of an employee's ticket list: which tickets they were
+    // invited onto. Only the ticket_id side of this table was indexed, so the
+    // lookup by person was a scan.
+    `CREATE INDEX IF NOT EXISTS idx_ticket_collaborators_user ON ticket_collaborators(user_id)`,
     `CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY, user_id TEXT, message TEXT, type TEXT,
       read BOOLEAN DEFAULT FALSE, created_at TEXT
     )`,
+    // The single hottest read in the application: every page the dashboard
+    // renders asks for the signed-in person's notifications.
+    `CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)`,
     `CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, user_id TEXT, csrf_token TEXT,
       created_at BIGINT, expires_at BIGINT, pending BOOLEAN DEFAULT FALSE,
@@ -561,6 +686,93 @@ async function initPostgresSchema() {
       id TEXT PRIMARY KEY, body TEXT NOT NULL, created_by TEXT,
       recipient_count INTEGER NOT NULL DEFAULT 0, created_at TEXT
     )`,
+
+    // --- membership ---------------------------------------------------------
+    // One row per plan a client has been put on, kept as a history: an upgrade
+    // supersedes rather than overwrites, because the superseded row is what
+    // the credit on the new one was worked out from. See db/schemas.js.
+    `CREATE TABLE IF NOT EXISTS subscriptions (
+      id TEXT PRIMARY KEY, client_id TEXT NOT NULL, plan_key TEXT NOT NULL,
+      period INTEGER NOT NULL DEFAULT 1, amount_usd NUMERIC NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending_payment',
+      credit_usd NUMERIC, previous_subscription_id TEXT,
+      starts_at TEXT,
+      started_at TEXT, renews_at TEXT, cancelled_at TEXT,
+      marked_paid_by TEXT, marked_paid_at TEXT,
+      unlock_seen_at TEXT, confirmation_sent_at TEXT, renewal_reminder_sent_at TEXT,
+      cancel_reason TEXT, handover_requested_at TEXT,
+      created_by TEXT, created_at TEXT, updated_at TEXT
+    )`,
+    // "What is this client on right now" runs on nearly every page a client
+    // opens, so it must not be a scan of the whole history.
+    `CREATE INDEX IF NOT EXISTS idx_subscriptions_client ON subscriptions(client_id, status)`,
+    // A client cannot be on two plans at once, and this is the only place that
+    // can actually promise it. Firestore has no conditional index, so
+    // utils/subscriptions.js supersedes the old row inside the same operation
+    // for both drivers -- this is the backstop that catches a bug in that code
+    // on the deployment that runs Postgres, not a substitute for it.
+    //
+    // Skipped under pg-mem, which answers an ordinary `WHERE client_id = $1`
+    // out of this partial index and so returns only the active rows -- see
+    // scripts/dev-with-pgmem.js. Leaving it in place there would make every
+    // subscription read in the test suite silently lose the pending,
+    // scheduled and cancelled rows. The promise itself is still covered:
+    // utils/subscriptions.js is what keeps it on both drivers, and
+    // scripts/test-membership.js exercises that path.
+    ...(process.env.PG_MEM ? [] : [`CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_one_active
+       ON subscriptions(client_id) WHERE status = 'active'`]),
+    // The renewal reminder sweep: which multi-month plans come up soon.
+    `CREATE INDEX IF NOT EXISTS idx_subscriptions_renews ON subscriptions(renews_at)`,
+    // A deployment that ran the first cut of this table has no starts_at, and
+    // a scheduled downgrade cannot be recorded without one.
+    `ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS starts_at TEXT`,
+    // The sweep that promotes a scheduled downgrade once the period it is
+    // waiting on has run out.
+    `CREATE INDEX IF NOT EXISTS idx_subscriptions_starts ON subscriptions(starts_at)`,
+    // The update allowance used in the current billing month. The id is
+    // derived from client_id and period_start, so this primary key is what
+    // stops two simultaneous requests creating two counters.
+    `CREATE TABLE IF NOT EXISTS update_request_usage (
+      id TEXT PRIMARY KEY, client_id TEXT NOT NULL,
+      period_start TEXT NOT NULL, period_end TEXT,
+      count INTEGER NOT NULL DEFAULT 0, extra_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_update_usage_client ON update_request_usage(client_id)`,
+    // Requests a client saved until their allowance resets. Deliberately not
+    // tickets: a ticket starts an SLA clock, and this has not been agreed to
+    // as work yet. See db/schemas.js.
+    `CREATE TABLE IF NOT EXISTS queued_requests (
+      id TEXT PRIMARY KEY, client_id TEXT NOT NULL,
+      subject TEXT NOT NULL, category TEXT, description TEXT, priority TEXT,
+      release_at TEXT, released_at TEXT, ticket_id TEXT,
+      cancelled_at TEXT, created_at TEXT
+    )`,
+    // The release sweep, and the client's own "what am I holding" list.
+    `CREATE INDEX IF NOT EXISTS idx_queued_requests_due ON queued_requests(release_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_queued_requests_client ON queued_requests(client_id)`,
+    // The record of work done on a site: backups, uptime, security, SEO,
+    // performance, plugin updates and health checks, all the same shape. See
+    // db/schemas.js for why this is one table and not seven.
+    `CREATE TABLE IF NOT EXISTS site_records (
+      id TEXT PRIMARY KEY, client_id TEXT NOT NULL, kind TEXT NOT NULL,
+      title TEXT NOT NULL, detail TEXT, status TEXT,
+      occurred_at TEXT, meta TEXT, created_by TEXT, created_at TEXT
+    )`,
+    // The only query these are ever read by: one client, one panel, newest
+    // first.
+    `CREATE INDEX IF NOT EXISTS idx_site_records_panel
+       ON site_records(client_id, kind, occurred_at DESC)`,
+    // The funnel. Written on every modal shown, plan chosen, payment
+    // confirmed, upsell shown, dismissed, snoozed, clicked and upgraded, so
+    // the conversion and dismissal rates are a query rather than a guess.
+    `CREATE TABLE IF NOT EXISTS membership_events (
+      id TEXT PRIMARY KEY, client_id TEXT, type TEXT NOT NULL,
+      metadata TEXT, actor_id TEXT, created_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_membership_events_client
+       ON membership_events(client_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_membership_events_type ON membership_events(type)`,
   ];
   const alterations = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT`,
@@ -629,6 +841,19 @@ async function initPostgresSchema() {
     // Traces one broadcast send back to the batch it was part of. Null for
     // every row that predates broadcast, and for every non-broadcast send.
     `ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS broadcast_id TEXT`,
+    // Membership, on accounts that existed before it. Every one of these is
+    // nullable and stays null, which is exactly the "has not happened yet"
+    // these represent: a client who predates the feature has not been sent the
+    // welcome email and has not seen the plans modal, and the first login
+    // after this deploys is what sends and shows them. Nothing is backfilled,
+    // because a backfilled timestamp would mean nobody ever gets either.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS welcome_email_sent_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS first_login_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS plans_modal_seen_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS upsell_snoozed_until TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS upsell_dismiss_streak INTEGER DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS upsell_last_shown_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS upsell_last_message TEXT`,
     // Existing accounts have no recorded password age, and an unknown age must
     // not read as "older than a month" -- that would demand a reset from every
     // person in the workspace on the morning this deploys. Their clock starts

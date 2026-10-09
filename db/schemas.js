@@ -38,6 +38,19 @@ const SCHEMAS = {
     // A newly appointed admin starts untrusted: their sensitive changes are
     // held for a second signature until a super admin vouches for them.
     'admin_trusted', 'admin_trusted_at', 'admin_trusted_by',
+    // Membership. Every one of these exists so something happens once: the
+    // welcome email is sent one time, the plans modal opens one time, and an
+    // upgrade prompt respects the ceiling rather than firing on every load.
+    //
+    // `first_login_at` is what tells an account that predates the membership
+    // feature from a brand new one, and so which of the two welcome triggers
+    // applies. `upsell_dismiss_streak` counts consecutive "Not now" answers
+    // and resets the moment somebody clicks through or upgrades -- three in a
+    // row drops the ceiling from 7 days to 30. `upsell_last_message` is the
+    // weekly line they last read, so the next one is never the same one twice.
+    'welcome_email_sent_at', 'first_login_at', 'plans_modal_seen_at',
+    'upsell_snoozed_until', 'upsell_dismiss_streak',
+    'upsell_last_shown_at', 'upsell_last_message',
   ],
   projects: [
     'id', 'name', 'type', 'client_id', 'assigned_pm_id', 'status', 'description', 'created_at',
@@ -255,6 +268,107 @@ const SCHEMAS = {
   // the id is the only thing that tells two deliveries of the same event
   // apart from two different events.
   slack_events: ['id', 'processed_at'],
+
+  // --- membership -----------------------------------------------------------
+  //
+  // One row per plan a client has been put on. Deliberately a history rather
+  // than a single row per client: an upgrade is a new subscription that
+  // supersedes the old one, and the old row is what the credit on the new one
+  // was calculated from. Exactly one row per client may be 'active' -- the
+  // Postgres partial index in db/setup.js enforces it there, and
+  // utils/subscriptions.js is the only thing that writes the status so both
+  // drivers hold the same line.
+  //
+  // `amount_usd` is the figure that was actually quoted, not the plan's list
+  // price. They differ for an upgrade (list price minus the credit) and may
+  // differ for a client on a heavier Cloudways server. Nothing reads a price
+  // off this row to display a plan; lib/plans.js owns that.
+  //
+  // The five `*_at` stamps all exist to make something happen once and only
+  // once: the unlock modal, the confirmation email, the renewal reminder, the
+  // handover. A send that checks a timestamp first cannot double-send.
+  subscriptions: [
+    'id', 'client_id', 'plan_key', 'period', 'amount_usd', 'status',
+    // What this upgrade was credited for, and which subscription it replaced.
+    // Both null on a first purchase. See UPGRADE_BILLING in utils/subscriptions.js.
+    'credit_usd', 'previous_subscription_id',
+    // `starts_at` is only set on a *scheduled* row -- a downgrade, which is
+    // not bought today. It is the date the cheaper plan may begin, which is
+    // the day the period they already paid for runs out. `started_at` is when
+    // a plan actually began and is written by the activation.
+    'starts_at',
+    'started_at', 'renews_at', 'cancelled_at',
+    // Who confirmed the money arrived. Under PAYMENT_MODE=manual this is an
+    // admin; under stripe it is the webhook, recorded as 'stripe'.
+    'marked_paid_by', 'marked_paid_at',
+    // Said once each: the "you unlocked" modal, the confirmation email, and
+    // the reminder that goes out 7 days before a multi-month period renews.
+    'unlock_seen_at', 'confirmation_sent_at', 'renewal_reminder_sent_at',
+    // Cancellation. `handover_requested_at` is the client asking for their
+    // website files -- we prepare the files, we do not migrate the site, and
+    // the request has to be a record rather than a conversation.
+    'cancel_reason', 'handover_requested_at',
+    'created_by', 'created_at', 'updated_at',
+  ],
+  // How many update requests a client has used in the current billing month.
+  //
+  // The id is derived from client_id and period_start rather than random, so
+  // two requests submitted in the same second cannot create two counters: the
+  // second insert is refused by the primary key on either driver. Counting is
+  // done with db.incrementIfBelow, which is a single atomic statement on
+  // Postgres and a transaction on Firestore -- a read-then-write would let two
+  // requests both see "1 of 2 used" and both go through.
+  //
+  // `count` is the included allowance consumed; `extra_count` is the requests
+  // past it that we quote and charge for separately. They are two different
+  // numbers to a client and must not be added together.
+  update_request_usage: [
+    'id', 'client_id', 'period_start', 'period_end', 'count', 'extra_count', 'updated_at',
+  ],
+  // A request a Managed client chose to hold until their allowance resets,
+  // rather than pay for as an extra or upgrade for.
+  //
+  // Not a ticket. A ticket is work the team owes an answer on, with an SLA
+  // clock running; this is text a client saved for later, and putting it in
+  // the ticket queue would start a clock nobody agreed to and bury the real
+  // queue. It becomes a ticket when `release_at` passes, and `ticket_id`
+  // records which one so a release cannot happen twice.
+  queued_requests: [
+    'id', 'client_id', 'subject', 'category', 'description', 'priority',
+    'release_at', 'released_at', 'ticket_id', 'cancelled_at', 'created_at',
+  ],
+  // One entry in the record of work done on a client's site.
+  //
+  // The Unlimited plan promises seven things a client is told they can go and
+  // look at -- backups, uptime, security, SEO, performance, plugin updates and
+  // the monthly health check -- and a perk nobody can see is a perk nobody
+  // renews for. This is the one table all seven read from, because they are
+  // the same shape: something happened, on a date, with a line about what it
+  // was.
+  //
+  // Deliberately one table rather than seven. None of them is queried on
+  // anything but client and kind, none has fields the others do not, and seven
+  // near-identical tables would be seven places to forget an index.
+  //
+  // `kind` is one of the entitlement keys in lib/plans.js, which is what ties
+  // an entry to the panel it appears in and to the plan that unlocks it.
+  // `detail` is free text a human wrote. `meta` is JSON for the handful of
+  // numbers a panel shows (a backup's size, an uptime percentage) and is never
+  // queried.
+  site_records: [
+    'id', 'client_id', 'kind', 'title', 'detail', 'status',
+    'occurred_at', 'meta', 'created_by', 'created_at',
+  ],
+  // The funnel, as it actually happened: modal shown, plan chosen, payment
+  // confirmed, upsell shown, dismissed, snoozed, clicked, upgraded, cancelled.
+  //
+  // This is the only way to answer "what fraction of clients shown the plans
+  // modal picked a plan" or "does the upsell convert or just annoy people", so
+  // it is written on every one of those moments rather than inferred later.
+  // `metadata` is JSON and never holds anything secret.
+  membership_events: [
+    'id', 'client_id', 'type', 'metadata', 'actor_id', 'created_at',
+  ],
 };
 
 /**

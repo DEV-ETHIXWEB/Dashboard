@@ -236,6 +236,14 @@ app.use('/api', (req, res, next) => {
   // Throttled to once an hour and a no-op after the tenth of the month, so on
   // the other twenty days of the year this costs one comparison.
   void require('./utils/serviceDigest').maybeSweep();
+  // And requests a client held until their allowance reset: one that lands
+  // and nobody picks up is worse than having refused it. Throttled to once a
+  // minute inside maybeSweep, so on ordinary traffic this is one comparison.
+  void require('./utils/updateRequests').maybeSweep();
+  // And the reminder that a multi-month plan renews in a week. Throttled to
+  // once an hour inside the sweep: a renewal seven days out does not get
+  // closer any faster than that.
+  void require('./utils/subscriptions').maybeSweepRenewals();
   next();
 });
 
@@ -252,6 +260,15 @@ app.use('/api/domains', require('./routes/domains'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/budget', require('./routes/budget'));
 app.use('/api/billing', require('./routes/billing'));
+// The plan catalogue, and what one client's membership currently unlocks. Kept
+// separate from /api/billing because that router is Stripe's mirror and is
+// gated on the Billing page being switched on, and neither is true of these.
+app.use('/api/plans', require('./routes/plans'));
+app.use('/api/membership', require('./routes/membership'));
+// Backups, uptime, security, SEO, performance, plugin updates and health
+// checks: one record shape behind seven panels, each gated on its own
+// entitlement. See routes/siteRecords.js.
+app.use('/api/site-records', require('./routes/siteRecords'));
 app.use('/api/integrations', require('./routes/integrations'));
 app.use('/api/mail', require('./routes/mail'));
 app.use('/api/client', require('./routes/client'));
