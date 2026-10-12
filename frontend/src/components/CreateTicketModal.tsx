@@ -130,6 +130,14 @@ export function CreateTicketModal({
                 ? "Sent. We will quote this one before any work starts."
                 : "Ticket created - the team has been alerted",
           );
+          /* The server caps how urgent a client may mark their own request,
+             because a guaranteed response time is what Unlimited is sold on.
+             Capping it silently would be a form that ignores what somebody
+             chose, so when it happens they are told, once, in the same breath
+             as the confirmation. */
+          if (result.priorityCapped) {
+            toast.info(result.priorityCapped.message, { duration: 8000 });
+          }
           setOpen?.(false);
           setBlock(null);
           setSubject("");

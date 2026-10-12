@@ -82,6 +82,12 @@ export default function Dashboard() {
     (d) => daysLeft(d.expiresAt) < RENEWAL_WARNING_DAYS,
   );
   const expiredDomains = (domains ?? []).filter((d) => daysLeft(d.expiresAt) <= 0);
+  // Still in the future, but not for long. The two notices below say different
+  // things because they are different situations.
+  const soonDomains = (domains ?? []).filter((d) => {
+    const days = daysLeft(d.expiresAt);
+    return days > 0 && days < RENEWAL_WARNING_DAYS;
+  });
 
   if (isLoading) return <DashboardSkeleton />;
 
@@ -172,11 +178,17 @@ export default function Dashboard() {
         </div>
       )}
 
-      {expiringDomains.length > 0 && (
+      {/* A domain that has already expired is not "coming up soon".
+          The tile below counts expired addresses correctly; this notice still
+          filed them under a 45-day countdown, so the two halves of the same
+          screen disagreed and the louder one was the reassuring one. Expired
+          addresses get their own sentence, and the countdown is kept for the
+          ones a countdown actually describes. */}
+      {expiredDomains.length > 0 && (
         <div className={bento(4)}>
           <AttentionNotice
-            label="Coming up soon"
-            title={`${expiringDomains.length} ${expiringDomains.length === 1 ? "website address needs" : "website addresses need"} renewing`}
+            label="Needs attention"
+            title={`${expiredDomains.length} ${expiredDomains.length === 1 ? "website address has" : "website addresses have"} expired`}
             action={
               <Link to="/portal/domains" className={NOTICE_ACTION}>
                 Look at these
@@ -184,7 +196,25 @@ export default function Dashboard() {
               </Link>
             }
           >
-            {expiringDomains.map((d) => d.domainName).join(", ")}, due within the next{" "}
+            {expiredDomains.map((d) => d.domainName).join(", ")}. An expired address can stop
+            your site resolving, so this is worth sorting today.
+          </AttentionNotice>
+        </div>
+      )}
+
+      {soonDomains.length > 0 && (
+        <div className={bento(4)}>
+          <AttentionNotice
+            label="Coming up soon"
+            title={`${soonDomains.length} ${soonDomains.length === 1 ? "website address needs" : "website addresses need"} renewing`}
+            action={
+              <Link to="/portal/domains" className={NOTICE_ACTION}>
+                Look at these
+                <ArrowRight aria-hidden className="size-4" />
+              </Link>
+            }
+          >
+            {soonDomains.map((d) => d.domainName).join(", ")}, due within the next{" "}
             {RENEWAL_WARNING_DAYS} days.
           </AttentionNotice>
         </div>

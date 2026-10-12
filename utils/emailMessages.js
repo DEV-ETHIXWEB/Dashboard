@@ -2289,6 +2289,53 @@ const TEMPLATES = {
     description: 'Sent once when a client account is created, or on the first sign-in of a client who predates plans.',
     render: () => welcomeWithPlans({ firstName: 'David', existingFreeClient: true }),
   },
+  confirm_email_change: {
+    audience: 'team',
+    group: 'Accounts & access',
+    label: 'Confirm a new email address',
+    description: 'Sent to the address somebody is moving an account to. The link in it is '
+      + 'what actually moves the account, so nothing changes until it is opened.',
+    render: () => confirmEmailChange({
+      user: { id: 'u-1', name: 'David Shaw', email: 'david@brightpath.example' },
+      nextEmail: 'david.shaw@brightpath.example',
+      confirmUrl: `${baseUrl() || 'https://dashboard.example.com'}/confirm-email#token=example-token`,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      ipAddress: '203.0.113.42',
+    }),
+  },
+  email_change_requested: {
+    audience: 'team',
+    group: 'Accounts & access',
+    label: 'Email change requested',
+    description: 'Sent to the address currently on the account. The half that reaches the real '
+      + 'owner when the session asking was not theirs.',
+    render: () => emailChangeRequested({
+      user: { id: 'u-1', name: 'David Shaw', email: 'david@brightpath.example' },
+      nextEmail: 'david.shaw@brightpath.example',
+      ipAddress: '203.0.113.42',
+    }),
+  },
+  email_changed: {
+    audience: 'team',
+    group: 'Accounts & access',
+    label: 'Email address changed',
+    description: 'The last message that can reach the address somebody has just left.',
+    render: () => emailChanged({
+      user: { id: 'u-1', name: 'David Shaw', email: 'david.shaw@brightpath.example' },
+      previousEmail: 'david@brightpath.example',
+    }),
+  },
+  two_factor_disabled: {
+    audience: 'team',
+    group: 'Accounts & access',
+    label: 'Two-step verification turned off',
+    description: 'Sent when the second factor is switched off, so an owner who did not do it '
+      + 'finds out.',
+    render: () => twoFactorDisabled({
+      user: { id: 'u-1', name: 'David Shaw', email: 'david@brightpath.example' },
+      ipAddress: '203.0.113.42',
+    }),
+  },
   payment_details: {
     audience: 'client',
     group: 'Billing',

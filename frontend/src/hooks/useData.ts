@@ -197,7 +197,25 @@ export function useCreateTicket() {
       /** Hold it until the allowance resets instead. */
       queueForNextPeriod?: boolean;
     }) =>
-      api<{ ticket?: Ticket; chargedAsExtra?: boolean; queued?: { id: string }; message?: string }>(
+      api<{
+        ticket?: Ticket;
+        chargedAsExtra?: boolean;
+        queued?: { id: string };
+        message?: string;
+        /**
+         * Set when the server lowered the priority the client asked for.
+         * A guaranteed response time is what Unlimited is sold on, so a
+         * client's own ceiling is their plan's -- and an outage is never
+         * capped on any plan. Carried back so the form can say so rather than
+         * silently ignoring what somebody chose.
+         */
+        priorityCapped?: {
+          requested: string;
+          applied: string;
+          message: string;
+          recommended: string;
+        };
+      }>(
         "POST",
         "/tickets",
         body,
