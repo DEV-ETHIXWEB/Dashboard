@@ -57,11 +57,32 @@ function rowToCamel(row, collection) {
   if (collection === 'outbox' && typeof out.payload === 'string') {
     try { out.payload = JSON.parse(out.payload); } catch { out.payload = null; }
   }
+  // What a membership event carries beyond its type: the plan chosen, the
+  // trigger an upsell fired on, the reason a plan was cancelled. Stored as
+  // JSON text because the shape differs per event type and none of it is ever
+  // queried; handed back as an object so no caller has to remember to parse
+  // it. An unreadable blob reads as "no detail" rather than failing the row --
+  // this is an analytics trail, and losing one event's detail must never stop
+  // somebody reading their own billing page.
+  if (collection === 'membership_events' && typeof out.metadata === 'string') {
+    try { out.metadata = JSON.parse(out.metadata); } catch { out.metadata = null; }
+  }
   if (collection === 'sessions') {
     if ('expiresAt' in out) out.expiresAt = Number(out.expiresAt);
     if ('createdAt' in out) out.createdAt = Number(out.createdAt);
   }
   if ('amount' in out && out.amount !== null) out.amount = Number(out.amount);
+  // `pg` hands NUMERIC back as a string so no precision is lost in transit.
+  // Every one of these is money or a count that gets compared and arithmetic
+  // done on it -- `'51.30' > 29` is false and `'1' + 1` is '11', so a string
+  // here is a wrong answer rather than a type annoyance.
+  for (const key of [
+    'amountUsd', 'creditUsd', 'creditAppliedUsd', 'creditCarriedUsd', 'bonusDays',
+    'period', 'count', 'extraCount', 'nonUpdateCount', 'deferredCount',
+    'upsellDismissStreak',
+  ]) {
+    if (key in out && out[key] !== null && out[key] !== undefined) out[key] = Number(out[key]);
+  }
   if ('sizeBytes' in out && out.sizeBytes !== null) out.sizeBytes = Number(out.sizeBytes);
   if ('passwordExpiresAt' in out && out.passwordExpiresAt !== null) out.passwordExpiresAt = Number(out.passwordExpiresAt);
   // `pg` hands BIGINT back as a string so no precision is lost on the way out.
@@ -69,10 +90,20 @@ function rowToCamel(row, collection) {
   // Date.now(), and a string compares false against every number there.
   for (const key of [
     'passwordChangedAt', 'passwordResetAt', 'avatarUpdatedAt',
-    'scheduledAt', 'lastAttemptAt', 'claimedAt', 'sentAt', 'cancelledAt', 'consumedAt',
-    'nextAttemptAt',
+    'scheduledAt', 'lastAttemptAt', 'claimedAt', 'sentAt', 'consumedAt',
+    'nextAttemptAt', 'lastEventAt',
   ]) {
     if (key in out && out[key] !== null && out[key] !== undefined) out[key] = Number(out[key]);
+  }
+  // `cancelled_at` is the one name two kinds of column answer to, so it cannot
+  // be coerced by name alone. credential_deliveries stores an epoch
+  // millisecond BIGINT; subscriptions and queued_requests store an ISO string,
+  // and running Number() over one of those produces NaN -- which then reads as
+  // a truthy "yes, cancelled" at every call site that checks the field, while
+  // printing as "NaN" on a billing page.
+  if (collection === 'credential_deliveries'
+    && 'cancelledAt' in out && out.cancelledAt !== null && out.cancelledAt !== undefined) {
+    out.cancelledAt = Number(out.cancelledAt);
   }
   if (collection === 'password_tokens' && 'expiresAt' in out && out.expiresAt !== null) {
     out.expiresAt = Number(out.expiresAt);
@@ -97,6 +128,10 @@ function objToSnakeEntries(collection, obj) {
     if (k === 'meta' && value !== null && typeof value === 'object') value = JSON.stringify(value);
     if (k === 'allowedPages' && Array.isArray(value)) value = JSON.stringify(value);
     if (k === 'payload' && value !== null && typeof value === 'object') value = JSON.stringify(value);
+    // A membership event's detail blob. Firestore stores the object as it is;
+    // this column is TEXT, so it goes in as JSON and comes back out parsed by
+    // rowToCamel, and callers on either driver read the same object.
+    if (k === 'metadata' && value !== null && typeof value === 'object') value = JSON.stringify(value);
     entries.push([snakeKey, value]);
   }
   return entries;
@@ -114,6 +149,85 @@ const pgDb = {
   async filter(collection, predicate) {
     const rows = await pgDb.all(collection);
     return rows.filter(predicate);
+  },
+  /**
+   * The same question as `filter`, asked of the database instead of of the
+   * whole table in memory.
+   *
+   * `filter` reads every row in the collection and throws away the ones that
+   * do not match. That is fine for a table with a hundred rows in it and
+   * ruinous for one with fifty thousand: a client opening their tickets page
+   * was reading the entire ticket table of every client in the workspace to
+   * find their own two. On Firestore it is worse than slow, because every one
+   * of those documents is billed.
+   *
+   * So: equality criteria become a WHERE clause against indexed columns, and
+   * `limit` becomes a LIMIT rather than a `.slice()` after the fact.
+   *
+   * Column names come from the same gate the writes use, so a caller cannot
+   * reach a column that is not in the schema and cannot smuggle SQL through a
+   * key. Values are always parameters.
+   */
+  async where(collection, criteria = {}, {
+    limit = null, orderBy = null, direction = 'desc', select = null,
+  } = {}) {
+    const clauses = [];
+    const values = [];
+
+    for (const [key, value] of Object.entries(criteria)) {
+      if (!isWritableField(collection, key)) {
+        throw new Error(`db.where: ${collection}.${key} is not a column`);
+      }
+      const col = toSnake(key);
+      // `= NULL` matches nothing in SQL, which would silently return an empty
+      // list rather than the rows the caller meant.
+      if (value === null) { clauses.push(`${col} IS NULL`); continue; }
+      values.push(value);
+      clauses.push(`${col} = $${values.length}`);
+    }
+
+    /**
+     * The columns to read, when the caller only wants some of them.
+     *
+     * `SELECT *` is the right default for a row somebody is about to use, and
+     * exactly wrong for a listing: the documents list read every report's
+     * base64 contents -- up to 4MB each, all of them, out of the database and
+     * through this process -- in order to print a column of file names. The
+     * caller names what it needs and the bytes stay where they are.
+     *
+     * The id always comes back whether it was asked for or not, because every
+     * caller needs something to key a row on.
+     */
+    let columns = '*';
+    if (Array.isArray(select) && select.length) {
+      const wanted = ['id', ...select.filter((f) => f !== 'id')];
+      for (const field of wanted) {
+        if (!isWritableField(collection, field) && field !== 'id') {
+          throw new Error(`db.where: ${collection}.${field} is not a column`);
+        }
+      }
+      columns = wanted.map((f) => toSnake(f)).join(', ');
+    }
+
+    let sql = `SELECT ${columns} FROM ${collection}`;
+    if (clauses.length) sql += ` WHERE ${clauses.join(' AND ')}`;
+    if (orderBy) {
+      if (!isWritableField(collection, orderBy)) {
+        throw new Error(`db.where: ${collection}.${orderBy} is not a column`);
+      }
+      // NULLS LAST so a row with no timestamp sorts as the oldest thing there
+      // is rather than as the newest, which is what Postgres does by default
+      // on a DESC sort and is never what a "newest first" list wants.
+      sql += ` ORDER BY ${toSnake(orderBy)} ${direction === 'asc' ? 'ASC' : 'DESC'}`
+        + `${direction === 'asc' ? ' NULLS FIRST' : ' NULLS LAST'}`;
+    }
+    if (limit != null) {
+      values.push(Number(limit));
+      sql += ` LIMIT $${values.length}`;
+    }
+
+    const res = await getPool().query(sql, values);
+    return res.rows.map((row) => rowToCamel(row, collection));
   },
   async recent(collection, limit = 100) {
     const res = await getPool().query(`SELECT * FROM ${collection} ORDER BY created_at DESC LIMIT $1`, [limit]);
@@ -299,6 +413,78 @@ const pgDb = {
    * Without it, "at least once" delivery becomes "sometimes twice", which for
    * an email to a client is worse than late.
    */
+  /**
+   * Move a row from one status to another, and say whether this caller is the
+   * one that moved it.
+   *
+   * The same compare-and-set the outbox claim below uses, for the same
+   * reason: `read the status, decide, then write` is not a decision at all
+   * when two requests run it at once. Both read `pending_payment`, both
+   * decide the payment needs confirming, and both go on to do the work.
+   *
+   * On a subscription that means two "payment confirmed" events, two audit
+   * entries and two sets of side effects for one payment -- which is the kind
+   * of thing that is invisible on a quiet afternoon and happens the first
+   * time two admins are told the money has landed, or somebody's connection
+   * retries the request.
+   *
+   * Returns the updated row to the single winner and null to everybody else.
+   */
+  async claimStatus(collection, id, fromStatus, patch = {}) {
+    const entries = objToSnakeEntries(collection, { ...patch });
+    const sets = entries.map(([k], i) => `${k} = $${i + 3}`);
+    const values = entries.map(([, v]) => v);
+    const res = await getPool().query(
+      `UPDATE ${collection} SET ${sets.join(', ')}
+        WHERE id = $1 AND status = $2 RETURNING *`,
+      [id, fromStatus, ...values],
+    );
+    return rowToCamel(res.rows[0], collection) || null;
+  },
+  /**
+   * The same compare-and-set for a row with no status column: move it only if
+   * the named field is still empty, and say whether this caller is the one
+   * that moved it.
+   *
+   * `claimStatus` cannot help a held update request, because what marks one as
+   * dealt with is a timestamp rather than a status. Releasing one was a read
+   * followed by a write, so two instances running the sweep at the same moment
+   * both saw `released_at` empty and both turned the same held request into a
+   * ticket -- one request, two tickets, and two of the client's updates spent.
+   *
+   * Returns the updated row to the single winner and null to everybody else.
+   */
+  async claimField(collection, id, field, patch = {}) {
+    const column = toSnake(field);
+    const entries = objToSnakeEntries(collection, { ...patch });
+    const sets = entries.map(([k], i) => `${k} = $${i + 2}`);
+    const values = entries.map(([, v]) => v);
+    const res = await getPool().query(
+      `UPDATE ${collection} SET ${sets.join(', ')}
+        WHERE id = $1 AND ${column} IS NULL RETURNING *`,
+      [id, ...values],
+    );
+    return rowToCamel(res.rows[0], collection) || null;
+  },
+  /**
+   * Mark a sign-in code used, and say whether this caller is the one that used
+   * it.
+   *
+   * `UPDATE ... WHERE consumed IS NOT TRUE` rather than a plain write, for the
+   * same reason every other claim in this file exists: reading a row, deciding
+   * it is unused and then writing is not a decision when two requests run it
+   * at once. Two correct submissions of the same code arriving together both
+   * saw an unconsumed row and both opened a session -- which is one code
+   * buying two sessions, and the second one is the interesting case.
+   */
+  async claimOtp(id) {
+    const res = await getPool().query(
+      `UPDATE otp_codes SET consumed = TRUE
+        WHERE id = $1 AND consumed IS NOT TRUE RETURNING *`,
+      [id],
+    );
+    return rowToCamel(res.rows[0], 'otp_codes') || null;
+  },
   async claimOutboxMessage(id) {
     const now = Date.now();
     const res = await getPool().query(
@@ -377,10 +563,22 @@ async function initPostgresSchema() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_ticket_updates_ticket ON ticket_updates(ticket_id)`,
     `CREATE INDEX IF NOT EXISTS idx_ticket_collaborators_ticket ON ticket_collaborators(ticket_id)`,
+    // "My tickets" for a client and "my tickets" for an employee are the two
+    // reads behind the busiest page in the dashboard, and both were answered
+    // by reading every ticket in the workspace before db.where existed.
+    `CREATE INDEX IF NOT EXISTS idx_tickets_client ON tickets(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(assignee_id)`,
+    // The other half of an employee's ticket list: which tickets they were
+    // invited onto. Only the ticket_id side of this table was indexed, so the
+    // lookup by person was a scan.
+    `CREATE INDEX IF NOT EXISTS idx_ticket_collaborators_user ON ticket_collaborators(user_id)`,
     `CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY, user_id TEXT, message TEXT, type TEXT,
       read BOOLEAN DEFAULT FALSE, created_at TEXT
     )`,
+    // The single hottest read in the application: every page the dashboard
+    // renders asks for the signed-in person's notifications.
+    `CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)`,
     `CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, user_id TEXT, csrf_token TEXT,
       created_at BIGINT, expires_at BIGINT, pending BOOLEAN DEFAULT FALSE,
@@ -561,9 +759,214 @@ async function initPostgresSchema() {
       id TEXT PRIMARY KEY, body TEXT NOT NULL, created_by TEXT,
       recipient_count INTEGER NOT NULL DEFAULT 0, created_at TEXT
     )`,
+
+    // --- membership ---------------------------------------------------------
+    // One row per plan a client has been put on, kept as a history: an upgrade
+    // supersedes rather than overwrites, because the superseded row is what
+    // the credit on the new one was worked out from. See db/schemas.js.
+    `CREATE TABLE IF NOT EXISTS subscriptions (
+      id TEXT PRIMARY KEY, client_id TEXT NOT NULL, plan_key TEXT NOT NULL,
+      period INTEGER NOT NULL DEFAULT 1, amount_usd NUMERIC NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending_payment',
+      credit_usd NUMERIC, previous_subscription_id TEXT,
+      credit_applied_usd NUMERIC, credit_carried_usd NUMERIC, bonus_days INTEGER,
+      starts_at TEXT,
+      started_at TEXT, renews_at TEXT, cancelled_at TEXT,
+      marked_paid_by TEXT, marked_paid_at TEXT,
+      unlock_seen_at TEXT, confirmation_sent_at TEXT, renewal_reminder_sent_at TEXT,
+      payment_details_sent_at TEXT, past_due_since TEXT, lapsed_at TEXT,
+      cancel_reason TEXT, handover_requested_at TEXT,
+      created_by TEXT, created_at TEXT, updated_at TEXT
+    )`,
+    // "What is this client on right now" runs on nearly every page a client
+    // opens, so it must not be a scan of the whole history.
+    `CREATE INDEX IF NOT EXISTS idx_subscriptions_client ON subscriptions(client_id, status)`,
+    // A client cannot be on two plans at once, and this is the only place that
+    // can actually promise it. Firestore has no conditional index, so
+    // utils/subscriptions.js supersedes the old row inside the same operation
+    // for both drivers -- this is the backstop that catches a bug in that code
+    // on the deployment that runs Postgres, not a substitute for it.
+    //
+    // Skipped under pg-mem, which answers an ordinary `WHERE client_id = $1`
+    // out of this partial index and so returns only the active rows -- see
+    // scripts/dev-with-pgmem.js. Leaving it in place there would make every
+    // subscription read in the test suite silently lose the pending,
+    // scheduled and cancelled rows. The promise itself is still covered:
+    // utils/subscriptions.js is what keeps it on both drivers, and
+    // scripts/test-membership.js exercises that path.
+    ...(process.env.PG_MEM ? [] : [`CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_one_active
+       ON subscriptions(client_id) WHERE status = 'active'`]),
+    // The renewal reminder sweep: which multi-month plans come up soon.
+    `CREATE INDEX IF NOT EXISTS idx_subscriptions_renews ON subscriptions(renews_at)`,
+    // A deployment that ran the first cut of this table has no starts_at, and
+    // a scheduled downgrade cannot be recorded without one.
+    `ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS starts_at TEXT`,
+    // The sweep that promotes a scheduled downgrade once the period it is
+    // waiting on has run out.
+    `CREATE INDEX IF NOT EXISTS idx_subscriptions_starts ON subscriptions(starts_at)`,
+    // A deployment that ran the first cut of this table has none of the
+    // renewal columns. Without them a paid period never ends: nothing records
+    // that a plan went past due, nothing records when it lapsed, and a credit
+    // bigger than the price it was spent on has nowhere to be carried.
+    `ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS credit_applied_usd NUMERIC`,
+    `ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS credit_carried_usd NUMERIC`,
+    `ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS bonus_days INTEGER`,
+    `ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS payment_details_sent_at TEXT`,
+    `ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS past_due_since TEXT`,
+    `ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS lapsed_at TEXT`,
+    // The update allowance used in the current billing month. The id is
+    // derived from client_id and period_start, so this primary key is what
+    // stops two simultaneous requests creating two counters.
+    `CREATE TABLE IF NOT EXISTS update_request_usage (
+      id TEXT PRIMARY KEY, client_id TEXT NOT NULL,
+      period_start TEXT NOT NULL, period_end TEXT,
+      count INTEGER NOT NULL DEFAULT 0, extra_count INTEGER NOT NULL DEFAULT 0,
+      non_update_count INTEGER NOT NULL DEFAULT 0, non_update_alerted_at TEXT,
+      updated_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_update_usage_client ON update_request_usage(client_id)`,
+    // The uncounted requests -- outages, billing queries, questions. Counted
+    // because they are the categories a client declares for themselves, and
+    // an improbable number of them in one month is something the team should
+    // be told about rather than something nobody can see.
+    `ALTER TABLE update_request_usage ADD COLUMN IF NOT EXISTS non_update_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE update_request_usage ADD COLUMN IF NOT EXISTS non_update_alerted_at TEXT`,
+    // Requests a client saved until their allowance resets. Deliberately not
+    // tickets: a ticket starts an SLA clock, and this has not been agreed to
+    // as work yet. See db/schemas.js.
+    `CREATE TABLE IF NOT EXISTS queued_requests (
+      id TEXT PRIMARY KEY, client_id TEXT NOT NULL,
+      subject TEXT NOT NULL, category TEXT, description TEXT, priority TEXT,
+      release_at TEXT, released_at TEXT, ticket_id TEXT,
+      cancelled_at TEXT, created_at TEXT,
+      deferred_count INTEGER NOT NULL DEFAULT 0, deferred_at TEXT
+    )`,
+    // A request whose release date came round while the new month's allowance
+    // was already spent is pushed to the month after rather than left to be
+    // retried every minute for ever. The count is what the client is shown,
+    // so "we are still holding this" has a number behind it.
+    `ALTER TABLE queued_requests ADD COLUMN IF NOT EXISTS deferred_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE queued_requests ADD COLUMN IF NOT EXISTS deferred_at TEXT`,
+    // The release sweep, and the client's own "what am I holding" list.
+    `CREATE INDEX IF NOT EXISTS idx_queued_requests_due ON queued_requests(release_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_queued_requests_client ON queued_requests(client_id)`,
+    // The record of work done on a site: backups, uptime, security, SEO,
+    // performance, plugin updates and health checks, all the same shape. See
+    // db/schemas.js for why this is one table and not seven.
+    `CREATE TABLE IF NOT EXISTS site_records (
+      id TEXT PRIMARY KEY, client_id TEXT NOT NULL, kind TEXT NOT NULL,
+      title TEXT NOT NULL, detail TEXT, status TEXT,
+      occurred_at TEXT, meta TEXT, created_by TEXT, created_at TEXT
+    )`,
+    // The only query these are ever read by: one client, one panel, newest
+    // first.
+    `CREATE INDEX IF NOT EXISTS idx_site_records_panel
+       ON site_records(client_id, kind, occurred_at DESC)`,
+    // The funnel. Written on every modal shown, plan chosen, payment
+    // confirmed, upsell shown, dismissed, snoozed, clicked and upgraded, so
+    // the conversion and dismissal rates are a query rather than a guess.
+    `CREATE TABLE IF NOT EXISTS membership_events (
+      id TEXT PRIMARY KEY, client_id TEXT, type TEXT NOT NULL,
+      metadata TEXT, actor_id TEXT, created_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_membership_events_client
+       ON membership_events(client_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_membership_events_type ON membership_events(type)`,
+
+    /**
+     * The indexes the rest of the application was reading without.
+     *
+     * Every one of these backs a query the code already makes on every page
+     * load, and without them each is a sequential scan of the whole table.
+     * They cost nothing to add and they are the difference between a workspace
+     * that stays fast as it fills up and one that does not.
+     *
+     * `sessions(user_id)` is read on every sign-out-others and every account
+     * change. `activity_log(entity, entity_id)` is how a magic-link sign-in
+     * finds its own issuing record -- which was a full scan of the busiest
+     * append-only table in the application, on a sign-in. The `client_id`
+     * indexes are the per-client portal reads.
+     */
+    `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log(entity, entity_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_activity_actor ON activity_log(actor_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_projects_client ON projects(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_domains_client ON domains(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_reports_client ON reports(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_budget_client ON budget_items(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_billing_client ON billing(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_billing_customer ON billing(stripe_customer_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_client ON payments(client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_sms_messages_client ON sms_messages(client_id, created_at DESC)`,
+
+    /**
+     * One collaborator row per person per ticket.
+     *
+     * Nothing stopped the same person being added twice, which shows up as a
+     * duplicate name in the sidebar and as two notifications for every update.
+     * The constraint is also what makes "already invited" a refusal the
+     * database can make rather than a check somebody has to remember.
+     *
+     * Skipped under pg-mem for the same reason as the partial index above: it
+     * answers ordinary queries out of unique indexes and drops rows.
+     */
+    ...(process.env.PG_MEM ? [] : [
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_ticket_collaborators_unique
+         ON ticket_collaborators(ticket_id, user_id)`,
+    ]),
+    `CREATE INDEX IF NOT EXISTS idx_ticket_collaborators_user ON ticket_collaborators(user_id)`,
+
+    /**
+     * Why there are no foreign keys here.
+     *
+     * The honest answer is that this schema has to be the same shape on two
+     * drivers, and Firestore has no notion of one. A constraint that exists on
+     * Postgres and not on Firestore is a guarantee the application cannot
+     * make, which is worse than one it never claimed -- the code would be
+     * written as though referential integrity held, and on half the
+     * deployments it would not.
+     *
+     * So the integrity is kept where it can be kept on both: in the one
+     * routine that performs each deletion. utils/userErasure.js and
+     * utils/projectErasure.js are what stop a deleted account or project
+     * leaving rows pointing at nothing, and each is called by both the direct
+     * route and the approval queue so the two cannot drift. That was the real
+     * bug the audit found -- not the missing constraint, but two delete paths
+     * that did different amounts of work.
+     *
+     * If this ever runs on Postgres alone, add them. Until then, adding them
+     * on one driver would make the schema a promise only half the deployments
+     * keep.
+     */
   ];
   const alterations = [
+    /**
+     * One account per address, whatever case it was typed in.
+     *
+     * The column's own UNIQUE constraint is case-sensitive, so a workspace
+     * that predates addresses being stored lowercased can hold both
+     * `Dev@example.com` and `dev@example.com` as separate accounts -- and the
+     * lookup that signs people in matches on the lowercased value, so which
+     * of the two they get is whichever the database hands back first.
+     *
+     * Skipped under pg-mem, which does not support an index on an expression.
+     */
+    ...(process.env.PG_MEM ? [] : [
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email))`,
+    ]),
+    // Stripe webhooks arrive out of order; this is what makes applying them
+    // idempotent in time as well as in content. See routes/billing.js.
+    `ALTER TABLE billing ADD COLUMN IF NOT EXISTS last_event_at BIGINT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT`,
+    // An email change waiting on the new address to confirm it. See
+    // db/schemas.js and routes/users.js.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_email TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_email_hash TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_email_expires_at TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_contact TEXT`,
     `ALTER TABLE users ALTER COLUMN password DROP NOT NULL`,
@@ -629,6 +1032,22 @@ async function initPostgresSchema() {
     // Traces one broadcast send back to the batch it was part of. Null for
     // every row that predates broadcast, and for every non-broadcast send.
     `ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS broadcast_id TEXT`,
+    // Beside the ALTER, not with the other indexes: the column does not exist
+    // until this runs.
+    `CREATE INDEX IF NOT EXISTS idx_sms_messages_broadcast ON sms_messages(broadcast_id)`,
+    // Membership, on accounts that existed before it. Every one of these is
+    // nullable and stays null, which is exactly the "has not happened yet"
+    // these represent: a client who predates the feature has not been sent the
+    // welcome email and has not seen the plans modal, and the first login
+    // after this deploys is what sends and shows them. Nothing is backfilled,
+    // because a backfilled timestamp would mean nobody ever gets either.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS welcome_email_sent_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS first_login_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS plans_modal_seen_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS upsell_snoozed_until TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS upsell_dismiss_streak INTEGER DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS upsell_last_shown_at TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS upsell_last_message TEXT`,
     // Existing accounts have no recorded password age, and an unknown age must
     // not read as "older than a month" -- that would demand a reset from every
     // person in the workspace on the morning this deploys. Their clock starts

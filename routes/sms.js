@@ -203,7 +203,15 @@ async function statusHandler(req, res) {
   // budget, and the interim statuses that make up most of this traffic stop at
   // the first branch below.
 
-  const rows = await db.filter('sms_messages', (m) => m.providerSid === MessageSid);
+  /**
+   * The one row this callback is about, asked for by its provider id.
+   *
+   * This scanned every message in the workspace. Twilio sends a status
+   * callback for each state a text passes through -- queued, sent, delivered --
+   * so the busiest endpoint in this file was doing the most expensive read in
+   * it, several times per message. `provider_sid` is UNIQUE and indexed.
+   */
+  const rows = await db.where('sms_messages', { providerSid: MessageSid });
   const message = rows[0] || null;
 
   if (message) {
@@ -278,21 +286,33 @@ router.get('/', async (req, res, next) => {
   try {
     const status = STATUSES.includes(req.query.status) ? req.query.status : null;
 
-    const [messages, users] = await Promise.all([
-      db.all('sms_messages'),
-      db.all('users'),
-    ]);
-    const usersById = new Map(users.map((u) => [u.id, u]));
+    /**
+     * A page of messages, and only the people they name.
+     *
+     * Both tables were read in full to render two hundred rows: every text
+     * ever sent or received, and every account in the workspace, so a map
+     * could resolve a handful of client names. The filter and the ordering are
+     * now the database's, and the users are fetched by id afterwards.
+     */
+    const PAGE = 200;
+    const messages = status
+      ? await db.where('sms_messages', { status }, { orderBy: 'createdAt', limit: PAGE })
+      : await db.where('sms_messages', {}, { orderBy: 'createdAt', limit: PAGE });
 
-    const rows = messages
-      .filter((m) => (status ? m.status === status : true))
-      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-      .slice(0, 200)
-      .map((m) => present(m, usersById));
+    const named = [...new Set(messages.map((m) => m.clientId).filter(Boolean))];
+    const usersById = new Map(
+      (await Promise.all(named.map((id) => db.find('users', id))))
+        .filter(Boolean)
+        .map((u) => [u.id, u]),
+    );
+
+    const rows = messages.map((m) => present(m, usersById));
 
     res.json({
       messages: rows,
-      unread: messages.filter((m) => m.status === 'new').length,
+      // Counted by the database rather than by reading every row to count
+      // them. The badge is a number; it does not need the messages.
+      unread: (await db.where('sms_messages', { status: 'new' }, { select: ['status'] })).length,
       // The page explains itself when a piece is missing rather than silently
       // showing an empty inbox that looks like "no client has ever texted".
       config: {
@@ -408,8 +428,25 @@ router.post('/:id/reply', requireCSRF, async (req, res, next) => {
     const message = await db.find('sms_messages', req.params.id);
     if (!message) return res.status(404).json({ error: 'Message not found' });
 
+    /**
+     * Only an inbound message can be replied to.
+     *
+     * A reply is addressed to `message.fromNumber`, and on an outbound message
+     * that field is our own Twilio number -- so replying to something we sent
+     * texted the office phone, which then arrived back through the webhook as
+     * an inbound message from ourselves. Harmless once, confusing in a thread,
+     * and billed both ways.
+     */
+    if (message.direction !== 'inbound') {
+      return res.status(400).json({
+        error: 'That is a message we sent. Reply to the client\'s own message in the thread.',
+      });
+    }
+
     const body = typeof req.body.body === 'string' ? req.body.body.trim() : '';
     if (!body) return res.status(400).json({ error: 'A reply cannot be empty.' });
+    const tooLong = lengthProblem(body, 'A reply');
+    if (tooLong) return res.status(400).json({ error: tooLong, segments: segmentsFor(body) });
 
     // Sent either way, and the row is kept either way: a Twilio failure must
     // read as a failed message in the thread, never as a reply that vanished.
@@ -509,7 +546,45 @@ router.post('/:id/reply', requireCSRF, async (req, res, next) => {
  * couple of seconds saved. One bad recipient (no phone on file, a Twilio
  * failure) is recorded and skipped -- it never stops the rest of the list.
  */
-router.post('/broadcast', requireCSRF, async (req, res, next) => {
+/** The most people one broadcast may reach. Past this it is a campaign tool. */
+const BROADCAST_LIMIT = 200;
+
+/**
+ * The longest a single text may be.
+ *
+ * Nothing capped this, and an SMS is billed per 160-character segment (70 when
+ * it contains anything outside GSM-7, which one emoji is enough to trigger).
+ * A pasted paragraph is therefore a silent multiple of the price somebody
+ * expected, and a pasted document is a bill. Four segments is generous for a
+ * support reply and still a number a person can hold in their head.
+ */
+const SMS_MAX_LENGTH = 640;
+
+/** How many segments a body will be billed as, which is what the UI shows. */
+function segmentsFor(body) {
+  const text = String(body || '');
+  // eslint-disable-next-line no-control-regex
+  const unicode = /[^\u0000-\u007F]/.test(text);
+  const size = unicode ? 70 : 160;
+  return Math.max(1, Math.ceil(text.length / size));
+}
+
+/** `{ ok }`, or the sentence to show whoever typed too much. */
+function lengthProblem(body, label = 'A message') {
+  if (body.length <= SMS_MAX_LENGTH) return null;
+  return `${label} can be up to ${SMS_MAX_LENGTH} characters. This one is ${body.length}, `
+    + `which would be sent as ${segmentsFor(body)} separate texts.`;
+}
+
+/**
+ * Texting a list of customers is an administrator's decision.
+ *
+ * Sales could reach every client in the workspace with one request, with no
+ * cap, no approval and no daily limit -- which is the one action in this file
+ * that is both irreversible and plural. An ill-judged broadcast cannot be
+ * recalled, and the people who receive it are customers.
+ */
+router.post('/broadcast', requireCSRF, requireRole('admin'), async (req, res, next) => {
   try {
     if (!twilio.outboundEnabled()) {
       return res.status(503).json({
@@ -520,11 +595,21 @@ router.post('/broadcast', requireCSRF, async (req, res, next) => {
 
     const body = typeof req.body.body === 'string' ? req.body.body.trim() : '';
     if (!body) return res.status(400).json({ error: 'A broadcast message cannot be empty.' });
+    // Multiplied by the recipient count, so the cap matters more here than on
+    // a single reply: 200 people times four unintended segments is a bill.
+    const tooLong = lengthProblem(body, 'A broadcast');
+    if (tooLong) return res.status(400).json({ error: tooLong, segments: segmentsFor(body) });
 
     const clientIds = Array.isArray(req.body.clientIds)
       ? [...new Set(req.body.clientIds.filter((id) => typeof id === 'string' && id))]
       : [];
     if (clientIds.length === 0) return res.status(400).json({ error: 'Pick at least one recipient.' });
+    if (clientIds.length > BROADCAST_LIMIT) {
+      return res.status(400).json({
+        error: `A broadcast can reach up to ${BROADCAST_LIMIT} people at once. `
+          + `This one names ${clientIds.length}.`,
+      });
+    }
 
     const broadcast = await db.insert('sms_broadcasts', {
       body,
@@ -533,7 +618,30 @@ router.post('/broadcast', requireCSRF, async (req, res, next) => {
       createdAt: new Date().toISOString(),
     });
 
+    /**
+     * Queued, not sent here.
+     *
+     * Every recipient used to be texted one after another inside this request,
+     * with no cap. Past the function's time limit the request dies partway
+     * through the list -- and because nothing recorded how far it got, the
+     * obvious thing to do next is send it again, which re-texts everybody it
+     * had already reached. A broadcast that half-sends and cannot safely be
+     * retried is the worst of both.
+     *
+     * So the route writes one message row and one outbox job per recipient and
+     * returns. The dedupe key is `broadcastId:clientId`, which is the UNIQUE
+     * column on the outbox: pressing send twice, or retrying the request, adds
+     * nothing the second time. The queue does the sending, with the retries and
+     * the pacing it already has.
+     *
+     * One number per send, too: two clients sharing a phone -- a husband and
+     * wife on one mobile, two contacts at one company -- used to get the same
+     * text twice, because the list was deduplicated by client and the thing
+     * that actually receives a text is the number.
+     */
     const results = [];
+    const numbersSeen = new Map();
+
     for (const clientId of clientIds) {
       const client = await db.find('users', clientId);
       if (!client || client.role !== 'client') {
@@ -547,18 +655,23 @@ router.post('/broadcast', requireCSRF, async (req, res, next) => {
         continue;
       }
 
-      const conversation = await conversations.getOrCreate({ phoneNumber: to, clientId: client.id });
-      const attempt = await twilio.sendSmsResult({ to, body });
-      const sid = attempt.ok ? attempt.sid : null;
-      // As in the single reply above: a provider that could not be reached is
-      // worth another go, and in a broadcast it matters more -- one bad minute
-      // halfway through a batch would otherwise lose every recipient after it.
-      const willRetry = !attempt.ok && !attempt.permanent;
-      const deliveryError = attempt.ok ? null : attempt.error;
+      if (numbersSeen.has(to)) {
+        results.push({
+          clientId,
+          status: 'skipped',
+          error: `That number is already on this broadcast for ${numbersSeen.get(to)}.`,
+        });
+        continue;
+      }
+      numbersSeen.set(to, client.name || clientId);
 
-      const sent = await db.insert('sms_messages', {
+      // The conversation exists either way, so an inbound reply lands in the
+      // right thread rather than opening a new one.
+      await conversations.getOrCreate({ phoneNumber: to, clientId: client.id });
+
+      const queued = await db.insert('sms_messages', {
         provider: 'twilio',
-        providerSid: sid || null,
+        providerSid: null,
         channel: 'sms',
         direction: 'outbound',
         fromNumber: twilio.fromNumber(),
@@ -568,50 +681,39 @@ router.post('/broadcast', requireCSRF, async (req, res, next) => {
         clientId: client.id,
         broadcastId: broadcast.id,
         status: 'read',
-        deliveryStatus: attempt.ok ? 'sent' : (willRetry ? 'queued' : 'failed'),
-        deliveryError,
+        deliveryStatus: 'queued',
+        deliveryError: null,
         createdAt: new Date().toISOString(),
       });
 
-      if (willRetry) {
-        await outbox.enqueue({
-          channel: 'sms',
-          payload: { to, body, messageId: sent.id },
-          entity: 'sms_message',
-          entityId: sent.id,
-        });
-      }
-
-      // Same best-effort echo as a single reply: only into a thread that
-      // already exists, never opening a new one for a broadcast.
-      if (sid && conversation?.slackChannelId && conversation?.slackThreadTs) {
-        try {
-          await slack.replyInThread({
-            channelId: conversation.slackChannelId,
-            threadTs: conversation.slackThreadTs,
-            text: `*Broadcast sent from the dashboard:*\n${body}`,
-          });
-        } catch (err) {
-          console.error(`Could not echo broadcast message ${sent.id} into Slack:`, err.message);
-        }
-      }
-
-      live.publish('sms');
-      results.push({
-        clientId,
-        status: attempt.ok ? 'sent' : (willRetry ? 'queued' : 'failed'),
-        error: deliveryError,
+      await outbox.enqueue({
+        channel: 'sms',
+        payload: { to, body, messageId: queued.id },
+        entity: 'sms_message',
+        entityId: queued.id,
+        // The one line that makes a resend safe. See the UNIQUE index on
+        // outbox.dedupe_key.
+        dedupeKey: `sms-broadcast:${broadcast.id}:${client.id}`,
       });
+
+      results.push({ clientId, status: 'queued', error: null });
     }
+
+    live.publish('sms');
 
     await audit(req.user.id, 'sms.broadcast', 'sms_broadcast', broadcast.id, {
       recipientCount: clientIds.length,
-      sent: results.filter((r) => r.status === 'sent').length,
       queued: results.filter((r) => r.status === 'queued').length,
+      skipped: results.filter((r) => r.status === 'skipped').length,
       failed: results.filter((r) => r.status === 'failed').length,
     });
 
-    res.status(201).json({ broadcastId: broadcast.id, results });
+    res.status(201).json({
+      broadcastId: broadcast.id,
+      results,
+      // What this will actually cost, said out loud.
+      segmentsEach: segmentsFor(body),
+    });
   } catch (err) {
     next(err);
   }

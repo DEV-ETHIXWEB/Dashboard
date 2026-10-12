@@ -186,9 +186,29 @@ export function useTickets() {
 export function useCreateTicket() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { subject: string; category: string; description: string; priority?: string; clientId?: string }) =>
-      api<{ ticket: Ticket }>("POST", "/tickets", body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tickets"] }),
+    mutationFn: (body: {
+      subject: string;
+      category: string;
+      description: string;
+      priority?: string;
+      clientId?: string;
+      /** Agree to be quoted for one past the included allowance. */
+      acceptExtraCharge?: boolean;
+      /** Hold it until the allowance resets instead. */
+      queueForNextPeriod?: boolean;
+    }) =>
+      api<{ ticket?: Ticket; chargedAsExtra?: boolean; queued?: { id: string }; message?: string }>(
+        "POST",
+        "/tickets",
+        body,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tickets"] });
+      // The meter on the billing page and the one in this form read the same
+      // record, so both have to notice that an update was just spent.
+      qc.invalidateQueries({ queryKey: ["membership"] });
+      qc.invalidateQueries({ queryKey: ["queued-requests"] });
+    },
   });
 }
 
@@ -228,10 +248,18 @@ export function useUpdateDomain() {
   });
 }
 
-export function useRenewDomain() {
+/**
+ * Record that a domain was renewed. It does not renew one.
+ *
+ * Nothing in this application talks to a registrar. This moves the expiry date
+ * in our own records so the warnings stop firing for a domain somebody has
+ * already renewed elsewhere -- which is useful, and is not what the word
+ * "renew" promises on a button.
+ */
+export function useRecordDomainRenewal() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api<{ domain: Domain }>("POST", `/domains/${id}/renew`),
+    mutationFn: (id: string) => api<{ domain: Domain }>("POST", `/domains/${id}/record-renewal`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["domains"] }),
   });
 }

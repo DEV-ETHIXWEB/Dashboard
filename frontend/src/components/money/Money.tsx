@@ -1,7 +1,15 @@
-import type { ReactNode } from "react";
+import { Suspense, lazy, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Link } from "react-router-dom";
-import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+/**
+ * The chart library, loaded only when a chart is actually drawn.
+ *
+ * recharts and its d3 dependencies are the largest thing this application
+ * ships -- 292KB -- and importing them here put them in the entry graph, so
+ * every page preloaded the whole charting stack. The login screen, which has
+ * no chart and nobody signed in, was downloading it before it could render.
+ */
+const SpendDonut = lazy(() => import("./SpendDonut"));
 import { cn } from "@/lib/utils";
 import { categoryColor, money, shareOf, signedMoney } from "@/lib/money";
 
@@ -243,24 +251,23 @@ export function SpendBreakdown({
   return (
     <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:gap-7">
       <div aria-hidden className="relative mx-auto size-40 shrink-0">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={categories}
-              dataKey="amount"
-              nameKey="label"
-              innerRadius={50}
-              outerRadius={78}
-              paddingAngle={2}
-              strokeWidth={0}
-              isAnimationActive={false}
-            >
-              {categories.map((c, i) => (
-                <Cell key={c.id} fill={categoryColor(i)} />
-              ))}
-            </Pie>
-          </PieChart>
-        </ResponsiveContainer>
+        {/* A plain ring while the chart chunk arrives, so the panel does not
+            jump when it lands. The figures are all in the list beside it, so
+            nothing is missing in the meantime. */}
+        <Suspense
+          fallback={
+            <div className="absolute inset-[18px] rounded-full border-[14px] border-secondary" />
+          }
+        >
+          <SpendDonut
+            slices={categories.map((c, i) => ({
+              id: c.id,
+              label: c.label,
+              amount: c.amount,
+              color: categoryColor(i),
+            }))}
+          />
+        </Suspense>
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
           <span className="text-xs font-medium text-muted-foreground">Total</span>
           <span className="text-base font-semibold tracking-tight tabular-nums">{money(total)}</span>

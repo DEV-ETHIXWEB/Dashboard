@@ -13,6 +13,22 @@
  * right; behind more than one instance each node only reaches its own
  * subscribers, which is why the browser also falls back to polling and
  * refetches whenever the tab regains focus.
+ *
+ * On a serverless platform that fallback is doing all of the work, and this is
+ * worth stating plainly rather than leaving somebody to find out from a bill.
+ * Instances do not share memory, so a change made on one never reaches a tab
+ * attached to another; and an open event stream holds a function alive, which
+ * is billed by the second and killed at the platform's time limit whatever the
+ * client is doing. Live updates on Vercel are therefore best understood as
+ * "polling, with an optimisation that sometimes applies".
+ *
+ * Three ways out, in increasing order of effort: drop the stream and poll on a
+ * visible interval, which is what the fallback already does and costs nothing
+ * to adopt; put a hosted pub/sub behind `publish` so every instance hears
+ * every event; or run the application on a host with a long-lived process,
+ * where this file is already correct as written. Nothing here needs to change
+ * for the first of those -- the browser does -- which is why this is a note
+ * and not a rewrite.
  */
 
 const { canSeePage } = require('./clientPages');
@@ -34,6 +50,11 @@ const TOPIC_PAGE = {
   // Always-on sections: everyone signed in may hear these.
   notifications: 'notifications',
   session: 'settings',
+  // Which plan somebody is on. Deliberately an always-on section rather than
+  // 'billing': an admin can switch a client's Billing page off, and that is a
+  // decision about a page, not about whether their own dashboard may notice
+  // that their plan was just confirmed. See routes/membership.js.
+  membership: 'settings',
   // Staff-only topics. `null` here is not "everyone" -- STAFF_ONLY below is the
   // list that decides, and anything in it never reaches a client.
   users: null,

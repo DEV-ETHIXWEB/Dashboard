@@ -99,6 +99,14 @@ export interface User {
   hasAvatar?: boolean;
   /** Changes whenever the picture does, so the avatar URL busts its own cache. */
   avatarUpdatedAt?: number | null;
+  /**
+   * When the plans modal was first shown. Set once, and the modal never opens
+   * by itself again -- somebody who closed it has answered, and reopening it
+   * on every sign-in is the behaviour that makes people stop reading.
+   */
+  plansModalSeenAt?: string | null;
+  /** First sign-in. Tells an account that predates membership from a new one. */
+  firstLoginAt?: string | null;
 }
 
 /**

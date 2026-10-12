@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { plainDate } from "@/lib/money";
 import { CreateTicketModal } from "@/components/CreateTicketModal";
+import { SavedRequests } from "@/components/plans/SavedRequests";
 import { TicketTimelineDialog } from "@/components/tickets/TicketTimelineDialog";
 import { PriorityBadge, SlaBadge } from "@/components/tickets/TicketMeta";
 import { useMyTicketRequests, useTicketStages } from "@/hooks/useTicketWorkflow";
@@ -145,6 +146,10 @@ export default function Tickets() {
         }
       />
 
+      {/* Above the list, because a request they were told we had kept has to
+          be somewhere they can see it. Renders nothing when none are held. */}
+      <SavedRequests />
+
       {/* One toolbar instead of two competing panels: filter left, search right. */}
       <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-card p-2 ring-1 ring-foreground/10">
         <div className="flex flex-wrap items-center gap-1.5">
@@ -184,6 +189,7 @@ export default function Tickets() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={isStaff ? "Search subject, client, category" : "Search your requests"}
+            aria-label="Search requests"
             className="h-9 border-none bg-transparent pl-9 text-sm focus-visible:ring-0"
           />
           {search && (

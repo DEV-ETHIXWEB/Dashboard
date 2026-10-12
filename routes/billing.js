@@ -21,6 +21,7 @@ const mailer = require('../utils/mailer');
 const messages = require('../utils/emailMessages');
 const appUrl = require('../utils/appUrl');
 const live = require('../utils/liveBus');
+const userLookup = require('../utils/userLookup');
 
 function getStripe() {
   return stripeSync.getStripe();
@@ -217,6 +218,29 @@ router.post('/link', requireCSRF, requireRole('admin'), async (req, res, next) =
   }
 });
 
+/**
+ * The older Stripe checkout, which is a different product from membership
+ * plans and is deliberately still here.
+ *
+ * Two billing systems run side by side in this application and they do not
+ * talk to each other: a Stripe payment never activates a membership plan, and
+ * marking a plan paid never touches Stripe. That is a real gap and it is not
+ * one a patch closes -- retiring this would strand the clients already paying
+ * through it, and routing Stripe into `subscriptions.activate` means mapping
+ * one STRIPE_PRICE_ID onto twelve plan-and-period combinations that have no
+ * Stripe Prices behind them yet.
+ *
+ * What has been done in the meantime is to stop the two systems contradicting
+ * each other in front of a client: `subscriptions.payingExternally` reads this
+ * side's `billing` table, so somebody paying by card is never shown the
+ * choose-a-plan banner or told their site has been hosted at no charge. See
+ * utils/subscriptions.js.
+ *
+ * Choosing a plan under PAYMENT_MODE=stripe is refused outright rather than
+ * silently behaving as manual; see routes/membership.js. Whoever wires this up
+ * properly needs a Stripe Price per plan and period, and `activate` called
+ * from the webhook.
+ */
 router.post('/checkout', requireCSRF, requireRole('client'), async (req, res, next) => {
   try {
     const stripe = getStripe();
@@ -227,28 +251,60 @@ router.post('/checkout', requireCSRF, requireRole('client'), async (req, res, ne
     const existing = await stripeSync.billingForClient(req.user.id);
     let stripeCustomerId = existing?.stripeCustomerId;
     if (!stripeCustomerId) {
-      const customer = await stripe.customers.create({
-        email: req.user.email,
-        name: req.user.name,
-        // Lets a webhook find the account even before the billing row exists.
-        metadata: { clientId: req.user.id },
-      });
+      /**
+       * Keyed, so a double click produces one customer rather than two.
+       *
+       * The customer used to be created before the billing row that records
+       * it, so two requests a second apart both found no row and both created
+       * a Stripe customer for the same person. The second one is invisible
+       * here and permanent there, and whichever of the two the client pays on
+       * is the one this application does not know about.
+       *
+       * The idempotency key is the client's own id, which is exactly the
+       * uniqueness being claimed. The row is written straight afterwards so
+       * the next request takes the branch above instead.
+       */
+      const customer = await stripe.customers.create(
+        {
+          email: req.user.email,
+          name: req.user.name,
+          // Lets a webhook find the account even before the billing row exists.
+          metadata: { clientId: req.user.id },
+        },
+        { idempotencyKey: `customer:${req.user.id}` },
+      );
       stripeCustomerId = customer.id;
+
+      // Recorded before the checkout session, not after: that ordering is the
+      // other half of the fix above.
+      await stripeSync.saveBilling(req.user.id, {
+        stripeCustomerId,
+        plan: existing?.plan || 'standard',
+        status: existing?.status || 'pending',
+      });
     }
 
-    const base = appUrl.baseUrl() || `${req.protocol}://${req.get('host')}`;
+    /**
+     * Where Stripe sends the client back to, which has to be ours.
+     *
+     * It fell back to the Host header when APP_BASE_URL was unset -- so the
+     * return URL was whatever hostname the request claimed, and a request with
+     * a forged Host would have sent the customer somewhere else after paying.
+     * A payment flow is not the place to trust a header.
+     */
+    const base = appUrl.baseUrl();
+    if (!base) {
+      return res.status(503).json({
+        error: 'Billing is not configured yet: APP_BASE_URL has to be set before checkout can '
+          + 'send people back here afterwards.',
+      });
+    }
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       customer: stripeCustomerId,
       line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
       success_url: `${base}/portal/billing?billing=success`,
       cancel_url: `${base}/portal/billing?billing=cancelled`,
-    });
-
-    await stripeSync.saveBilling(req.user.id, {
-      stripeCustomerId,
-      plan: existing?.plan || 'standard',
-      status: existing?.status || 'pending',
     });
 
     await audit(req.user.id, 'create', 'billing_checkout', stripeCustomerId);
@@ -272,7 +328,13 @@ router.post('/portal', requireCSRF, requireRole('client'), async (req, res, next
       return res.status(503).json({ error: 'There is no payment account set up for you yet.' });
     }
 
-    const base = appUrl.baseUrl() || `${req.protocol}://${req.get('host')}`;
+    // Ours, not the Host header's. See the note on the checkout route.
+    const base = appUrl.baseUrl();
+    if (!base) {
+      return res.status(503).json({
+        error: 'APP_BASE_URL has to be set before the billing portal can send people back here.',
+      });
+    }
     const session = await stripe.billingPortal.sessions.create({
       customer: billing.stripeCustomerId,
       return_url: `${base}/portal/billing`,
@@ -291,8 +353,33 @@ async function clientIdForCustomer(customerId, { email = null } = {}) {
   const billing = await stripeSync.billingForCustomer(customerId);
   if (billing?.clientId) return billing.clientId;
   if (!email) return null;
-  const match = (await db.filter('users', (u) => u.role === 'client' && u.email === email))[0];
-  return match?.id || null;
+  // Compared case-insensitively. Addresses are stored lowercased and Stripe
+  // sends back whatever the customer typed, so an exact match quietly failed
+  // for anybody who capitalised their own name -- and a payment that matches
+  // no client is a payment nobody is credited for.
+  const match = await userLookup.findByEmail(email);
+  return match && match.role === 'client' ? match.id : null;
+}
+
+/**
+ * Whether this event is newer than the last one we applied to this client.
+ *
+ * Webhooks are delivered in whatever order the network manages, and Stripe
+ * retries, so the same subscription's `updated` and `deleted` can arrive the
+ * wrong way round. Applied in arrival order, an `updated` that was *created*
+ * before a `deleted` but landed after it flips a cancelled client back to
+ * active -- which means a client who cancelled keeps being billed, and their
+ * dashboard says they are on a plan they ended.
+ *
+ * Stripe's own `created` timestamp is the ordering, because it is the only
+ * clock both ends agree on.
+ */
+async function isStale(clientId, event) {
+  const at = Number(event?.created || 0);
+  if (!at) return false;
+  const billing = await stripeSync.billingForClient(clientId);
+  const last = Number(billing?.lastEventAt || 0);
+  return last > at;
 }
 
 async function emailPayment(clientId, template, context) {
@@ -349,9 +436,17 @@ async function handleEvent(event) {
     case 'customer.subscription.deleted': {
       const clientId = await clientIdForCustomer(object.customer);
       if (!clientId) return;
+      // Out of order, so this event describes a state that has since been
+      // replaced. Acknowledged and dropped rather than applied backwards.
+      if (await isStale(clientId, event)) return;
+
       const patch = stripeSync.fromSubscription(object);
       if (event.type === 'customer.subscription.deleted') patch.status = 'canceled';
-      await stripeSync.saveBilling(clientId, { stripeCustomerId: object.customer, ...patch });
+      await stripeSync.saveBilling(clientId, {
+        stripeCustomerId: object.customer,
+        lastEventAt: Number(event.created || 0) || null,
+        ...patch,
+      });
       pushMoneyChange(clientId);
       return;
     }
@@ -417,7 +512,25 @@ async function handleEvent(event) {
     case 'checkout.session.completed': {
       const clientId = object.metadata?.clientId || (await clientIdForCustomer(object.customer, { email: object.customer_details?.email }));
       if (!clientId) return;
-      await stripeSync.saveBilling(clientId, { stripeCustomerId: object.customer, status: 'active' });
+
+      /**
+       * A completed checkout is not a cleared payment.
+       *
+       * This wrote `status: 'active'` on the session completing, which for a
+       * card is usually the same moment -- and for every delayed method Stripe
+       * supports (bank debits, vouchers, some wallets) is days earlier. The
+       * subscription was marked active and the perks unlocked while the money
+       * was still in flight, and nothing walked it back if it never arrived.
+       *
+       * `payment_status` is Stripe's own answer to exactly this question. When
+       * it is anything else, the customer is still linked -- so the next
+       * `invoice.paid` finds them -- and the status is left to that event.
+       */
+      const paid = object.payment_status === 'paid' || object.payment_status === 'no_payment_required';
+      await stripeSync.saveBilling(clientId, {
+        stripeCustomerId: object.customer,
+        ...(paid ? { status: 'active' } : {}),
+      });
       pushMoneyChange(clientId);
       return;
     }

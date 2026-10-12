@@ -99,6 +99,7 @@ export default function OtpMonitor() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search name, email, or IP..."
+            aria-label="Search sign-in codes"
             className="h-9 border-none bg-transparent pl-9 text-xs focus-visible:ring-0"
           />
           {search && (

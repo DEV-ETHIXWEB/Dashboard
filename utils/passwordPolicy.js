@@ -38,11 +38,34 @@ function config() {
     // Off is a supported answer. A workspace that has decided rotation costs
     // more than it buys should be able to say so without editing code.
     enabled: String(process.env.PASSWORD_POLICY_ENABLED ?? 'true').toLowerCase() !== 'false',
-    maxAgeDays: num('PASSWORD_MAX_AGE_DAYS', 30),
-    warnDays: num('PASSWORD_WARN_DAYS', 5),
+    /**
+     * How long a password may go unchanged.
+     *
+     * 90 days rather than 30. NIST 800-63B is explicit that forced periodic
+     * rotation makes passwords worse, not better -- people respond to a short
+     * cycle by picking something they can increment, which is exactly the
+     * pattern an attacker guesses first. Thirty days is short enough to
+     * guarantee that behaviour.
+     *
+     * Not removed entirely, because this workspace holds other people's client
+     * data and somebody has decided rotation is part of how they run it; the
+     * cycle is simply long enough to be answered with a real password. Set
+     * PASSWORD_POLICY_ENABLED=false to turn it off, which is the supported
+     * answer and the one NIST would give.
+     */
+    maxAgeDays: num('PASSWORD_MAX_AGE_DAYS', 90),
+    warnDays: num('PASSWORD_WARN_DAYS', 7),
     minLength: Math.min(num('PASSWORD_MIN_LENGTH', 12), MAX_PASSWORD_BYTES),
-    /** A reset link is used within the hour or not at all. */
-    resetTtlMs: num('PASSWORD_RESET_TTL_MINUTES', 60) * MINUTE_MS,
+    /**
+     * A reset link is used within fifteen minutes or not at all.
+     *
+     * An hour was the old default and is a long time for a live credential to
+     * sit in an inbox: a reset email is the one message that, read by anybody
+     * else, is the account. Fifteen minutes is long enough to walk to a
+     * computer and short enough that a forwarded or synced copy is dead by the
+     * time it is anywhere else.
+     */
+    resetTtlMs: num('PASSWORD_RESET_TTL_MINUTES', 15) * MINUTE_MS,
     /**
      * An activation link is longer-lived on purpose: it lands in an inbox with
      * a scheduled delivery behind it, and the person it is for may not be at a

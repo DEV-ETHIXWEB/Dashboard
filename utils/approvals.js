@@ -75,6 +75,10 @@ const ACTIONS = {
 
       await provisioning.joinAssignedChannel(user);
 
+      // Same greeting the direct route sends. A client created through the
+      // approval queue who never heard from us is the gap this closes.
+      await provisioning.welcomeNewClient(user);
+
       // And the credentials actually go out. An approved account whose password
       // nobody knows is not an account, and the proposing admin has no way to
       // find out what it was.
@@ -138,22 +142,31 @@ const ACTIONS = {
     },
   },
 
+  /**
+   * Deleting an account, through the same routine the direct route uses.
+   *
+   * This removed the `users` row and nothing else: the sessions, the sign-in
+   * codes and the recovery codes all survived, so an account deleted here was
+   * gone from the list while whoever held a session stayed signed in as it --
+   * on the path that exists specifically because deletion is sensitive.
+   */
   'user.delete': {
     label: 'Delete an account',
     async execute(payload) {
-      const target = await db.find('users', payload.userId);
-      if (!target) throw new ApprovalError('That account no longer exists', 404);
-      await db.remove('users', payload.userId);
-      return target;
+      const erasure = require('./userErasure');
+      const erased = await erasure.eraseUser(payload.userId);
+      if (!erased) throw new ApprovalError('That account no longer exists', 404);
+      return erased.user;
     },
   },
 
+  /** Through the same routine the direct route uses. See projectErasure.js. */
   'project.delete': {
     label: 'Delete a project',
     async execute(payload) {
-      const removedTasks = await db.removeWhere('tasks', (t) => t.projectId === payload.projectId);
-      await db.remove('projects', payload.projectId);
-      return { removedTasks };
+      const erased = await require('./projectErasure').eraseProject(payload.projectId);
+      if (!erased) throw new ApprovalError('That project no longer exists', 404);
+      return erased.removed;
     },
   },
 
@@ -199,6 +212,25 @@ const ACTIONS = {
       return { ok };
     },
   },
+
+  /**
+   * Confirming a payment is the one action in the membership feature that
+   * cannot be taken back: it starts a billing period, retires whatever plan
+   * they were on, and unlocks everything. It is also the action an admin
+   * performs on the strength of a bank notification somebody read to them, so
+   * a fresh account doing it alone is exactly the case this queue exists for.
+   */
+  'subscription.markPaid': {
+    label: 'Confirm a payment and start a plan',
+    async execute(payload, ctx) {
+      const subscriptions = require('./subscriptions');
+      // Credited to whoever proposed it, not whoever countersigned: the
+      // activity log should name the person who read the bank statement.
+      return subscriptions.activate(payload.subscriptionId, {
+        byUserId: ctx?.requestedBy || 'system',
+      });
+    },
+  },
 };
 
 function actionLabel(action) {
@@ -208,7 +240,7 @@ function actionLabel(action) {
 /** Which record an action touched, so the log row points somewhere. */
 function entityIdOf(action, payload) {
   return payload.userId || payload.projectId || payload.domainId
-    || payload.reportId || payload.ticketId || payload.email || null;
+    || payload.reportId || payload.ticketId || payload.subscriptionId || payload.email || null;
 }
 
 // --- storage ---------------------------------------------------------------

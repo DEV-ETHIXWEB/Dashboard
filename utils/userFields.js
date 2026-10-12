@@ -45,6 +45,58 @@ function unknownFields(body) {
   return Object.keys(body || {}).filter((k) => k !== 'id' && !EDITABLE.has(k) && !CONTROL.has(k));
 }
 
+/**
+ * Deliberately permissive about what an address may look like, and strict
+ * about it being an address at all.
+ *
+ * Real addresses are stranger than most patterns allow -- plus-tags, long new
+ * TLDs, apostrophes, non-ASCII local parts -- and a clever pattern that
+ * rejects a real customer is a worse failure than a loose one that accepts an
+ * odd-looking address. So this asks only the questions that must be true:
+ * something, one @, something, a dot, something, and no whitespace.
+ */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * An email as it should be stored, or null if it is not an email at all.
+ *
+ * The reason this exists: `email` arrives from JSON and JSON has types. A
+ * body carrying `{"email": true}` used to be written to the row as the string
+ * "true", which is not an address anybody can be reached at -- and because an
+ * address is how somebody signs in, it locked the account out of the product
+ * as well as out of their inbox. Numbers, arrays and objects all did the
+ * same. The self-service version of the same screen did not store rubbish; it
+ * raised a 500 trying to lowercase it.
+ *
+ * Stored lowercase and trimmed, because every comparison in the application
+ * already lowercases both sides and two spellings of one address is how two
+ * accounts end up fighting over one sign-in.
+ */
+function normalizeEmail(value) {
+  if (typeof value !== 'string') return null;
+  const email = value.trim().toLowerCase();
+  if (!EMAIL_SHAPE.test(email)) return null;
+  // Long enough to be suspicious rather than long enough to be real, and the
+  // column is TEXT, so this is about keeping a sane row rather than a limit
+  // anybody will meet.
+  if (email.length > 254) return null;
+  return email;
+}
+
+/**
+ * A display name as it should be stored, or null if it is not usable.
+ *
+ * Same reasoning as the address: `{"name": {}}` was being written to the row
+ * as the string "{}", and a client called "{}" appears that way in every email
+ * and on every screen.
+ */
+function normalizeName(value) {
+  if (typeof value !== 'string') return null;
+  const name = value.trim().replace(/\s+/g, ' ');
+  if (!name) return null;
+  return name.length > 200 ? name.slice(0, 200) : name;
+}
+
 /** Just the editable fields the caller actually supplied. */
 function pickEditable(body) {
   const out = {};
@@ -79,4 +131,8 @@ function sanitizePatch(patch) {
   return out;
 }
 
-module.exports = { EDITABLE_USER_FIELDS, CONTROL_FIELDS, unknownFields, pickEditable, sanitizePatch };
+module.exports = {
+  EDITABLE_USER_FIELDS, CONTROL_FIELDS,
+  unknownFields, pickEditable, sanitizePatch,
+  normalizeEmail, normalizeName,
+};

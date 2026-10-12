@@ -16,6 +16,10 @@ import { PullToRefresh } from "@/components/mobile/PullToRefresh";
 import { TopBar } from "@/components/mobile/TopBar";
 import { NotificationBell } from "@/components/NotificationBell";
 import { InstallCard } from "@/components/mobile/InstallCard";
+import { NoPlanBanner } from "@/components/plans/NoPlanBanner";
+import { PlansModal } from "@/components/plans/PlansModal";
+import { UnlockedModal } from "@/components/plans/UnlockedModal";
+import { UpgradeModal } from "@/components/plans/UpgradeModal";
 import { UserAvatar } from "@/components/UserAvatar";
 import { Button } from "@/components/ui/button";
 import { isClientNav, navFor, type NavGroup, type NavItem } from "@/lib/nav";
@@ -118,6 +122,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.4, 0, 0.2, 1] }}
             >
+              {/* A client without a plan is asked once, here, on every screen
+                  they open. One line and one link: everything under it keeps
+                  working, and it answers itself the moment they choose. */}
+              <NoPlanBanner />
               {children}
             </motion.div>
             <InstallCard />
@@ -132,6 +140,19 @@ export function AppShell({ children }: { children: ReactNode }) {
         onOpenMore={() => setMoreOpen(true)}
       />
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} items={secondary} unread={unread} />
+
+      {/* Opens once, on the first sign-in of a client who has no plan, and
+          never by itself again. Mounted in the shell rather than on one page
+          so it does not depend on where they happen to land. */}
+      <PlansModal />
+
+      {/* The first dashboard load after a plan starts, and again after an
+          upgrade. Owed once per subscription, not once per account. */}
+      <UnlockedModal />
+
+      {/* The weekly value message, for Basic and Managed only. The server
+          decides whether there is one to show; this only puts it on screen. */}
+      <UpgradeModal />
     </div>
   );
 }

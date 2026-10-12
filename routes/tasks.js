@@ -20,6 +20,18 @@ const ASSIGNEE_ROLES = ['admin', 'project_manager', 'employee'];
  * the board reads to decide who is doing the work -- and that person would
  * then be notified about it. Null is allowed and means unassigned.
  */
+/**
+ * The statuses a task can be in, which is also the list the board renders.
+ *
+ * Written down because two different spellings of "finished" were in use:
+ * everything that sets a status uses 'Complete', and two places that read one
+ * compared against 'Done' -- so the Slack "Task Completed" post never fired
+ * and the daily digest counted every finished task as still open.
+ *
+ * Mirrors Task["status"] in frontend/src/lib/entities.ts.
+ */
+const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Complete'];
+
 async function isValidAssignee(id) {
   if (!id) return true;
   const user = await db.find('users', id);
@@ -127,11 +139,30 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
     const isOwnTask = req.user.role === 'employee' && task.assigneeId === req.user.id;
     if (!isManager && !isOwnTask) return res.status(403).json({ error: 'Not allowed to edit this task' });
 
-    const patch = isManager ? { ...req.body } : { status: req.body.status };
-    delete patch.id;
-    // The mirror's ids are ours to write, not the caller's.
-    delete patch.clickupTaskId;
-    delete patch.clickupTaskUrl;
+    /**
+     * The fields an edit may touch, named rather than subtracted.
+     *
+     * Spreading the body and deleting the dangerous keys only works while
+     * somebody remembers to add a `delete` every time a column is added --
+     * and `projectId` was never on that list, so a manager could move a task
+     * into another client's project with one request and the task would simply
+     * appear on a board it had nothing to do with.
+     */
+    const EDITABLE = ['name', 'assigneeId', 'status', 'priority', 'due'];
+    const patch = {};
+    if (isManager) {
+      for (const field of EDITABLE) {
+        if (field in req.body) patch[field] = req.body[field];
+      }
+    } else if ('status' in req.body) {
+      patch.status = req.body.status;
+    }
+
+    if (patch.status !== undefined && !TASK_STATUSES.includes(patch.status)) {
+      return res.status(400).json({
+        error: `A task status has to be one of: ${TASK_STATUSES.join(', ')}.`,
+      });
+    }
 
     if ('assigneeId' in patch && !(await isValidAssignee(patch.assigneeId))) {
       return res.status(400).json({ error: 'A task can only be assigned to a member of the team.' });
@@ -143,7 +174,10 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
     if (patch.status && patch.status !== task.status) {
       const project = await db.find('projects', task.projectId);
       if (project?.assignedPmId) await notify(project.assignedPmId, `Task "${task.name}" moved to ${patch.status}`, 'task');
-      if (patch.status === 'Done') {
+      // 'Complete' is what a task's status is actually set to -- see
+      // TASK_STATUSES. This read 'Done', which no task has ever been, so the
+      // "Task Completed" post has never once fired.
+      if (patch.status === 'Complete') {
         slack.notifySlack(`✅ *Task Completed:* "${task.name}"`);
       }
     }

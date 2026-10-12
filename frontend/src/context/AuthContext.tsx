@@ -33,24 +33,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
+    let cancelled = false;
+
+    /**
+     * Who this is, with a retry for everything that is not a 401.
+     *
+     * Only a 401 means "not signed in". Every other failure -- a 429 from the
+     * rate limiter, a 502 while a deploy swaps over, a network that dropped on
+     * a train -- says nothing about whether this person has a session, and the
+     * route guard read "no user" as "signed out" and showed the login screen.
+     * Somebody who was signed in a second ago then sees a sign-in form with no
+     * message and no retry, which looks exactly like having been logged out.
+     *
+     * So the transient cases back off and try again, and `ready` is only set
+     * once there is an answer worth acting on. Four attempts over about eight
+     * seconds, which outlasts a rate-limit window reset and a deploy.
+     */
     (async () => {
-      try {
-        const res = await api<{ user: User; capabilities?: Capabilities; csrfToken: string }>("GET", "/auth/me");
-        setCsrfToken(res.csrfToken);
-        setUser(res.user);
-        setCan(res.capabilities ?? NO_CAPABILITIES);
-        rememberSessionHint();
-      } catch (err) {
-        // A 401 is the server saying there is no session on this browser, which
-        // is the one thing that can retire the hint honestly. Anything else --
-        // the API being down, a network that dropped -- says nothing about
-        // whether this person is signed in, so the hint stands.
-        if (err instanceof ApiError && err.status === 401) clearSessionHint();
-        else console.error(err);
-      } finally {
-        setReady(true);
+      const BACKOFF_MS = [500, 1500, 4000];
+
+      for (let attempt = 0; attempt <= BACKOFF_MS.length; attempt += 1) {
+        if (cancelled) return;
+        try {
+          const res = await api<{ user: User; capabilities?: Capabilities; csrfToken: string }>("GET", "/auth/me");
+          if (cancelled) return;
+          setCsrfToken(res.csrfToken);
+          setUser(res.user);
+          setCan(res.capabilities ?? NO_CAPABILITIES);
+          rememberSessionHint();
+          break;
+        } catch (err) {
+          // A 401 is the server saying there is no session on this browser,
+          // which is the one thing that can retire the hint honestly, and the
+          // one answer there is no point retrying.
+          if (err instanceof ApiError && err.status === 401) {
+            clearSessionHint();
+            break;
+          }
+          console.error(err);
+          if (attempt === BACKOFF_MS.length) break;
+          await new Promise((resolve) => { setTimeout(resolve, BACKOFF_MS[attempt]); });
+        }
       }
+
+      if (!cancelled) setReady(true);
     })();
+
+    return () => { cancelled = true; };
   }, []);
 
   async function refreshUser() {

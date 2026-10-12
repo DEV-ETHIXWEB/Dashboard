@@ -196,6 +196,77 @@ const firestoreDb = {
     return rows.filter(predicate);
   },
 
+  /**
+   * The Postgres driver's `where`, with the equality criteria pushed into the
+   * Firestore query so the documents that do not match are never read.
+   *
+   * That is the whole point here: Firestore bills per document read, so a
+   * client's tickets page scanning the entire ticket collection is a line on
+   * an invoice as well as a slow page.
+   *
+   * Ordering and the limit are deliberately applied in memory rather than in
+   * the query. An equality filter combined with an `orderBy` on a different
+   * field needs a composite index in Firestore, and a missing one is a
+   * run-time failure on a live deployment rather than something that shows up
+   * in testing. The documents have already been narrowed by then, so sorting
+   * the handful that came back costs nothing worth having.
+   */
+  async where(collection, criteria = {}, {
+    limit = null, orderBy = null, direction = 'desc', select = null,
+  } = {}) {
+    let query = getDb().collection(collection);
+
+    for (const [key, value] of Object.entries(criteria)) {
+      if (!isWritableField(collection, key)) {
+        throw new Error(`db.where: ${collection}.${key} is not a column`);
+      }
+      query = query.where(key, '==', value);
+    }
+
+    /**
+     * The same projection as the SQL driver, and here it is worth more: a
+     * Firestore document is billed by the read, but a report's base64 contents
+     * still cross the network and sit in this process's memory for every row
+     * in the list. `select()` makes the server send only the named fields, and
+     * the document id travels with the snapshot regardless.
+     *
+     * A sort or a filter the caller asked for is applied in memory below, so
+     * any field those need has to be requested too -- the caller names them.
+     */
+    if (Array.isArray(select) && select.length) {
+      const wanted = [...new Set([...select, orderBy].filter(Boolean))].filter((f) => f !== 'id');
+      for (const field of wanted) {
+        if (!isWritableField(collection, field)) {
+          throw new Error(`db.where: ${collection}.${field} is not a column`);
+        }
+      }
+      if (wanted.length) query = query.select(...wanted);
+    }
+
+    const snap = await query.get();
+    let rows = snap.docs.map(docToObj);
+
+    if (orderBy) {
+      if (!isWritableField(collection, orderBy)) {
+        throw new Error(`db.where: ${collection}.${orderBy} is not a column`);
+      }
+      // Ascending, with a missing value counting as smaller than any real one.
+      // That is the same order the SQL side asks for with NULLS FIRST on an
+      // ascending sort and NULLS LAST on a descending one, so a row with no
+      // timestamp lands in the same place on both drivers.
+      const ascending = (x, y) => {
+        if (x == null && y == null) return 0;
+        if (x == null) return -1;
+        if (y == null) return 1;
+        return x < y ? -1 : x > y ? 1 : 0;
+      };
+      const dir = direction === 'asc' ? 1 : -1;
+      rows = rows.slice().sort((a, b) => dir * ascending(a[orderBy], b[orderBy]));
+    }
+
+    return limit == null ? rows : rows.slice(0, Number(limit));
+  },
+
   async recent(collection, limit = 100) {
     const snap = await getDb()
       .collection(collection)
@@ -498,6 +569,54 @@ const firestoreDb = {
   },
 
   /** See the Postgres driver: take one queued message, once. */
+  /**
+   * The Postgres driver's `claimStatus`, as a transaction: move a row from
+   * one status to another and tell exactly one caller it was theirs to move.
+   */
+  async claimStatus(collection, id, fromStatus, patch = {}) {
+    const ref = getDb().collection(collection).doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data.status !== fromStatus) return null;
+      const clean = sanitize(collection, patch);
+      tx.update(ref, clean);
+      return { id: doc.id, ...data, ...clean };
+    });
+  },
+
+  /**
+   * The Postgres driver's `claimField`: move a row only if the named field is
+   * still empty, and tell exactly one caller it was theirs to move. The claim
+   * a held update request needs, which has no status column to key on.
+   */
+  async claimField(collection, id, field, patch = {}) {
+    const ref = getDb().collection(collection).doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data[field] !== null && data[field] !== undefined) return null;
+      const clean = sanitize(collection, patch);
+      tx.update(ref, clean);
+      return { id: doc.id, ...data, ...clean };
+    });
+  },
+
+  /** The Postgres driver's `claimOtp`, as a transaction: one code, one session. */
+  async claimOtp(id) {
+    const ref = getDb().collection('otp_codes').doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data.consumed === true) return null;
+      tx.update(ref, { consumed: true });
+      return { id: doc.id, ...data, consumed: true };
+    });
+  },
+
   async claimOutboxMessage(id) {
     const ref = getDb().collection('outbox').doc(String(id));
     return getDb().runTransaction(async (tx) => {

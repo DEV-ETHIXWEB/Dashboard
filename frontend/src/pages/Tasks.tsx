@@ -352,6 +352,7 @@ export default function Tasks() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search tasks or projects..."
+            aria-label="Search tasks and projects"
             className="pl-9 h-9 border-none bg-transparent focus-visible:ring-0 text-xs"
           />
           {search && (

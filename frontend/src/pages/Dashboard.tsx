@@ -70,10 +70,18 @@ export default function Dashboard() {
   const openTickets = (tickets ?? []).filter((t) => !["Resolved", "Closed"].includes(t.status));
   const activeProjects = (projects ?? []).filter((p) => p.status !== "Complete");
   const daysLeft = (iso: string) => Math.round((new Date(iso).getTime() - Date.now()) / 86_400_000);
-  const expiringDomains = (domains ?? []).filter((d) => {
-    const days = daysLeft(d.expiresAt);
-    return days > 0 && days < RENEWAL_WARNING_DAYS;
-  });
+  /**
+   * Domains that need somebody to look at them.
+   *
+   * `days > 0` used to exclude the ones that had already expired, so a site
+   * whose registration ran out last week counted as fine and the tile said
+   * "All up to date" -- the one case where the warning matters most was the
+   * one case it could not report.
+   */
+  const expiringDomains = (domains ?? []).filter(
+    (d) => daysLeft(d.expiresAt) < RENEWAL_WARNING_DAYS,
+  );
+  const expiredDomains = (domains ?? []).filter((d) => daysLeft(d.expiresAt) <= 0);
 
   if (isLoading) return <DashboardSkeleton />;
 
@@ -208,7 +216,13 @@ export default function Dashboard() {
           className={bento(1)}
           label="Websites"
           value={domains?.length ?? 0}
-          hint={expiringDomains.length > 0 ? `${expiringDomains.length} renewing soon` : "All up to date"}
+          hint={
+            expiredDomains.length > 0
+              ? `${expiredDomains.length} expired`
+              : expiringDomains.length > 0
+                ? `${expiringDomains.length} expiring soon`
+                : "All up to date"
+          }
           icon={Globe}
           to="/portal/domains"
         />

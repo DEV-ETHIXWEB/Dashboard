@@ -400,7 +400,18 @@ async function sendViaWebhook({ to, subject, text, html }) {
  * The row still exists -- who it went to, when, whether it was delivered --
  * because that is what the page is for. Only the body is dropped.
  */
-const UNLOGGED_BODIES = new Set(['credentials', 'login_code']);
+const UNLOGGED_BODIES = new Set([
+  'credentials',
+  'login_code',
+  // An activation or reset link is a working credential for as long as it
+  // lives. This is the email a new account now actually receives -- the
+  // plaintext `credentials` one above is only a fallback -- so leaving its
+  // body on the Mail page would move the problem rather than fix it.
+  'account_activation',
+  'password_reset',
+  // The link that moves an account to a new address. Opening it is the change.
+  'confirm_email_change',
+]);
 
 /**
  * Templates that are never queued.

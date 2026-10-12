@@ -393,6 +393,7 @@ export default function Team() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search name, email, or company..."
+            aria-label="Search the team"
             className="pl-9 h-9 border-none bg-transparent focus-visible:ring-0 text-xs"
           />
           {search && (

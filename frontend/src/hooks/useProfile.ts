@@ -80,13 +80,22 @@ export function useChangePassword() {
   });
 }
 
-/** Update the name or email on your own account. */
+/**
+ * Update the name or email on your own account.
+ *
+ * Changing the address needs the current password, and does not take effect
+ * here: the server parks it and emails a confirmation link to the new inbox,
+ * so a borrowed session cannot move the account to an address its holder
+ * controls and then take it over through forgot-password. The response says
+ * which address is waiting, which is what the screen has to show instead of
+ * the new one.
+ */
 export function useUpdateOwnDetails() {
   const qc = useQueryClient();
   const { refreshUser } = useAuth();
   return useMutation({
-    mutationFn: (body: { name?: string; email?: string }) =>
-      api<{ user: User }>("PUT", "/users/me", body),
+    mutationFn: (body: { name?: string; email?: string; currentPassword?: string }) =>
+      api<{ user: User; emailChangePending: string | null }>("PUT", "/users/me", body),
     onSuccess: async () => {
       await refreshUser();
       qc.invalidateQueries({ queryKey: ["profile"] });
