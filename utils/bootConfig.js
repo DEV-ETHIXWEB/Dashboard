@@ -34,7 +34,8 @@
 /** Whether a Firestore service account is configured. Mirrors db/firestore.js. */
 function firestoreConfigured() {
   return Boolean(
-    process.env.FIREBASE_SERVICE_ACCOUNT
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+    || process.env.FIREBASE_SERVICE_ACCOUNT
     || process.env.GOOGLE_APPLICATION_CREDENTIALS
     || process.env.FIREBASE_PROJECT_ID,
   );
