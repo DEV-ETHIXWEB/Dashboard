@@ -19,7 +19,7 @@
   "crons": [
     {
       "path": "/api/outbox/sweep",
-      "schedule": "*/2 * * * *"
+      "schedule": "0 5 * * *"
     },
     {
       "path": "/api/mail/cron/service-sweep",
@@ -27,7 +27,7 @@
     },
     {
       "path": "/api/membership/cron/sweep",
-      "schedule": "17 * * * *"
+      "schedule": "17 6 * * *"
     }
   ],
   "headers": [
