@@ -16,6 +16,9 @@ const slaWatch = require('../utils/slaWatch');
 const ticketStatus = require('../utils/ticketStatus');
 const updateRequests = require('../utils/updateRequests');
 const upsellTracking = require('../utils/upsell');
+const plans = require('../lib/plans');
+const subscriptions = require('../utils/subscriptions');
+const membershipEvents = require('../utils/membershipEvents');
 
 router.use(requireAuth);
 router.use(requirePage('tickets'));
@@ -152,9 +155,26 @@ router.get('/stages', (req, res) => res.json({ stages: workflow.STAGES }));
  */
 router.get('/queued', async (req, res, next) => {
   try {
-    const clientId = req.user.role === 'client' ? req.user.id : req.query.clientId;
+    if (req.user.role === 'client') {
+      return res.json({ queued: await updateRequests.queuedFor(req.user.id) });
+    }
+
+    /**
+     * A held request is the full text of something a client has not agreed to
+     * have done yet, named with the client it belongs to. Any signed-in staff
+     * account could read any client's -- sales, an employee working one
+     * unrelated ticket, anybody -- which is a wider audience than the ticket
+     * itself has, because a ticket at least has an assignee and a
+     * collaborator list.
+     *
+     * Admins and project managers run the queue and need it. Nobody else does.
+     */
+    if (!['admin', 'project_manager'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Held requests are not part of your role.' });
+    }
+
+    const clientId = req.query.clientId;
     if (!clientId) return res.json({ queued: [] });
-    if (req.user.role === 'client' && clientId !== req.user.id) return res.json({ queued: [] });
 
     res.json({ queued: await updateRequests.queuedFor(clientId) });
   } catch (err) {
@@ -181,8 +201,20 @@ router.delete('/queued/:id', requireCSRF, async (req, res, next) => {
 
 router.post('/', requireCSRF, async (req, res, next) => {
   try {
-    const { subject, category, description } = req.body || {};
-    if (!subject) return res.status(400).json({ error: 'subject is required' });
+    /**
+     * The body, checked before a single decision is taken on it.
+     *
+     * The category decides two things that cost money -- whether the plan
+     * allows the request at all, and whether it spends one of the month's
+     * updates -- and it was taken as whatever arrived. `{ category: ['Site
+     * down'] }` stringified to exactly the label that means "do not count
+     * this", so a Managed client could file unlimited uncounted change
+     * requests by wrapping the category in an array. The subject and
+     * description were unbounded besides.
+     */
+    const fields = intake.validateTicketFields(req.body || {});
+    if (!fields.ok) return res.status(400).json({ error: fields.error });
+    const { subject, category, description } = fields.value;
 
     const clientId = req.user.role === 'client' ? req.user.id : req.body.clientId;
     if (!clientId) return res.status(400).json({ error: 'clientId is required' });
@@ -206,7 +238,7 @@ router.post('/', requireCSRF, async (req, res, next) => {
 
       if (!gate.ok && req.body.queueForNextPeriod === true && gate.reason === 'allowance_used') {
         const held = await updateRequests.queue(clientId, {
-          subject, category, description, priority: req.body.priority,
+          subject, category, description, priority: fields.value.priority,
           releaseAt: gate.resetsAt,
         });
         res.locals.liveAudience = [clientId];
@@ -252,6 +284,14 @@ router.post('/', requireCSRF, async (req, res, next) => {
       if (payingExtra) {
         await updateRequests.consumeExtra(clientId, gate.state);
         gate = { ...gate, ok: true, counts: false, extra: true };
+      } else if (gate.tracked) {
+        // An outage, a billing query or a question. It does not spend the
+        // allowance and never will -- but it is counted, because these are the
+        // categories a client declares for themselves and an improbable number
+        // of them in one month is something the team should be told about.
+        // Not awaited: it is bookkeeping, and the request is the answer.
+        void updateRequests.consumeNonUpdate(clientId, gate.state, { category })
+          .catch(() => {});
       } else if (gate.counts) {
         // Atomic, and the last line of defence: if two requests were submitted
         // in the same second, the second one loses here rather than quietly
@@ -272,10 +312,22 @@ router.post('/', requireCSRF, async (req, res, next) => {
       }
     }
 
-    const priority = intake.normalizePriority(req.body.priority);
-    const ticket = await db.insert('tickets', {
-      id: await intake.nextTicketId(),
-      subject, category: category || 'General', clientId, assigneeId: null,
+    /**
+     * The priority a client actually gets, capped by their plan.
+     *
+     * Unlimited is sold on "priority support with a guaranteed response time",
+     * and until now every client could reach for it: Urgent was in the
+     * dropdown on every plan and bought a one-hour response target. Staff are
+     * not capped, and an outage is not capped on any plan.
+     */
+    let priorityCap = null;
+    if (req.user.role === 'client') {
+      priorityCap = plans.capPriority(gate.state?.effectivePlanKey, fields.value.priority, { category });
+    }
+    const priority = priorityCap ? priorityCap.priority : fields.value.priority;
+
+    const ticket = await intake.insertTicket({
+      subject, category, clientId, assigneeId: null,
       status: 'Open', description: description || '', createdAt: new Date().toISOString(),
       priority, responseDueAt: intake.responseDueAt(priority), firstResponseAt: null,
     });
@@ -287,7 +339,26 @@ router.post('/', requireCSRF, async (req, res, next) => {
     // and over email -- all handled in one place.
     const routed = await intake.onTicketCreated(ticket);
 
-    res.status(201).json({ ticket: routed, chargedAsExtra: Boolean(gate.extra) });
+    res.status(201).json({
+      ticket: routed,
+      chargedAsExtra: Boolean(gate.extra),
+      // Said plainly rather than silently applied: a client who chose Urgent
+      // and sees "Normal" on their ticket with no explanation has been lied
+      // to by a form. This is also the one upgrade prompt that arrives at the
+      // exact moment the thing being sold would have helped.
+      ...(priorityCap?.capped
+        ? {
+          priorityCapped: {
+            requested: fields.value.priority,
+            applied: priorityCap.priority,
+            message: `Your plan covers up to ${priorityCap.ceiling} priority, so this came in as `
+              + `${priorityCap.priority}. Unlimited includes priority support with a guaranteed `
+              + 'response time -- and an outage always comes in as urgent, whatever your plan.',
+            recommended: 'unlimited',
+          },
+        }
+        : {}),
+    });
   } catch (err) {
     next(err);
   }
@@ -317,12 +388,71 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
       }
     }
 
-    const patch = isStaff ? { ...req.body } : { description: req.body.description };
-    delete patch.id;
-    delete patch.createdAt;
-    // The ClickUp link is owned by the mirroring code, never by the client.
-    delete patch.clickupTaskId;
-    delete patch.clickupTaskUrl;
+    /**
+     * The text fields on an edit, held to the same rules as on creation.
+     *
+     * A category refused at creation could be set on the next PUT, which with
+     * a billing rule on the other side of it is the same hole one request
+     * later. Nothing in the body is required here -- a patch that does not
+     * mention the subject is leaving it alone -- but anything that *is*
+     * mentioned has to be a real value.
+     */
+    const edited = intake.validateTicketFields(req.body || {}, {
+      requireSubject: false, requireCategory: false,
+    });
+    if (!edited.ok) return res.status(400).json({ error: edited.error });
+
+    /**
+     * The fields an edit may touch, named rather than subtracted.
+     *
+     * Spreading the body and deleting the dangerous keys works only while
+     * somebody remembers to add a `delete` for every column that gets added,
+     * and several were never on that list: `responseDueAt` let a member of
+     * staff move their own SLA deadline, `firstResponseAt` let them rewrite
+     * whether they had answered at all, and `status` was free text, so a
+     * ticket could be put into a state nothing else in the product
+     * understands.
+     */
+    const EDITABLE = [
+      'subject', 'description', 'category', 'status', 'priority',
+      'assigneeId', 'clientId', 'progress', 'stage',
+    ];
+    const patch = {};
+    if (isStaff) {
+      for (const field of EDITABLE) {
+        if (field in req.body) patch[field] = req.body[field];
+      }
+    } else if ('description' in req.body) {
+      // A client may correct what they asked for and nothing else.
+      patch.description = req.body.description;
+    }
+
+    // Whatever survives is the cleaned version, not the raw body.
+    if ('subject' in patch) patch.subject = edited.value.subject;
+    if ('description' in patch) patch.description = edited.value.description;
+    if ('category' in patch) patch.category = edited.value.category;
+
+    if (patch.status !== undefined && !ticketStatus.STATUSES.includes(patch.status)) {
+      return res.status(400).json({
+        error: `A ticket status has to be one of: ${ticketStatus.STATUSES.join(', ')}.`,
+      });
+    }
+
+    /**
+     * A ticket belongs to somebody on the team, or to nobody.
+     *
+     * `assigneeId` was written straight through, so a ticket could be assigned
+     * to a client -- who would then be notified that a ticket was "theirs" and
+     * could see it in their own queue -- or to an id belonging to nobody, in
+     * which case it silently stopped being anybody's job. The tasks route has
+     * validated this all along; tickets never did.
+     */
+    if ('assigneeId' in patch && patch.assigneeId) {
+      const assignee = await db.find('users', patch.assigneeId);
+      if (!assignee || !['admin', 'project_manager', 'employee'].includes(assignee.role)) {
+        return res.status(400).json({ error: 'A ticket can only be assigned to a member of the team.' });
+      }
+    }
 
     // Which client a ticket belongs to decides which portal shows it. Moving a
     // ticket sideways puts one client's support request in front of another,
@@ -367,6 +497,48 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
       if (gate.held) return;
     }
 
+    /**
+     * Staff deciding this was a change request after all.
+     *
+     * The categories that do not count -- an outage, a billing query, a
+     * question -- are the ones a client declares for themselves, so the way to
+     * get free change work on a capped plan was to file it as one of those.
+     * Refusing outages is not an option and never will be. Correcting the
+     * record is: when somebody on the team moves a ticket from an uncounted
+     * category to a real one, that is the moment it becomes a change request,
+     * and it spends the allowance then.
+     *
+     * Only for a client's own capped plan, only in that direction, and only by
+     * staff -- a client cannot re-categorise their way out of it, because the
+     * branch above has already narrowed their patch to the description.
+     */
+    let recategorised = null;
+    if (isStaff && patch.category && patch.category !== ticket.category && ticket.clientId) {
+      const wasFree = !plans.isUpdateRequest(ticket.category);
+      const nowCounts = plans.isUpdateRequest(patch.category);
+      if (wasFree && nowCounts) {
+        const client = await db.find('users', ticket.clientId);
+        if (client?.role === 'client') {
+          const state = await subscriptions.stateFor(client);
+          const plan = plans.planFor(state.effectivePlanKey);
+          if (plan && plan.updateRequestsPerMonth !== null && plan.updateRequestsPerMonth > 0) {
+            // Inside the allowance, it comes off it. Past the allowance it is
+            // an extra, which is what a Managed client is charged for anyway --
+            // either way the work is now counted and neither one refuses a
+            // ticket the team has already taken on.
+            const took = await updateRequests.consume(ticket.clientId, state);
+            if (!took) await updateRequests.consumeExtra(ticket.clientId, state);
+            recategorised = { from: ticket.category, to: patch.category, charged: took ? 'allowance' : 'extra' };
+            await membershipEvents.log('request_recategorised', {
+              clientId: ticket.clientId,
+              actorId: req.user.id,
+              metadata: { ticketId: ticket.id, ...recategorised },
+            });
+          }
+        }
+      }
+    }
+
     const updated = await db.update('tickets', req.params.id, patch);
     // Tell this client's open tabs, not everyone's -- and when the ticket has
     // changed hands, both sides, or the new owner's tabs never hear that it
@@ -375,6 +547,7 @@ router.put('/:id', requireCSRF, async (req, res, next) => {
     await audit(req.user.id, 'update', 'ticket', req.params.id, {
       changed: Object.keys(patch),
       ...(movingClient ? { clientFrom: ticket.clientId, clientTo: updated.clientId } : {}),
+      ...(recategorised ? { recategorised } : {}),
     });
 
     // Any staff touch counts as the first response.

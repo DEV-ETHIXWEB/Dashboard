@@ -21,6 +21,18 @@ const messages = require('./emailMessages');
 const live = require('./liveBus');
 
 /** The statuses that mean "we are finished here", and need the client told. */
+/**
+ * Every state a ticket can be in, and nothing else.
+ *
+ * Written down because the edit route used to take `status` as free text, so a
+ * ticket could be put into a state no screen renders, no filter matches and
+ * `isClosing` has never heard of -- which also meant the client notification
+ * and the ClickUp mirror below silently did the wrong thing.
+ *
+ * Mirrors Ticket["status"] in frontend/src/lib/entities.ts.
+ */
+const STATUSES = ['Open', 'In Progress', 'Resolved', 'Closed'];
+
 const CLOSING_STATUSES = ['Resolved', 'Closed'];
 
 function isClosing(status) {
@@ -102,4 +114,6 @@ async function applyStatusChange({ ticketId, toStatus, actor, patch = {} }) {
   return { ticket: updated, fromStatus, announced };
 }
 
-module.exports = { CLOSING_STATUSES, isClosing, syncToClickUp, announce, applyStatusChange };
+module.exports = {
+  STATUSES, CLOSING_STATUSES, isClosing, syncToClickUp, announce, applyStatusChange,
+};

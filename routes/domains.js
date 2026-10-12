@@ -40,7 +40,13 @@ router.post('/', requireCSRF, requireRole('admin', 'sales', 'project_manager'), 
     const domain = await db.insert('domains', {
       clientId, domainName, platform: platform || 'Custom', hostingProvider: hostingProvider || 'Not set',
       hostingRegion: hostingRegion || '', registrar: registrar || 'Registered externally',
-      sslStatus: 'Valid', expiresAt: expiresAt || '', autoRenew: false, dnsStatus: 'Propagated',
+      // 'Unknown', not 'Valid' and 'Propagated'. Both of those were written on
+      // creation without anything having looked at the certificate or the DNS,
+      // so a client opened their Websites page and read a green certificate
+      // claim about a domain nobody had checked -- which is worse than saying
+      // nothing, because they would act on it. The watcher sets the real value
+      // once it has actually looked.
+      sslStatus: 'Unknown', expiresAt: expiresAt || '', autoRenew: false, dnsStatus: 'Unknown',
       notes: notes || '',
     });
     // Tell this client's open tabs, not everyone's.
@@ -56,12 +62,35 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
   try {
     const domain = await db.find('domains', req.params.id);
     if (!domain) return res.status(404).json({ error: 'Domain not found' });
-    const patch = { ...req.body };
-    delete patch.id;
+    /**
+     * The fields an edit may touch, named rather than subtracted.
+     *
+     * Spreading the body meant every column was writable by any of the three
+     * roles that reach this route, including the ones a watcher owns: a PUT
+     * could set `sslStatus: 'Valid'` on a domain with an expired certificate
+     * and the client's page would say so.
+     */
+    const EDITABLE = [
+      'clientId', 'domainName', 'platform', 'hostingProvider', 'hostingRegion',
+      'registrar', 'expiresAt', 'autoRenew', 'notes',
+    ];
+    const patch = {};
+    for (const field of EDITABLE) {
+      if (field in req.body) patch[field] = req.body[field];
+    }
 
-    // Same rule as projects: a domain row is shown in one client's portal, so
-    // the owner it is moved to has to be a real client account.
+    /**
+     * Moving a domain to another client is an admin's decision.
+     *
+     * The same rule tickets already follow, and for the same reason: the
+     * client a row belongs to decides whose portal shows it, so moving one
+     * puts a customer's hosting details in front of a different customer.
+     * Sales could do it with one request.
+     */
     const movingClient = 'clientId' in patch && patch.clientId !== domain.clientId;
+    if (movingClient && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only an admin can move a domain to a different client.' });
+    }
     if (movingClient) {
       const nextClient = await db.find('users', patch.clientId);
       if (!nextClient || nextClient.role !== 'client') {
@@ -82,18 +111,39 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
   }
 });
 
-router.post('/:id/renew', requireCSRF, requireRole('admin', 'sales', 'project_manager'), async (req, res, next) => {
+/**
+ * Record that a renewal happened. It does not perform one.
+ *
+ * Nothing here talks to a registrar and nothing ever has -- this moves a date
+ * in our own records so the expiry warnings stop firing for a domain somebody
+ * has already renewed elsewhere. It was called "Renew", which reads as an
+ * action on the domain itself, and it also set `sslStatus: 'Valid'`, asserting
+ * something about a certificate it had not looked at.
+ *
+ * The date is stored as ISO. It used to be written as 'Oct 10, 2027' -- a
+ * different format from every other date in the column, so every comparison
+ * against it (the expiry warnings included) was a string comparison against a
+ * shape it did not recognise.
+ */
+router.post('/:id/record-renewal', requireCSRF, requireRole('admin', 'sales', 'project_manager'), async (req, res, next) => {
   try {
     const domain = await db.find('domains', req.params.id);
     if (!domain) return res.status(404).json({ error: 'Domain not found' });
+
+    // From the date it expires, or from today when that is unreadable --
+    // a renewal extends the term it had rather than starting one now.
     let current = new Date(domain.expiresAt);
-    if (isNaN(current.getTime())) current = new Date();
-    current.setFullYear(current.getFullYear() + 1);
-    const expiresAt = current.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    const updated = await db.update('domains', req.params.id, { expiresAt, sslStatus: 'Valid' });
+    if (Number.isNaN(current.getTime())) current = new Date();
+
+    const years = Number(req.body?.years);
+    const span = Number.isFinite(years) && years >= 1 && years <= 10 ? Math.round(years) : 1;
+    current.setFullYear(current.getFullYear() + span);
+
+    const expiresAt = current.toISOString();
+    const updated = await db.update('domains', req.params.id, { expiresAt });
     // Tell this client's open tabs, not everyone's.
     res.locals.liveAudience = [domain.clientId];
-    await audit(req.user.id, 'renew', 'domain', req.params.id);
+    await audit(req.user.id, 'renew', 'domain', req.params.id, { expiresAt, years: span });
     res.json({ domain: updated });
   } catch (err) {
     next(err);

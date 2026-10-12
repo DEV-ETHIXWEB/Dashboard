@@ -107,8 +107,8 @@ export default function Privacy() {
         />
         <p>
           Email{" "}
-          <a href="mailto:yash@ethixweb.com" className="text-link underline underline-offset-2">
-            yash@ethixweb.com
+          <a href="mailto:support@ethixweb.com" className="text-link underline underline-offset-2">
+            support@ethixweb.com
           </a>{" "}
           and we will answer.
         </p>

@@ -169,10 +169,60 @@ eq('Unlimited is never sold anything', plans.recommendedUpgradeFor('unlimited'),
 
 console.log('\nplans: ticket categories');
 
-eq('Basic can report an outage or ask about billing, nothing else',
-  (plans.planFor('basic').ticketCategories || []).join(','), 'Site down,Billing');
+// An outage, a billing query and a question. Not "nothing else": being unable
+// to ask a question is the one refusal here that reads as a product that does
+// not want to hear from you, and a question is not a change to the site.
+eq('Basic can report an outage, ask about billing, or ask a question',
+  (plans.planFor('basic').ticketCategories || []).join(','), 'Site down,Billing,Question');
 eq('Managed has every category', plans.planFor('managed').ticketCategories, null);
 eq('Unlimited has every category', plans.planFor('unlimited').ticketCategories, null);
+
+check('Basic cannot file a change request', !plans.canFileCategory('basic', 'Website'));
+check('Basic can ask a question', plans.canFileCategory('basic', 'Question'));
+check('a question is never counted against an allowance', !plans.isUpdateRequest('Question'));
+check('"Other" is a change request, and is counted', plans.isUpdateRequest('Other'));
+
+console.log('\nplans: a category has to be a category');
+
+// The category decides whether a request is allowed and whether it spends an
+// update, so anything that is not one of the listed strings has to be refused
+// rather than coerced. `String(['Site down'])` is 'Site down', which is how
+// wrapping the category in an array bought a Managed client an uncounted
+// change request.
+eq('an array is not a category', plans.canonicalCategory(['Site down']), null);
+eq('an object is not a category', plans.canonicalCategory({ toString: () => 'Site down' }), null);
+eq('a number is not a category', plans.canonicalCategory(7), null);
+eq('null is not a category', plans.canonicalCategory(null), null);
+eq('an unlisted label is not a category', plans.canonicalCategory('Free work please'), null);
+eq('case and spacing do not matter', plans.canonicalCategory('  site DOWN '), 'Site down');
+check('an array cannot be filed on any plan', !plans.canFileCategory('managed', ['Site down']));
+check('an array cannot dodge the allowance', plans.isUpdateRequest(['Website']));
+eq('every listed category is one', plans.TICKET_CATEGORIES.filter((c) => !plans.isTicketCategory(c)).length, 0);
+
+console.log('\nplans: a credit bigger than the bill is not lost');
+
+// Twelve months of Managed credited against one month of Unlimited. The bill
+// is $29 and the credit is about $182, and the first cut of this clamped the
+// credit to the price and threw the remaining ~$152 away.
+{
+  const oneMonth = plans.amountFor('unlimited', 1);
+  const split = plans.applyCredit('unlimited', 1, oneMonth, 181.90, new Date('2026-03-01T00:00:00Z'));
+  eq('the bill is covered in full', split.amountUsd, 0);
+  eq('only the price itself is applied', split.creditAppliedUsd, oneMonth);
+  eq('the rest is carried, not burned', split.creditCarriedUsd, plans.money(181.90 - oneMonth));
+  check('and it buys real days', split.bonusDays > 150, `got ${split.bonusDays} days`);
+
+  // A credit smaller than the bill behaves exactly as it always did.
+  const small = plans.applyCredit('unlimited', 1, oneMonth, 10, new Date('2026-03-01T00:00:00Z'));
+  eq('a small credit comes off the price', small.amountUsd, plans.money(oneMonth - 10));
+  eq('and carries nothing', small.creditCarriedUsd, 0);
+  eq('and buys no days', small.bonusDays, 0);
+
+  // No credit at all is the ordinary case and must not move the price.
+  const none = plans.applyCredit('managed', 12, plans.amountFor('managed', 12), 0);
+  eq('no credit leaves the list price alone', none.amountUsd, plans.amountFor('managed', 12));
+  eq('and carries nothing', none.creditCarriedUsd, 0);
+}
 
 console.log('\nplans: locked panels');
 

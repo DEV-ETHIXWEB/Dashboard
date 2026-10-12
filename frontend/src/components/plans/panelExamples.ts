@@ -27,7 +27,18 @@ export interface PanelCopy {
   description: string;
   /** One line on why it is worth paying for. Shown only in the locked state. */
   benefit: string;
-  /** What a paying client sees before we have logged anything. */
+  /**
+   * What a paying client sees before we have logged anything.
+   *
+   * These used to promise a schedule: "your first backup appears within a
+   * day", "monitoring starts within a day of your plan", "your first scan runs
+   * within a week". Nothing in this application runs any of that -- the panels
+   * show rows a member of staff enters by hand -- so every one of them was a
+   * commitment the product could not keep, made to the client at the exact
+   * moment they were looking for evidence it was being kept.
+   *
+   * They now say what is true: this is where the work gets written up.
+   */
   empty: string;
   examples: PanelExample[];
 }
@@ -38,7 +49,7 @@ export const PANEL_COPY: Record<string, PanelCopy> = {
     description: "A copy of your whole site, taken every day.",
     benefit:
       "If anything goes wrong, we put yesterday's site back. Without backups, a bad update means rebuilding.",
-    empty: "No backups recorded yet. Your first one appears here within a day.",
+    empty: "No backups recorded yet. Each one we take is logged here.",
     examples: [
       { title: "Full site backup", detail: "Files and database", when: "Yesterday", status: "Stored" },
       { title: "Full site backup", detail: "Files and database", when: "2 days ago", status: "Stored" },
@@ -51,7 +62,7 @@ export const PANEL_COPY: Record<string, PanelCopy> = {
     description: "We check your site is answering, around the clock.",
     benefit:
       "If your site goes down at 2am, we know before your customers do. Nobody has to notice and call us.",
-    empty: "No checks recorded yet. Monitoring starts within a day of your plan.",
+    empty: "No checks recorded yet. We write up what we find here.",
     examples: [
       { title: "All checks passed", detail: "Checked every 5 minutes", when: "Last 30 days", status: "100%" },
       { title: "Brief slowdown", detail: "Recovered on its own after 2 minutes", when: "Last month", status: "Resolved" },
@@ -63,7 +74,7 @@ export const PANEL_COPY: Record<string, PanelCopy> = {
     description: "Firewall, malware scans and security patches.",
     benefit:
       "Most sites are attacked by machines, not people, and the fix is cheap before and expensive after.",
-    empty: "No scans recorded yet. Your first scan runs within a week.",
+    empty: "No scans recorded yet. Each scan and patch is written up here.",
     examples: [
       { title: "Malware scan", detail: "Nothing found", when: "This week", status: "Clean" },
       { title: "Security patch applied", detail: "Contact form library", when: "Last month", status: "Patched" },
@@ -89,7 +100,7 @@ export const PANEL_COPY: Record<string, PanelCopy> = {
     description: "How fast your site loads, and what we did about it.",
     benefit:
       "A slow site loses people before it has said anything. We keep it quick as it grows.",
-    empty: "No performance checks recorded yet. Your first one runs within a week.",
+    empty: "No performance work logged yet. We write up each change here.",
     examples: [
       { title: "Images compressed", detail: "Home page now loads about a second faster", when: "This month" },
       { title: "Page speed check", detail: "Home page, mobile", when: "This month", status: "Good" },

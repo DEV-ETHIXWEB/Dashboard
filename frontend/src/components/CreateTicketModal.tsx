@@ -7,6 +7,7 @@ import {
   Megaphone,
   CreditCard,
   HelpCircle,
+  MessageCircleQuestion,
   Send,
   User,
   Sparkles,
@@ -48,7 +49,12 @@ const CATEGORIES = [
   // NON_UPDATE_CATEGORIES in lib/plans.js.
   { name: "Site down", icon: Siren, description: "Your site is offline or unreachable" },
   { name: "Billing", icon: CreditCard, description: "Invoices, payments, or subscriptions" },
-  { name: "Other", icon: HelpCircle, description: "General inquiries & support" },
+  // A question is not work on the site, so it costs nobody an update and is
+  // open on every plan including Basic. Without it, a hosting-only client had
+  // no way to ask us anything at all -- "Other" is a change request and is
+  // counted, which on Basic's allowance of none meant refused.
+  { name: "Question", icon: MessageCircleQuestion, description: "Ask us something, nothing to change" },
+  { name: "Other", icon: HelpCircle, description: "A change that fits nothing above" },
 ];
 
 /** Mirrors RESPONSE_HOURS in utils/ticketIntake.js. */

@@ -1035,6 +1035,122 @@ function renewalReminder({ clientName, planName, periodLabel, amountUsd, renewsA
 }
 
 /**
+ * How to pay us.
+ *
+ * The renewal reminder has been promising this in as many words -- "we will
+ * send payment details nearer the date" -- and nothing sent it. Under
+ * PAYMENT_MODE=manual that is the one message without which the whole flow
+ * stops: a client who has chosen a plan, or whose period has just ended, is
+ * willing to pay and has no idea where to send the money.
+ *
+ * The details themselves are a bank account, so they cannot live in code and
+ * are not invented here. They arrive from PAYMENT_INSTRUCTIONS and
+ * PAYMENT_LINK in the environment, and utils/subscriptions.js does not send
+ * this email at all when neither is set -- it tells the team to do it by hand
+ * instead, which is the honest version of what the application can promise.
+ *
+ * `kind` changes one sentence and nothing else. "Here is how to pay for the
+ * plan you chose" and "your period has ended, here is how to renew" are the
+ * same email to somebody holding a bank app, and splitting them into two
+ * templates is how the two drift apart.
+ */
+function paymentDetails({
+  clientName, planName, periodLabel, amountUsd, creditUsd = 0,
+  kind = 'new', instructions = null, reference = null,
+}) {
+  const amount = money(amountUsd, 'usd');
+  const base = baseUrl();
+
+  const opening = kind === 'renewal'
+    ? `Your ${planName} plan has come up for renewal. Here is how to pay for the next ${periodLabel}.`
+    : kind === 'scheduled'
+      ? `The period you had already paid for has ended, so your ${planName} plan is ready to `
+        + 'start. Here is how to pay for it.'
+      : `Thanks for choosing ${planName}. Here is how to pay, and we will start as soon as it lands.`;
+
+  // Named for the client's sake, not ours. A bank transfer with no reference
+  // on it is a payment somebody has to match up by hand, and the one most
+  // likely to be marked as paid late.
+  const referenceLine = reference ? `Please use ${reference} as the payment reference.` : null;
+
+  return {
+    subject: kind === 'renewal'
+      ? `Renewing your ${planName} plan: ${amount} USD`
+      : `Payment details for your ${planName} plan: ${amount} USD`,
+    html: t.renderEmail({
+      preheader: `${amount} USD for ${periodLabel}. Details inside.`,
+      eyebrow: kind === 'renewal' ? 'Renewal' : 'Payment details',
+      hero: 'badge-payment',
+      title: `${amount} USD for your ${planName} plan`,
+      blocks: [
+        t.paragraph(`Hi ${clientName || 'there'}. ${opening}`, { align: 'justify' }),
+        statBand({
+          label: 'Amount due',
+          value: `${amount} USD`,
+          sub: `${planName} plan, ${periodLabel}`,
+        }),
+        creditUsd > 0
+          ? t.paragraph(
+            `That is after ${money(creditUsd, 'usd')} credited for the time you had already paid for.`,
+            { muted: true, size: 13 },
+          )
+          : '',
+        instructions?.text
+          ? t.callout({ tone: 'info', title: 'Where to send it', body: instructions.text, mono: true })
+          : '',
+        referenceLine ? t.paragraph(referenceLine, { align: 'justify', muted: true, size: 13 }) : '',
+        // Said plainly, because it is the question a client asks next and the
+        // answer that makes paying feel safe: the plan is not running yet.
+        t.paragraph(
+          'Your plan starts the moment we confirm the payment, and you will get a confirmation '
+          + 'email the same day. Nothing is charged automatically and nothing is stored on file.',
+          { align: 'justify' },
+        ),
+        t.paragraph('Questions, or want a different plan? Just reply to this email.', { align: 'justify', muted: true, size: 13 }),
+        signOff(),
+      ].filter(Boolean),
+      cta: instructions?.link ? { label: 'Pay now', url: instructions.link } : (billingLink() ? { label: 'Open Billing', url: billingLink() } : null),
+      secondaryCta: instructions?.link && billingLink() ? { label: 'Open Billing', url: billingLink() } : null,
+      reason: kind === 'renewal'
+        ? 'Sent because your plan has come up for renewal.'
+        : 'Sent because you chose a plan and it is waiting on payment.',
+      links: [
+        ...legalLinks(),
+        preferencesLink() ? { label: 'Email preferences', url: preferencesLink() } : null,
+      ].filter(Boolean),
+    }),
+    text: t.renderText([
+      `Hi ${clientName || 'there'},`,
+      '',
+      opening,
+      '',
+      `Amount due: ${amount} USD`,
+      `Plan: ${planName}, ${periodLabel}`,
+      creditUsd > 0
+        ? `After ${money(creditUsd, 'usd')} credited for the time you had already paid for.`
+        : null,
+      '',
+      instructions?.text ? 'Where to send it:' : null,
+      instructions?.text || null,
+      instructions?.link ? `Pay online: ${instructions.link}` : null,
+      referenceLine,
+      '',
+      'Your plan starts the moment we confirm the payment, and you will get a confirmation',
+      'email the same day. Nothing is charged automatically and nothing is stored on file.',
+      '',
+      'Questions, or want a different plan? Just reply to this email.',
+      '',
+      'Yash',
+      t.brand().name,
+      '',
+      billingLink() ? `Billing: ${billingLink()}` : null,
+      base ? `Log in: ${base}` : null,
+      ...legalLinks().map((l) => `${l.label}: ${l.url}`),
+    ]),
+  };
+}
+
+/**
  * The plan is paid for and running.
  *
  * The sales playbook's confirmation message, as an email rather than something
@@ -1123,6 +1239,222 @@ function planConfirmed({ clientName, planName, periodLabel, amountUsd, renewsAt,
       '',
       base ? `Log in: ${base}` : null,
       ...legalLinks().map((l) => `${l.label}: ${l.url}`),
+    ]),
+  };
+}
+
+/**
+ * "Confirm your new email address", to the new address.
+ *
+ * The link is what actually moves the account. Sent to the address being
+ * claimed rather than to the one on file, because the point is to prove
+ * somebody can read the new inbox -- otherwise a borrowed session could point
+ * an account at any address its holder liked and take it over through
+ * forgot-password.
+ */
+function confirmEmailChange({ user, nextEmail, confirmUrl, expiresAt, ipAddress = null }) {
+  const minutes = expiresAt
+    ? Math.max(1, Math.round((new Date(expiresAt).getTime() - Date.now()) / 60000))
+    : 60;
+
+  return {
+    subject: 'Confirm your new email address',
+    html: t.renderEmail({
+      preheader: `Confirm ${nextEmail} as the address on your Ethixweb account.`,
+      eyebrow: 'Email change',
+      hero: 'badge-shield',
+      title: 'Confirm your new email address',
+      blocks: [
+        t.paragraph(
+          `Somebody asked to move the Ethixweb account ${user.name ? `for ${user.name} ` : ''}`
+          + `to this address. Confirm it below and it takes effect straight away.`,
+          { align: 'justify' },
+        ),
+        t.callout({
+          tone: 'info',
+          title: 'Changing to',
+          body: nextEmail,
+          mono: true,
+        }),
+        t.paragraph(
+          `The link works for ${minutes} minute${minutes === 1 ? '' : 's'}`
+          + `${ipAddress ? `, and the request came from ${ipAddress}` : ''}. `
+          + 'Until it is used, nothing about the account has changed.',
+          { align: 'justify', muted: true, size: 13 },
+        ),
+        t.paragraph(
+          'If you were not expecting this, do nothing. The address will not move, and the '
+          + 'account holder has been told it was asked for.',
+          { align: 'justify' },
+        ),
+        signOff(),
+      ],
+      cta: confirmUrl ? { label: 'Confirm this address', url: confirmUrl } : null,
+      reason: 'Sent because somebody asked to use this address on an Ethixweb account.',
+      links: legalLinks(),
+    }),
+    text: t.renderText([
+      'Confirm your new email address',
+      '',
+      'Somebody asked to move an Ethixweb account to this address.',
+      `Changing to: ${nextEmail}`,
+      '',
+      confirmUrl ? `Confirm it here: ${confirmUrl}` : null,
+      `The link works for ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+      ipAddress ? `The request came from ${ipAddress}.` : null,
+      '',
+      'If you were not expecting this, do nothing. The address will not move,',
+      'and the account holder has been told it was asked for.',
+      '',
+      'Yash',
+      t.brand().name,
+    ]),
+  };
+}
+
+/**
+ * "Somebody asked to change your email", to the address currently on file.
+ *
+ * The half that matters when the session was not the owner's: the confirmation
+ * link goes to an inbox the attacker controls, so this is the only message
+ * that can reach the person being attacked. It names the address being moved
+ * to, so they can say exactly what happened when they call.
+ */
+function emailChangeRequested({ user, nextEmail, ipAddress = null }) {
+  return {
+    subject: 'Somebody asked to change your email address',
+    html: t.renderEmail({
+      preheader: `A request to move your account to ${nextEmail}. It has not happened yet.`,
+      eyebrow: 'Security',
+      hero: 'badge-shield',
+      title: 'Somebody asked to change your email address',
+      blocks: [
+        t.paragraph(
+          `Hi ${String(user.name || '').split(' ')[0] || 'there'}. A request was made to move `
+          + 'your Ethixweb account to a different email address. It has not happened: the new '
+          + 'address has to confirm it first.',
+          { align: 'justify' },
+        ),
+        t.detailPanel({
+          tone: 'warn',
+          title: 'The request',
+          mono: true,
+          fields: [
+            { label: 'From', value: user.email },
+            { label: 'To', value: nextEmail },
+            ...(ipAddress ? [{ label: 'Requested from', value: ipAddress }] : []),
+          ],
+        }),
+        t.paragraph(
+          'If that was you, there is nothing to do -- open the link in the other inbox. '
+          + 'If it was not, change your password now and tell an administrator: somebody '
+          + 'else is signed in as you.',
+          { align: 'justify' },
+        ),
+        signOff(),
+      ].filter(Boolean),
+      cta: baseUrl() ? { label: 'Open your account', url: `${baseUrl()}/profile` } : null,
+      reason: 'Sent because somebody asked to change the email address on your account.',
+      links: legalLinks(),
+    }),
+    text: t.renderText([
+      'Somebody asked to change your email address.',
+      '',
+      `From: ${user.email}`,
+      `To: ${nextEmail}`,
+      ipAddress ? `Requested from: ${ipAddress}` : null,
+      '',
+      'It has not happened yet -- the new address has to confirm it first.',
+      '',
+      'If that was you, open the link in the other inbox.',
+      'If it was not, change your password now and tell an administrator:',
+      'somebody else is signed in as you.',
+      '',
+      'Yash',
+      t.brand().name,
+    ]),
+  };
+}
+
+/** "Your email address was changed", to the address they just left. */
+function emailChanged({ user, previousEmail }) {
+  return {
+    subject: 'Your Ethixweb email address was changed',
+    html: t.renderEmail({
+      preheader: `Your account now uses ${user.email}.`,
+      eyebrow: 'Security',
+      hero: 'badge-shield',
+      title: 'Your email address was changed',
+      blocks: [
+        t.paragraph(
+          `The Ethixweb account that used ${previousEmail} now uses ${user.email}. `
+          + 'Every other signed-in session was ended as part of the change.',
+          { align: 'justify' },
+        ),
+        t.paragraph(
+          'If you did not do this, tell an administrator now -- this is the last message '
+          + 'that can reach you at this address.',
+          { align: 'justify' },
+        ),
+        signOff(),
+      ],
+      reason: 'Sent because the email address on your account changed.',
+      links: legalLinks(),
+    }),
+    text: t.renderText([
+      'Your email address was changed.',
+      '',
+      `From: ${previousEmail}`,
+      `To: ${user.email}`,
+      '',
+      'Every other signed-in session was ended as part of the change.',
+      '',
+      'If you did not do this, tell an administrator now -- this is the last',
+      'message that can reach you at this address.',
+      '',
+      'Yash',
+      t.brand().name,
+    ]),
+  };
+}
+
+/** "Two-step verification was turned off", so an owner who did not do it knows. */
+function twoFactorDisabled({ user, ipAddress = null }) {
+  return {
+    subject: 'Two-step verification was turned off',
+    html: t.renderEmail({
+      preheader: 'Your Ethixweb account now signs in with a password and an emailed code only.',
+      eyebrow: 'Security',
+      hero: 'badge-shield',
+      title: 'Two-step verification was turned off',
+      blocks: [
+        t.paragraph(
+          `Two-step verification on your Ethixweb account was switched off`
+          + `${ipAddress ? ` from ${ipAddress}` : ''}. Your password was entered to do it.`,
+          { align: 'justify' },
+        ),
+        t.paragraph(
+          'If that was not you, change your password now and tell an administrator: '
+          + 'somebody else knows it.',
+          { align: 'justify' },
+        ),
+        signOff(),
+      ],
+      cta: baseUrl() ? { label: 'Open your account', url: `${baseUrl()}/profile` } : null,
+      reason: 'Sent because two-step verification on your account changed.',
+      links: legalLinks(),
+    }),
+    text: t.renderText([
+      'Two-step verification was turned off.',
+      '',
+      ipAddress ? `Switched off from ${ipAddress}.` : null,
+      'Your password was entered to do it.',
+      '',
+      'If that was not you, change your password now and tell an administrator:',
+      'somebody else knows it.',
+      '',
+      'Yash',
+      t.brand().name,
     ]),
   };
 }
@@ -1957,6 +2289,27 @@ const TEMPLATES = {
     description: 'Sent once when a client account is created, or on the first sign-in of a client who predates plans.',
     render: () => welcomeWithPlans({ firstName: 'David', existingFreeClient: true }),
   },
+  payment_details: {
+    audience: 'client',
+    group: 'Billing',
+    label: 'Payment details',
+    description: 'How to pay for a chosen plan or a renewal. Sent only where '
+      + 'PAYMENT_INSTRUCTIONS or PAYMENT_LINK is configured; otherwise the team is '
+      + 'told to send the details by hand.',
+    render: () => paymentDetails({
+      clientName: 'David Shaw',
+      planName: 'Unlimited',
+      periodLabel: '12 months',
+      amountUsd: 278.40,
+      creditUsd: 0,
+      kind: 'renewal',
+      instructions: {
+        text: 'Ethixweb Ltd\nSort code 00-00-00\nAccount 00000000\nIBAN GB00 EXAM 0000 0000 0000 00',
+        link: null,
+      },
+      reference: 'sub-20261011-0003',
+    }),
+  },
   renewal_reminder: {
     audience: 'client',
     group: 'Billing',
@@ -2269,7 +2622,12 @@ module.exports = {
   adminRosterChanged,
   progressDigest,
   welcomeWithPlans,
+  confirmEmailChange,
+  emailChangeRequested,
+  emailChanged,
+  twoFactorDisabled,
   planConfirmed,
+  paymentDetails,
   renewalReminder,
   paymentReceived,
   paymentFailed,

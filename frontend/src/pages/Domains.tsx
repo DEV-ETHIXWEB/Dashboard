@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Globe, Plus, Pencil, Trash2, RotateCw, Loader2, X } from "lucide-react";
-import { useDomains, useUsers, useCreateDomain, useUpdateDomain, useRenewDomain, useDeleteDomain } from "@/hooks/useData";
+import { useDomains, useUsers, useCreateDomain, useUpdateDomain, useRecordDomainRenewal, useDeleteDomain } from "@/hooks/useData";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
@@ -31,13 +31,34 @@ function toDisplayDate(isoDate: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+/**
+ * What a row may claim about a certificate, given what we actually know.
+ *
+ * The same row used to print "Expired", "Certificate Valid" and a renewal date
+ * in the past, all at once -- because the expiry date and the stored SSL
+ * status were written at different times by different things and nothing
+ * reconciled them. A row that contradicts itself is worse than one that admits
+ * it does not know: the client cannot tell which half to believe, and the
+ * cheerful half is the one they will act on.
+ *
+ * A domain past its expiry cannot have a valid certificate on it, whatever the
+ * column says. "Unknown" is left as unknown, because that is now the honest
+ * state a new domain starts in -- see routes/domains.js.
+ */
+function certificateLabel(sslStatus: string | null | undefined, daysRemaining: number): string {
+  const stored = String(sslStatus || "").trim();
+  if (daysRemaining <= 0) return "Certificate expired";
+  if (!stored || stored.toLowerCase() === "unknown") return "Certificate not checked";
+  return `Certificate ${stored}`;
+}
+
 export default function Domains() {
   const { user } = useAuth();
   const { data: domains, isLoading, isError, error, refetch } = useDomains();
   const { data: users } = useUsers();
   const createDomain = useCreateDomain();
   const updateDomain = useUpdateDomain();
-  const renewDomain = useRenewDomain();
+  const recordRenewal = useRecordDomainRenewal();
   const deleteDomain = useDeleteDomain();
 
   const isStaff = user != null && ["admin", "sales", "project_manager"].includes(user.role);
@@ -122,7 +143,7 @@ export default function Domains() {
 
   function renew(d: Domain) {
     setRenewingId(d.id);
-    renewDomain.mutate(d.id, {
+    recordRenewal.mutate(d.id, {
       onSuccess: () => toast.success(`${d.domainName} renewed`),
       onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to renew domain"),
       onSettled: () => setRenewingId(null),
@@ -310,9 +331,14 @@ export default function Domains() {
                   title={d.domainName}
                   meta={[
                     isStaff ? clientName(d.clientId) : null,
-                    `Certificate ${d.sslStatus}`,
+                    certificateLabel(d.sslStatus, days),
                     d.hostingProvider,
-                    `Renews ${plainDate(d.expiresAt)}`,
+                    // "Renews" is a promise nothing here keeps -- see the note
+                    // on record-renewal in routes/domains.js. The date is when
+                    // the registration runs out, which is the fact.
+                    days > 0
+                      ? `Expires ${plainDate(d.expiresAt)}`
+                      : `Expired ${plainDate(d.expiresAt)}`,
                   ]
                     .filter(Boolean)
                     .join(" · ")}
@@ -324,11 +350,11 @@ export default function Domains() {
                         <Button
                           variant="ghost"
                           size="icon-xs"
-                          aria-label={`Renew ${d.domainName} for one year`}
+                          aria-label={`Record a one-year renewal for ${d.domainName}`}
                           className="hover:bg-primary/10 hover:text-primary"
                           onClick={() => renew(d)}
                           disabled={renewingId === d.id}
-                          title="Renew for one year"
+                          title="Record a one-year renewal. This updates our records; it does not renew the domain at the registrar."
                         >
                           <RotateCw aria-hidden className={`size-3.5 ${renewingId === d.id ? "animate-spin" : ""}`} />
                         </Button>

@@ -1,0 +1,10 @@
+# This is a private CRM. Nothing behind a sign-in belongs in a search index,
+# and a crawler that finds the app is only ever going to index the login page
+# and a trail of redirects.
+#
+# The two exceptions are the public legal pages, which clients reach from the
+# footer of every email we send and which are meant to be findable.
+User-agent: *
+Disallow: /
+Allow: /terms
+Allow: /privacy

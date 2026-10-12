@@ -66,10 +66,20 @@ async function check(client, { category } = {}) {
   }
 
   // --- does this even count? ---------------------------------------------
-  // An outage is not a change. Neither is a billing question. Letting either
-  // consume one of two monthly updates would be indefensible.
+  // An outage is not a change. Neither is a billing query, and neither is a
+  // question. Letting any of them consume one of two monthly updates would be
+  // indefensible.
+  //
+  // They are, though, the one way a client can get change work done without
+  // spending an allowance: the category is theirs to declare, and declaring
+  // everything an outage bought a Managed client unlimited free changes. The
+  // answer is not to start refusing outages. It is `counts: false, tracked:
+  // true` -- the request goes through, and utils/updateRequests.js counts it
+  // in its own column so the team is told when somebody files an improbable
+  // number of them, and so staff re-categorising one to a real change spends
+  // the allowance at that point.
   if (!plans.isUpdateRequest(category)) {
-    return { ok: true, state, counts: false };
+    return { ok: true, state, counts: false, tracked: true };
   }
 
   if (plan.updateRequestsPerMonth === null) {
@@ -163,6 +173,67 @@ async function consumeExtra(clientId, state) {
 }
 
 /**
+ * Count one request that does not spend the allowance, and raise a flag if
+ * there have now been too many of them.
+ *
+ * The allowance is untouched on purpose -- an outage must always get through,
+ * on every plan, and that promise is not up for renegotiation. What changes is
+ * that the requests which bypass the allowance are now visible: a Managed
+ * client filing six "Site down" tickets in a month either has a site that
+ * needs fixing properly or is routing change work around their plan, and both
+ * of those are things for a person to look at rather than for the billing code
+ * to decide.
+ *
+ * Alerted once per window, stamped so a seventh request does not send a
+ * seventh alert.
+ */
+async function consumeNonUpdate(clientId, state, { category } = {}) {
+  const governing = await subscriptions.governingFor(clientId);
+  const window = subscriptions.usageWindow(governing);
+  if (!window) return false;
+
+  const plan = plans.planFor(state.effectivePlanKey);
+  // Nothing to watch on an uncapped plan: a client who may file any number of
+  // change requests has no reason to disguise one.
+  if (!plan || plan.updateRequestsPerMonth === null) return false;
+
+  const id = subscriptions.usageId(clientId, window.periodStart);
+  await ensureCounter(id, clientId, window);
+
+  const row = await db.incrementIfBelow(
+    'update_request_usage', id, 'nonUpdateCount', Number.MAX_SAFE_INTEGER,
+  );
+  if (!row) return false;
+
+  const used = Number(row.nonUpdateCount || 0);
+  if (used <= plans.NON_UPDATE_SOFT_CAP || row.nonUpdateAlertedAt) return true;
+
+  await db.update('update_request_usage', id, {
+    nonUpdateAlertedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  await events.log('non_update_overused', {
+    clientId,
+    metadata: { planKey: state.effectivePlanKey, count: used, category: category || null },
+  });
+
+  try {
+    const client = await db.find('users', clientId);
+    await subscriptions.alertAdmins(
+      `${client?.name || clientId} has filed ${used} requests this month under categories that do `
+      + `not count against their ${plan.name} allowance (outages, billing, questions). `
+      + 'Either the site needs a proper fix or the plan needs a conversation.',
+      'ticket',
+    );
+  } catch (err) {
+    console.error(`[updates] could not flag the uncounted requests for ${clientId}: ${err.message}`);
+  }
+
+  return true;
+}
+
+/**
  * Create the counter if this is the month's first request.
  *
  * The insert is allowed to fail. Its id is derived from the client and the
@@ -201,7 +272,7 @@ async function queue(clientId, { subject, category, description, priority, relea
   const row = await db.insert('queued_requests', {
     clientId,
     subject,
-    category: category || 'General',
+    category: category || 'Other',
     description: description || '',
     priority: priority || 'Normal',
     releaseAt,
@@ -210,7 +281,7 @@ async function queue(clientId, { subject, category, description, priority, relea
 
   await events.log('request_queued', {
     clientId,
-    metadata: { category: category || 'General', releaseAt },
+    metadata: { category: category || 'Other', releaseAt },
   });
 
   return row;
@@ -269,26 +340,53 @@ async function releaseDue(now = new Date()) {
   let released = 0;
 
   for (const held of due) {
+    /**
+     * Claim it before anything else happens to it.
+     *
+     * Writing `released_at` after creating the ticket was a read followed by a
+     * write, and this sweep runs on ordinary API traffic as well as on the
+     * cron -- so two Vercel instances both saw the same held request with an
+     * empty `released_at`, both turned it into a ticket, and the client got
+     * two tickets for one request with two of their two updates spent. The
+     * claim is the fix: exactly one caller gets the row back.
+     *
+     * The stamp goes on first and is taken back off if the release does not
+     * happen, which is the right way round. A claim that is wrongly released
+     * costs one duplicated ticket; a claim that is wrongly held costs the
+     * client the request they asked us to keep, and nobody ever finds out.
+     */
+    const claimed = await db.claimField('queued_requests', held.id, 'releasedAt', {
+      releasedAt: new Date().toISOString(),
+    });
+    if (!claimed) continue;
+
     try {
       const client = await db.find('users', held.clientId);
-      if (!client) continue;
+      if (!client) {
+        await db.update('queued_requests', held.id, { releasedAt: null });
+        continue;
+      }
 
       const state = await subscriptions.stateFor(client);
       const plan = plans.planFor(state.effectivePlanKey);
 
-      // Still capped, and still out? Leave it held. Releasing anyway would
-      // hand out a free update, and cancelling it would throw away something
-      // the client asked us to keep.
+      // Still capped, and still out? Do not release it, and do not leave it
+      // due either: it rolls to the month after and the client is told, which
+      // is the part that was missing. A request that sat permanently due was
+      // retried every minute for ever and nobody -- client or team -- was ever
+      // told it had not landed, which is worse than having refused it.
       if (plan && plan.updateRequestsPerMonth !== null && plan.updateRequestsPerMonth > 0) {
         const took = await consume(held.clientId, state);
-        if (!took) continue;
+        if (!took) {
+          await defer(held, state);
+          continue;
+        }
       }
 
       const priority = intake.normalizePriority(held.priority);
-      const ticket = await db.insert('tickets', {
-        id: await intake.nextTicketId(),
+      const ticket = await intake.insertTicket({
         subject: held.subject,
-        category: held.category || 'General',
+        category: held.category || 'Other',
         clientId: held.clientId,
         assigneeId: null,
         status: 'Open',
@@ -299,21 +397,84 @@ async function releaseDue(now = new Date()) {
         firstResponseAt: null,
       });
 
-      // Marked before the announcement. A failure to reach Slack must not
-      // cause this to be released a second time on the next sweep.
-      await db.update('queued_requests', held.id, {
-        releasedAt: new Date().toISOString(),
-        ticketId: ticket.id,
-      });
+      // Which ticket it became, so the client's list can point at it. The
+      // claim above already recorded that it was released.
+      await db.update('queued_requests', held.id, { ticketId: ticket.id });
 
       await intake.onTicketCreated(ticket);
       released += 1;
     } catch (err) {
       console.error(`[updates] could not release ${held.id}: ${err.message}`);
+      // Hand the claim back so the next sweep tries again rather than leaving
+      // a request marked released that never became anything.
+      try {
+        await db.update('queued_requests', held.id, { releasedAt: null });
+      } catch (undoErr) {
+        console.error(`[updates] and could not un-claim ${held.id}: ${undoErr.message}`);
+      }
     }
   }
 
   return released;
+}
+
+/**
+ * Roll a held request on to the next reset, and say so.
+ *
+ * Reached when the month a request was being held for arrived and the client
+ * had already spent that month's allowance on something else. The request is
+ * not lost and it is not quietly stuck: the release date moves to the next
+ * window, the count of how many times that has happened goes up, and the
+ * client is told -- twice in a row is a sign that holding it is never going to
+ * work and that they want the extra or the upgrade instead.
+ */
+async function defer(held, state) {
+  const governing = await subscriptions.governingFor(held.clientId);
+  const window = subscriptions.usageWindow(governing);
+  const next = window ? window.periodEnd : null;
+  const count = Number(held.deferredCount || 0) + 1;
+  const at = new Date().toISOString();
+
+  await db.update('queued_requests', held.id, {
+    // The claim is handed back in the same write that moves the date, so the
+    // row is never both unreleased and still due today.
+    releasedAt: null,
+    releaseAt: next || held.releaseAt,
+    deferredCount: count,
+    deferredAt: at,
+  });
+
+  await events.log('request_deferred', {
+    clientId: held.clientId,
+    metadata: { queuedRequestId: held.id, releaseAt: next, times: count },
+  });
+
+  try {
+    const { notify } = require('../middleware/auth');
+    await notify(
+      held.clientId,
+      `We are still holding "${held.subject}" -- this month's updates were already used, so it `
+      + `moves to ${formatDate(next)}. You can have it done sooner from your requests page.`,
+      'ticket',
+    );
+    require('./liveBus').publish('tickets', { to: [held.clientId] });
+  } catch (err) {
+    console.error(`[updates] could not tell ${held.clientId} their request moved: ${err.message}`);
+  }
+
+  // Twice is a pattern, and holding it a third time helps nobody.
+  if (count >= 2) {
+    try {
+      const client = await db.find('users', held.clientId);
+      await subscriptions.alertAdmins(
+        `${client?.name || held.clientId} has had "${held.subject}" held over ${count} months `
+        + 'because their allowance keeps being spent first. Worth offering the upgrade directly.',
+        'ticket',
+      );
+    } catch (err) {
+      console.error(`[updates] could not flag the held request for ${held.clientId}: ${err.message}`);
+    }
+  }
 }
 
 function formatDate(value) {
@@ -323,4 +484,15 @@ function formatDate(value) {
   return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
 }
 
-module.exports = { check, consume, consumeExtra, queue, queuedFor, ensureCounter, releaseDue, maybeSweep };
+module.exports = {
+  check,
+  consume,
+  consumeExtra,
+  consumeNonUpdate,
+  queue,
+  queuedFor,
+  ensureCounter,
+  releaseDue,
+  defer,
+  maybeSweep,
+};

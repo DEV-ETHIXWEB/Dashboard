@@ -59,12 +59,24 @@ const SNOOZE_DAYS = 30;
  * Every line is a true statement about what the plans include. The price
  * differences are computed from lib/plans.js at render time rather than
  * written in, so "$10 more a month" cannot drift away from the price list.
+ *
+ * Two tokens, and the difference between them matters more than it looks:
+ *
+ *   {{included}}    what the client gets on the plan they are on now
+ *   {{offered}}     what they would get on the plan being sold
+ *
+ * One token did both jobs, filled from the current plan, and the Basic lines
+ * are about what Managed includes -- so every Basic client was sold Managed
+ * with the sentence "we make 0 changes a month for you", which is Basic's
+ * allowance and an advertisement for buying nothing. The Managed lines say
+ * "you get 2 changes a month", which is the current plan and correct. Both
+ * read from the plan they are talking about now.
  */
 const MESSAGES = {
   basic: [
     {
       key: 'basic-changes',
-      body: 'Tired of handling site changes yourself? On Managed, we make {{included}} changes a '
+      body: 'Tired of handling site changes yourself? On Managed, we make {{offered}} changes a '
         + "month for you, keep everything updated, and check your site's health every month. "
         + "That's {{difference}} more a month.",
     },
@@ -76,7 +88,7 @@ const MESSAGES = {
     {
       key: 'basic-no-lifting',
       body: 'When something on your site needs fixing, Managed gets it to our team without you '
-        + 'lifting a finger. {{included}} changes a month included.',
+        + 'lifting a finger. {{offered}} changes a month included.',
     },
   ],
   managed: [
@@ -244,7 +256,12 @@ async function promptFor(client, now = new Date()) {
   return {
     messageKey: message.key,
     message: fill(message.body, {
+      // What they have now, and what they are being offered. Never the same
+      // number, and never each other's.
       included: String(from.updateRequestsPerMonth ?? ''),
+      offered: to.updateRequestsPerMonth === null
+        ? 'unlimited'
+        : String(to.updateRequestsPerMonth),
       difference: plans.formatUsd(difference),
       perDay: perDay < 1 ? 'under $1 a day' : `about ${plans.formatUsd(Math.round(perDay))} a day`,
     }),

@@ -5,6 +5,18 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
+ * Whether these terms have been through a legal review.
+ *
+ * Read from the build rather than from the server, because these pages render
+ * for a signed-out visitor who has followed a link from an email and there is
+ * no session to ask. Set VITE_LEGAL_REVIEWED=on once the text has actually
+ * been reviewed; until then the draft notice stays on the page.
+ */
+function legalReviewed() {
+  return String(import.meta.env.VITE_LEGAL_REVIEWED || "").trim().toLowerCase() === "on";
+}
+
+/**
  * The frame the Terms and the Privacy Policy share.
  *
  * Deliberately outside AppShell. Both pages are linked from emails, from the
@@ -43,17 +55,26 @@ export function LegalPage({
       </header>
 
       <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-12">
-        {/* The whole point of this notice: nobody should act on this text, or
-            publish it, until somebody qualified has read it. It is written to
-            describe what the product actually does, which is the useful half
-            of the job, and it is not legal advice. */}
-        <div className="mb-6 rounded-xl bg-attention-surface px-4 py-3 ring-1 ring-attention-border">
-          <p className="t-body font-medium text-attention">Draft, for internal review</p>
-          <p className="mt-1 t-body text-attention">
-            This text describes how the service actually works and has not been reviewed by a
-            lawyer. It needs checking against the law where you operate before it is relied on.
-          </p>
-        </div>
+        {/* The notice stays until somebody qualified has actually read the
+            text, and then it is turned off by configuration rather than by
+            deleting it from the code.
+
+            Removing it outright would be the application asserting that these
+            terms have been reviewed, which is not something a code change can
+            make true -- and these pages are linked from the welcome email, the
+            confirmation email and the plans modal, so the assertion would
+            reach every client. Setting VITE_LEGAL_REVIEWED=on is a deliberate
+            act by whoever had them reviewed; leaving it unset shows the
+            banner, which is the honest state of an unreviewed draft. */}
+        {!legalReviewed() && (
+          <div className="mb-6 rounded-xl bg-attention-surface px-4 py-3 ring-1 ring-attention-border">
+            <p className="t-body font-medium text-attention">Draft, for internal review</p>
+            <p className="mt-1 t-body text-attention">
+              This text describes how the service actually works and has not been reviewed by a
+              lawyer. It needs checking against the law where you operate before it is relied on.
+            </p>
+          </div>
+        )}
 
         <h1 className="t-title">{title}</h1>
         <p className="mt-1 t-caption text-muted-foreground">Last updated {updated}</p>
@@ -63,8 +84,8 @@ export function LegalPage({
         <footer className="mt-10 border-t border-border pt-5">
           <p className="t-caption text-muted-foreground">
             Questions about any of this? Email{" "}
-            <a href="mailto:yash@ethixweb.com" className="text-link underline underline-offset-2">
-              yash@ethixweb.com
+            <a href="mailto:support@ethixweb.com" className="text-link underline underline-offset-2">
+              support@ethixweb.com
             </a>
             .
           </p>

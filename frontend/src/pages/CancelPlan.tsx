@@ -72,6 +72,56 @@ export default function CancelPlan() {
   const basic = catalogue?.plans.find((p) => p.key === "basic");
   const alreadyOnBasic = membership.planKey === "basic";
 
+  /**
+   * Already cancelled, and still running until the paid period ends.
+   *
+   * The page used to show the whole cancel flow again -- the consequences, the
+   * reason box and the button -- to somebody who had already pressed it. At
+   * best that is a page that does not know what you just did; at worst they
+   * press it again, it fails, and they are left wondering whether the first
+   * one took.
+   *
+   * What they actually want here is the date and a way back, so that is what
+   * this is.
+   */
+  if (membership.endingAt) {
+    return (
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
+        <PageHeader
+          title="Your plan is already cancelled"
+          description={`Your ${sub.planName} plan runs until ${plainDate(membership.endingAt)}, and will not renew.`}
+        />
+
+        <section className="rounded-2xl bg-card px-4 py-4 ring-1 ring-foreground/10 sm:px-5 sm:py-5">
+          <p className="t-body">
+            Nothing has been switched off. Everything your plan covers keeps working until{" "}
+            <span className="font-medium">{plainDate(membership.endingAt)}</span> -- you paid for
+            that period and it runs to its end.
+          </p>
+          <p className="mt-2 t-body text-muted-foreground">
+            Changed your mind? Starting a plan again keeps the days you have left rather than
+            starting the clock over.
+          </p>
+        </section>
+
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Link
+            to="/portal/billing/plans"
+            className={cn(buttonVariants(), "h-11 px-4 sm:h-10")}
+          >
+            Start a plan again
+          </Link>
+          <Link
+            to="/portal/billing"
+            className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4 sm:h-10")}
+          >
+            Back to Billing
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   const confirm = () =>
     cancelPlan.mutate(
       { reason: reason || undefined },

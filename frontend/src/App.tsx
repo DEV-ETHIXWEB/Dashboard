@@ -3,6 +3,8 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { RoleRoute } from "@/components/RoleRoute";
+import { RouteTitle } from "@/components/RouteTitle";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { GuestRoute } from "@/components/GuestRoute";
 import { LogoBuildAnimation } from "@/components/LogoBuildAnimation";
 import { BrandBackdrop } from "@/components/BrandBackdrop";
@@ -23,6 +25,9 @@ const Plans = lazy(ROUTE_CHUNKS.plans);
 const CancelPlan = lazy(ROUTE_CHUNKS.cancelPlan);
 const Terms = lazy(ROUTE_CHUNKS.terms);
 const Privacy = lazy(ROUTE_CHUNKS.privacy);
+const ConfirmEmail = lazy(ROUTE_CHUNKS.confirmEmail);
+const NotFound = lazy(ROUTE_CHUNKS.notFound);
+const SignInLink = lazy(ROUTE_CHUNKS.signInLink);
 const Team = lazy(ROUTE_CHUNKS.team);
 const ClientAccess = lazy(ROUTE_CHUNKS.clientAccess);
 const OtpMonitor = lazy(ROUTE_CHUNKS.otpMonitor);
@@ -142,8 +147,15 @@ function App() {
   return (
     <>
       <BootSplash />
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
+      {/* Sets the tab title on every navigation, and lets the two public legal
+          pages out of the shell's noindex. */}
+      <RouteTitle />
+      {/* Everything the router renders, behind one boundary. A rendering error
+          used to unmount the whole tree and leave a blank white page with no
+          message and no way forward. */}
+      <ErrorBoundary>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
           <Route
             path="/login"
             element={
@@ -341,10 +353,28 @@ function App() {
           <Route path="/terms" element={<Terms />} />
           <Route path="/privacy" element={<Privacy />} />
 
+          {/* Outside every guard too, and for a sharper reason than the legal
+              pages: the address somebody would have to sign in with is the one
+              this link is about to change, and the email is as likely to be
+              read on a phone that has never signed in here at all. */}
+          <Route path="/confirm-email" element={<ConfirmEmail />} />
+
+          {/* Where a one-tap sign-in link lands. Outside every guard: the
+              person opening it has no session yet, which is the point. The
+              link is spent by the button on this page rather than by loading
+              it, so an inbox scanner that follows the URL does not use it
+              up. */}
+          <Route path="/sign-in-link" element={<SignInLink />} />
+
           <Route path="/" element={<Navigate to="/login" replace />} />
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </Suspense>
+          {/* A branded 404 rather than a redirect to the sign-in form. An
+              unknown address is not the same thing as a missing session, and
+              showing a login screen to somebody who is already signed in reads
+              as having been logged out. */}
+          <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
       <Toaster position="top-right" />
     </>
   );

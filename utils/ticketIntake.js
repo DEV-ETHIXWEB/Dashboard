@@ -45,6 +45,129 @@ async function nextTicketId() {
   return `ticket-${(numbers.length ? Math.max(...numbers) : 1000) + 1}`;
 }
 
+/**
+ * Create a ticket, retrying if two of them took the same number.
+ *
+ * `nextTicketId` is `max(existing) + 1` read from a full scan, which is not a
+ * reservation: two requests a millisecond apart both read the same maximum,
+ * both compute the same id, and the second insert hits the primary key and
+ * comes back as a 500 to a client who did nothing wrong. It is rare and it is
+ * exactly the kind of rare that happens on the busiest morning.
+ *
+ * Retrying rather than switching to a sequence, because the id is a
+ * human-facing reference ("ticket-1043") that staff read out, both database
+ * drivers have to produce it, and Firestore has no sequences. Re-reading the
+ * maximum is what makes the second attempt different from the first.
+ *
+ * Only a collision is retried. Any other failure is the caller's to handle.
+ */
+async function insertTicket(fields, { attempts = 5 } = {}) {
+  const { db } = require('../db/setup');
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await db.insert('tickets', { id: await nextTicketId(), ...fields });
+    } catch (err) {
+      const collision = /duplicate key|UNIQUE|already exists|23505/i.test(String(err?.message || ''))
+        || err?.code === '23505';
+      if (!collision || attempt === attempts) throw err;
+      // A short, uneven wait, so two callers that collided do not collide
+      // again on the same millisecond.
+      await new Promise((resolve) => { setTimeout(resolve, 5 + Math.floor(Math.random() * 20)); });
+    }
+  }
+
+  // Unreachable: the loop either returns or throws.
+  throw new Error('Could not allocate a ticket number.');
+}
+
+/**
+ * The longest a ticket's own fields may be.
+ *
+ * Every one of these was unbounded, and the subject in particular is printed
+ * in a Slack message, an email subject line, an in-app notification and an
+ * admin's list -- so a megabyte of text in it is not a database problem, it is
+ * four screens of the product ruined by one request. The limits are generous
+ * enough that no honest ticket meets them.
+ */
+const LIMITS = { subject: 200, description: 20000 };
+
+/**
+ * The ticket's text fields, checked rather than coerced.
+ *
+ * Strict about the type before the length: `String(value)` on an object
+ * produces "[object Object]", which is a perfectly valid-looking subject, and
+ * on an array it produces the elements joined by commas -- which is how
+ * `{ category: ['Site down'] }` reached the plan rules looking exactly like
+ * the string "Site down" and bought a Managed client an uncounted change
+ * request. Anything that is not a string is refused by name.
+ *
+ * Returns `{ ok: true, value }` with the trimmed text, or `{ ok: false,
+ * error }` with the sentence to show the person who typed it.
+ */
+function cleanText(label, value, { max, required = false } = {}) {
+  if (value === undefined || value === null || value === '') {
+    if (required) return { ok: false, error: `${label} is required.` };
+    return { ok: true, value: '' };
+  }
+  if (typeof value !== 'string') {
+    return { ok: false, error: `${label} has to be text.` };
+  }
+  const trimmed = value.trim();
+  if (required && !trimmed) return { ok: false, error: `${label} is required.` };
+  if (trimmed.length > max) {
+    return { ok: false, error: `${label} is too long -- keep it under ${max} characters.` };
+  }
+  return { ok: true, value: trimmed };
+}
+
+/**
+ * Everything a ticket arrives with, validated together.
+ *
+ * One place rather than per route, because the create route and the edit route
+ * were trusting different amounts of the same body: a category refused at
+ * creation could be set on the next PUT, which is a hole with a billing rule
+ * on the other side of it.
+ *
+ * `requireCategory` is false for an edit, where a body that does not mention
+ * the category is leaving it alone rather than clearing it.
+ */
+function validateTicketFields(body = {}, { requireSubject = true, requireCategory = true } = {}) {
+  const subject = cleanText('A subject', body.subject, { max: LIMITS.subject, required: requireSubject });
+  if (!subject.ok) return subject;
+
+  const description = cleanText('The description', body.description, { max: LIMITS.description });
+  if (!description.ok) return description;
+
+  const plans = require('../lib/plans');
+  let category = null;
+  const given = body.category;
+  if (given === undefined || given === null || given === '') {
+    if (requireCategory) {
+      return { ok: false, error: `Pick a category: ${plans.TICKET_CATEGORIES.join(', ')}.` };
+    }
+  } else {
+    category = plans.canonicalCategory(given);
+    if (!category) {
+      return {
+        ok: false,
+        error: `"${typeof given === 'string' ? given : 'That'}" is not a category. `
+          + `Pick one of: ${plans.TICKET_CATEGORIES.join(', ')}.`,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      subject: subject.value,
+      description: description.value,
+      category,
+      priority: normalizePriority(body.priority),
+    },
+  };
+}
+
 function normalizePriority(value) {
   if (typeof value !== 'string') return 'Normal';
   const match = PRIORITIES.find((p) => p.toLowerCase() === value.trim().toLowerCase());
@@ -260,6 +383,10 @@ async function markFirstResponse(ticket, actor) {
 }
 
 module.exports = {
+  LIMITS,
+  cleanText,
+  validateTicketFields,
+  insertTicket,
   PRIORITIES,
   RESPONSE_HOURS,
   startInClickUp,

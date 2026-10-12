@@ -189,6 +189,7 @@ export default function Tickets() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={isStaff ? "Search subject, client, category" : "Search your requests"}
+            aria-label="Search requests"
             className="h-9 border-none bg-transparent pl-9 text-sm focus-visible:ring-0"
           />
           {search && (

@@ -12,11 +12,21 @@ import type { Membership, PlanCatalogue, PlanKey, Quote, Subscription, UpsellPro
  * list in the system -- see the note at the top of lib/plans.ts.
  */
 export function usePlanCatalogue() {
-  const { user } = useAuth();
+  /**
+   * Fetched whether or not there is a session.
+   *
+   * The public Terms page renders its prices from this, and that page exists
+   * to be read by somebody deciding whether to buy -- reached from the footer
+   * of every email we send, as likely to be opened signed out as in. Gated on
+   * `user`, every one of those visitors was shown a Plans section with no
+   * plans in it, which is worse than having no section at all.
+   *
+   * The endpoint is public for the same reason; see routes/plans.js. There is
+   * nothing in a price list that is not already on a web page.
+   */
   return useQuery({
     queryKey: ["plan-catalogue"],
     queryFn: () => api<PlanCatalogue>("GET", "/plans"),
-    enabled: Boolean(user),
     staleTime: 60 * 60 * 1000,
   });
 }

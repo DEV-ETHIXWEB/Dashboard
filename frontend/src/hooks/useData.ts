@@ -248,10 +248,18 @@ export function useUpdateDomain() {
   });
 }
 
-export function useRenewDomain() {
+/**
+ * Record that a domain was renewed. It does not renew one.
+ *
+ * Nothing in this application talks to a registrar. This moves the expiry date
+ * in our own records so the warnings stop firing for a domain somebody has
+ * already renewed elsewhere -- which is useful, and is not what the word
+ * "renew" promises on a button.
+ */
+export function useRecordDomainRenewal() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api<{ domain: Domain }>("POST", `/domains/${id}/renew`),
+    mutationFn: (id: string) => api<{ domain: Domain }>("POST", `/domains/${id}/record-renewal`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["domains"] }),
   });
 }

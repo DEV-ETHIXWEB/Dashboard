@@ -142,22 +142,31 @@ const ACTIONS = {
     },
   },
 
+  /**
+   * Deleting an account, through the same routine the direct route uses.
+   *
+   * This removed the `users` row and nothing else: the sessions, the sign-in
+   * codes and the recovery codes all survived, so an account deleted here was
+   * gone from the list while whoever held a session stayed signed in as it --
+   * on the path that exists specifically because deletion is sensitive.
+   */
   'user.delete': {
     label: 'Delete an account',
     async execute(payload) {
-      const target = await db.find('users', payload.userId);
-      if (!target) throw new ApprovalError('That account no longer exists', 404);
-      await db.remove('users', payload.userId);
-      return target;
+      const erasure = require('./userErasure');
+      const erased = await erasure.eraseUser(payload.userId);
+      if (!erased) throw new ApprovalError('That account no longer exists', 404);
+      return erased.user;
     },
   },
 
+  /** Through the same routine the direct route uses. See projectErasure.js. */
   'project.delete': {
     label: 'Delete a project',
     async execute(payload) {
-      const removedTasks = await db.removeWhere('tasks', (t) => t.projectId === payload.projectId);
-      await db.remove('projects', payload.projectId);
-      return { removedTasks };
+      const erased = await require('./projectErasure').eraseProject(payload.projectId);
+      if (!erased) throw new ApprovalError('That project no longer exists', 404);
+      return erased.removed;
     },
   },
 

@@ -315,12 +315,22 @@ export default function Login() {
     doLogin(undefined, { email: acct.email, password: acct.pw });
   }
 
-  async function submitOtp() {
+  /**
+   * Send the code.
+   *
+   * `digits` is passed by the callers that submit as soon as the sixth digit
+   * lands -- typing the last one, pasting, or a browser filling the code from
+   * an SMS. `setCode` has not committed by then, so reading `code` here would
+   * send five digits and a blank. A caller with nothing to pass gets the
+   * state, which is what the button does.
+   */
+  async function submitOtp(digits?: string) {
+    if (otpBusy) return;
     setOtpError(null);
 
     // Two shapes, one endpoint: six digits from an email, or a backup code an
     // admin has kept somewhere. The server decides which it was.
-    const submitted = useBackupCode ? backupCode.trim() : code.join("");
+    const submitted = useBackupCode ? backupCode.trim() : (digits ?? code.join(""));
     if (useBackupCode) {
       if (submitted.replace(/[^A-Za-z0-9]/g, "").length !== 10) {
         setOtpError("A backup code looks like XXXXX-XXXXX");
@@ -855,15 +865,46 @@ export default function Login() {
                           aria-label={`Digit ${i + 1} of 6`}
                           maxLength={1}
                           inputMode="numeric"
+                          /* The two attributes that let a phone offer the code
+                             from the SMS or mail app above the keyboard. Only
+                             the first box carries `one-time-code`: repeated on
+                             every box, iOS fills the whole code into each one
+                             and Android picks one at random. The rest opt out
+                             of autofill entirely so a password manager does
+                             not try to help. */
+                          autoComplete={i === 0 ? "one-time-code" : "off"}
+                          name={i === 0 ? "one-time-code" : `otp-${i + 1}`}
                           disabled={otpExpired}
                           className="h-12 w-11 text-center text-lg font-bold bg-background text-foreground border-input hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 transition-all disabled:opacity-50"
                           value={digit}
                           onChange={(e) => {
-                            const v = e.target.value.replace(/\D/g, "").slice(-1);
+                            const typed = e.target.value.replace(/\D/g, "");
+
+                            /* A browser filling a one-time code puts all six
+                               digits into the field it filled, so treat that
+                               the same as a paste: spread them across the
+                               boxes rather than keeping the last one and
+                               throwing the rest away. */
+                            if (typed.length > 1) {
+                              const spread = ["", "", "", "", "", ""];
+                              for (let j = 0; j < Math.min(typed.length, 6); j += 1) {
+                                spread[j] = typed[j];
+                              }
+                              setCode(spread);
+                              if (spread.every(Boolean)) submitOtp(spread.join(""));
+                              else codeRefs.current[Math.min(typed.length, 5)]?.focus();
+                              return;
+                            }
+
+                            const v = typed.slice(-1);
                             const next = [...code];
                             next[i] = v;
                             setCode(next);
                             if (v && codeRefs.current[i + 1]) codeRefs.current[i + 1]?.focus();
+                            // Six digits is the whole answer. Waiting for a
+                            // button press after the last one is a step that
+                            // exists only because nobody removed it.
+                            if (v && next.every(Boolean)) submitOtp(next.join(""));
                           }}
                           onKeyDown={(e) => {
                             if (e.key === "Backspace" && !code[i] && i > 0) {
@@ -877,6 +918,10 @@ export default function Login() {
                             const next = ["", "", "", "", "", ""];
                             for (let j = 0; j < pasted.length; j++) next[j] = pasted[j];
                             setCode(next);
+                            if (next.every(Boolean)) {
+                              submitOtp(next.join(""));
+                              return;
+                            }
                             const lastIndex = Math.min(pasted.length, 6) - 1;
                             codeRefs.current[Math.max(lastIndex, 0)]?.focus();
                           }}
@@ -902,7 +947,9 @@ export default function Login() {
                     <Button
                       type="button"
                       disabled={otpBusy || (otpExpired && !useBackupCode)}
-                      onClick={submitOtp}
+                      // Wrapped rather than passed: a click handler is
+                      // called with the event, which is not a code.
+                      onClick={() => submitOtp()}
                       className="h-10 shadow-md shadow-primary/20 hover:shadow-lg hover:shadow-primary/30 transition-all text-sm font-semibold cursor-pointer"
                     >
                       {otpBusy && <Loader2 className="size-4 animate-spin" />}

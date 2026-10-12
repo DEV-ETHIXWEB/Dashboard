@@ -61,6 +61,18 @@ function Fact({ label, value }: { label: string; value: string }) {
 function standing(membership: Membership): { headline: string; detail: string } {
   const sub = membership.subscription;
 
+  /* A period that has ended and is waiting on the renewal. Said before the
+     generic "waiting on your payment", because the two are different facts to
+     the person reading: one is a plan that has not started, the other is a
+     plan that is about to stop. A real date, because there is one -- the
+     extras run on for the grace window and then pause. */
+  if (membership.graceEndsAt && membership.awaitingPayment && sub) {
+    return {
+      headline: "Your plan is up for renewal",
+      detail: `${sub.planName} (${sub.periodLabel}), ${usd(sub.amountUsd)} USD. Everything keeps working as normal until ${plainDate(membership.graceEndsAt)} while we wait for the payment -- after that the extras pause, and your site and dashboard stay exactly where they are.`,
+    };
+  }
+
   if (membership.awaitingPayment && sub) {
     return {
       headline: "We are waiting on your payment",
@@ -70,9 +82,10 @@ function standing(membership: Membership): { headline: string; detail: string } 
 
   if (membership.pastDue) {
     return {
-      headline: "We could not take your last payment",
-      detail:
-        "Your plan is still running and nothing has been switched off. Updating your card takes about a minute.",
+      headline: "Your plan has not been renewed yet",
+      detail: membership.graceEndsAt
+        ? `Nothing has been switched off. Everything runs as normal until ${plainDate(membership.graceEndsAt)}, and after that the extras pause until the renewal is confirmed.`
+        : "Your plan is still running and nothing has been switched off. Renewing takes about a minute.",
     };
   }
 

@@ -27,6 +27,46 @@ const upsell = require('../utils/upsell');
 const roles = require('../utils/roles');
 const slack = require('../utils/slack');
 const live = require('../utils/liveBus');
+const cronAuth = require('../utils/cronAuth');
+
+/**
+ * The scheduler's door to everything that has to happen because time passed:
+ * renewal reminders, a period ending, a scheduled downgrade starting, a plan
+ * lapsing, a stale choice being dropped.
+ *
+ * Deliberately above `requireAuth`, because the caller is a cron with no
+ * session and no cookie. It authenticates with the shared secret in
+ * utils/cronAuth.js, the same way the outbox sweep does.
+ *
+ * Why it exists at all: every one of those five jobs was started with `void`
+ * after the response had been sent, on a platform that freezes the function
+ * the moment the response is flushed. On Vercel that means they ran when they
+ * happened to get the time and silently did not when they did not -- and a
+ * renewal nobody collected is not a late email, it is a month of unpaid
+ * hosting. The opportunistic sweep is still there as a fallback for a
+ * deployment with no scheduler; this is the one that promises.
+ *
+ * Both verbs, because Vercel's cron issues a GET and there is no way to tell
+ * it otherwise.
+ */
+async function membershipSweepCron(req, res) {
+  if (!cronAuth.authorisedCron(req, ['MEMBERSHIP_CRON_SECRET', 'CRON_SECRET'])) {
+    return res.status(401).json({ error: 'Not authorised' });
+  }
+  try {
+    const counts = await subscriptions.sweepMembership();
+    // The held requests a client saved for next month ride on the same tick,
+    // and for the same reason: `void` after the response was all that ran them.
+    const released = await require('../utils/updateRequests').releaseDue();
+    res.json({ ok: true, ...counts, released });
+  } catch (err) {
+    console.error('[membership] the cron sweep failed:', err.message);
+    res.status(500).json({ error: 'The sweep failed.' });
+  }
+}
+
+router.get('/cron/sweep', membershipSweepCron);
+router.post('/cron/sweep', membershipSweepCron);
 
 router.use(requireAuth);
 
@@ -168,6 +208,25 @@ router.post('/select', requireCSRF, async (req, res, next) => {
     if (!plans.isPlanKey(planKey)) return res.status(400).json({ error: 'Pick one of the three plans.' });
     if (!plans.isPeriod(period)) return res.status(400).json({ error: 'Pick a billing period of 1, 3, 6 or 12 months.' });
 
+    /**
+     * Stripe is a switch, not a rewrite -- but the switch is not wired yet.
+     *
+     * With PAYMENT_MODE=stripe this route used to behave exactly as it does
+     * under manual: it wrote a `pending_payment` row and waited for an admin
+     * to confirm a payment that Stripe Checkout was never asked for. The
+     * client would have been told to expect a checkout page, got none, and the
+     * plan would have sat uncollected -- which is worse than the mode plainly
+     * not working. It refuses, in as many words, until the Checkout session
+     * and the webhook exist.
+     */
+    if (plans.paymentMode() === 'stripe') {
+      return res.status(501).json({
+        error: 'Card payment for membership plans is not switched on yet. '
+          + 'Set PAYMENT_MODE=manual to take plans by bank transfer in the meantime.',
+        paymentMode: 'stripe',
+      });
+    }
+
     const months = Number(period);
     const quote = await subscriptions.quoteFor(subject.id, planKey, months);
 
@@ -241,6 +300,13 @@ router.post('/select', requireCSRF, async (req, res, next) => {
 
     await announceChoice(subject, quote);
 
+    // And the client gets what they need in order to pay, if a deployment has
+    // written down how. A scheduled downgrade is not collected today, so it is
+    // left for `promoteScheduled` to ask on the day it starts.
+    if (!quote.scheduled) {
+      await subscriptions.sendPaymentDetails(subscription, { kind: quote.kind });
+    }
+
     res.locals.liveAudience = [subject.id];
     live.publish('membership', { to: [subject.id] });
 
@@ -306,17 +372,46 @@ router.get('/pending', requireRole('admin'), async (req, res, next) => {
     const rows = await db.where('subscriptions', { status: 'pending_payment' });
     const clients = new Map((await db.all('users')).map((u) => [u.id, u]));
 
-    const pending = rows
-      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-      .map((s) => {
-        const client = clients.get(s.clientId);
-        return {
-          ...subscriptions.describe(s),
-          clientName: client?.name || s.clientId,
-          clientEmail: client?.email || null,
-          chosenAt: s.createdAt || null,
-        };
+    const sorted = rows
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+
+    /**
+     * Each one priced as it stands today, not as it was quoted.
+     *
+     * An upgrade credit is the unused part of the plan being replaced, and
+     * that shrinks every day the money takes to arrive. The figure written on
+     * the row when the client pressed the button is the one an admin was
+     * reading out and asking for -- so a choice made in January and collected
+     * in November was collected at January's credit, and we handed over the
+     * difference. `amountUsd` is now what is owed; `quotedAmountUsd` is what
+     * they were told, shown alongside it when the two differ so nobody has to
+     * wonder which number is which.
+     */
+    const pending = [];
+    for (const row of sorted) {
+      const client = clients.get(row.clientId);
+      const priced = await subscriptions.repriceFor(row);
+      pending.push({
+        ...subscriptions.describe(row),
+        ...(priced
+          ? {
+            amountUsd: priced.amountUsd,
+            creditUsd: priced.creditUsd > 0 ? priced.creditUsd : null,
+            creditCarriedUsd: priced.creditCarriedUsd > 0 ? priced.creditCarriedUsd : null,
+            bonusDays: priced.bonusDays > 0 ? priced.bonusDays : null,
+            quotedAmountUsd: priced.quotedAmountUsd,
+            repriced: priced.changed,
+          }
+          : {}),
+        clientName: client?.name || row.clientId,
+        clientEmail: client?.email || null,
+        chosenAt: row.createdAt || null,
+        // How long this has been waiting, and how long it has left before the
+        // sweep drops it. An admin chasing money should not have to count days.
+        expiresAfterDays: subscriptions.PENDING_CHOICE_DAYS,
+        paymentDetailsSentAt: row.paymentDetailsSentAt || null,
       });
+    }
 
     res.json({ pending });
   } catch (err) {
@@ -380,14 +475,10 @@ router.post('/:id/mark-paid', requireCSRF, requireRole('admin'), async (req, res
       supersededSubscriptionId: result.previous?.id || null,
     });
 
-    // The client hears it in the app. The confirmation email and the unlock
-    // moment come next; this is the part that must not wait on either.
-    await notify(
-      subscription.clientId,
-      `Payment confirmed. You are on ${planName}, and everything it covers is now unlocked.`,
-      'billing',
-    );
-
+    // The client's in-app notice and the live nudge are sent by
+    // `subscriptions.activate`, not from here. Said once, on the side of the
+    // call both routes into a confirmed payment pass through: this one, and the
+    // approval queue, which used to confirm payments in total silence.
     res.locals.liveAudience = [subscription.clientId];
     live.publish('membership', { to: [subscription.clientId] });
     live.publish('billing', { to: [subscription.clientId] });
@@ -416,6 +507,21 @@ router.post('/:id/mark-paid', requireCSRF, requireRole('admin'), async (req, res
  */
 router.post('/cancel', requireCSRF, async (req, res, next) => {
   try {
+    /**
+     * A client cancels their own plan. Of the staff roles, only an admin may
+     * cancel somebody else's.
+     *
+     * `subjectFor` reads a client id out of the body for admins, sales and
+     * project managers alike, because for a read that is the right audience.
+     * For this it is not: ending a paying client's plan is a money decision
+     * nobody on the sales team should be able to take by posting one request,
+     * and sales is the role with the most reason to be looking at exactly this
+     * client's billing page.
+     */
+    if (!['client', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Cancelling a plan is not part of your role.' });
+    }
+
     const subject = await subjectFor(req);
     if (!subject) return res.status(400).json({ error: 'No client account to cancel a plan for.' });
 
@@ -467,8 +573,31 @@ router.post('/handover', requireCSRF, async (req, res, next) => {
     if (!subject) return res.status(400).json({ error: 'No client account to prepare files for.' });
 
     const history = await subscriptions.historyFor(subject.id);
-    const target = history.find((s) => s.status === 'cancelled') || history[0];
-    if (!target) return res.status(409).json({ error: 'There is no plan on this account.' });
+
+    /**
+     * Only for a plan that is actually ending.
+     *
+     * This used to take `history[0]` when nothing was cancelled, so a client
+     * on a running plan could ask for their files and the team would be told
+     * to prepare an export for somebody who had not said they were leaving --
+     * at best wasted work, at worst a handover prepared for an account that
+     * then renewed. A handover is what happens when somebody leaves, and the
+     * screen the client reads says exactly that before they ask.
+     */
+    const target = history.find((row) => row.status === 'cancelled')
+      || history.find((row) => row.status === 'expired' && row.markedPaidAt)
+      || null;
+
+    if (!target) {
+      const running = history.find((row) => ['active', 'past_due'].includes(row.status));
+      if (running) {
+        return res.status(409).json({
+          error: 'Your plan is still running. Cancel it first and we will prepare your files '
+            + 'before it ends -- that way nothing is exported for an account that carries on.',
+        });
+      }
+      return res.status(409).json({ error: 'There is no plan on this account.' });
+    }
 
     const result = await subscriptions.requestHandover(target.id, { byUserId: req.user.id });
 

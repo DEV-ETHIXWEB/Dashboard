@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { db } = require('../db/setup');
 const { parseAllowedPages } = require('../utils/clientPages');
@@ -25,10 +26,30 @@ function sessionTtlFor(user) {
  * profile can only say "another device" about every row, which is useless for
  * the one thing that list is for -- noticing a session you do not recognise.
  */
+/**
+ * The database's name for a session, given the secret in the cookie.
+ *
+ * The cookie value *was* the primary key, so a dump of the sessions table was
+ * a list of live credentials: anybody who read it could set one as their own
+ * cookie and be signed in as that person, with no password and no second
+ * factor in the way. The same reasoning the password and login-link tables
+ * already follow -- only the hash is written down -- applied to the one table
+ * that grants access directly.
+ *
+ * SHA-256 without a salt on purpose: this is a 128-bit random value, not a
+ * password, so there is nothing to brute-force and the lookup has to be a
+ * single indexed read on every request.
+ */
+function sessionKey(secret) {
+  return crypto.createHash('sha256').update(String(secret)).digest('hex');
+}
+
 async function createSession(userId, { pending = false, ttlMs = SESSION_TTL_MS, req = null } = {}) {
   const { storableUserAgent } = require('../utils/userAgent');
+  // The half that goes in the cookie, and the half that goes in the table.
+  const secret = uuidv4();
   const session = {
-    id: uuidv4(),
+    id: sessionKey(secret),
     userId,
     csrfToken: uuidv4(),
     createdAt: Date.now(),
@@ -38,7 +59,10 @@ async function createSession(userId, { pending = false, ttlMs = SESSION_TTL_MS, 
     ipAddress: req ? normalizeIp(req.ip) : null,
   };
   await db.insert('sessions', session);
-  return session;
+  // `cookie` is the only place the secret exists outside this function. `id`
+  // stays the database's key, so everything that compares sessions, revokes
+  // them or lists them is unchanged.
+  return { ...session, cookie: secret };
 }
 
 async function promoteSession(sessionId, { ttlMs = SESSION_TTL_MS } = {}) {
@@ -46,20 +70,48 @@ async function promoteSession(sessionId, { ttlMs = SESSION_TTL_MS } = {}) {
 }
 
 async function getSession(req) {
-  const sid = req.cookies?.[SESSION_COOKIE];
-  if (!sid) return null;
-  const session = await db.find('sessions', sid);
+  const secret = req.cookies?.[SESSION_COOKIE];
+  if (!secret) return null;
+  const id = sessionKey(secret);
+  const session = await db.find('sessions', id);
   if (!session) return null;
   if (Number(session.expiresAt) < Date.now()) {
-    await db.remove('sessions', sid);
+    await db.remove('sessions', id);
     return null;
   }
   return session;
 }
 
+/**
+ * Throw away sessions that expired and were never presented again.
+ *
+ * A session row was only deleted when somebody turned up with its cookie, so
+ * every session belonging to a browser that was simply closed stayed in the
+ * table for ever -- which on a workspace that signs in daily is a row per
+ * person per day, growing without bound, in a table read on every single
+ * request.
+ *
+ * Throttled to once an hour per process and deliberately not awaited by its
+ * caller: this is housekeeping, and nobody should wait on it to load a page.
+ * Never throws for the same reason.
+ */
+let lastSessionPrune = 0;
+
+async function pruneExpiredSessions() {
+  if (Date.now() - lastSessionPrune < 60 * 60 * 1000) return 0;
+  lastSessionPrune = Date.now();
+  try {
+    const now = Date.now();
+    return await db.removeWhere('sessions', (s) => Number(s.expiresAt) < now);
+  } catch (err) {
+    console.error(`[sessions] could not prune expired sessions: ${err.message}`);
+    return 0;
+  }
+}
+
 async function destroySession(req) {
-  const sid = req.cookies?.[SESSION_COOKIE];
-  if (sid) await db.remove('sessions', sid);
+  const secret = req.cookies?.[SESSION_COOKIE];
+  if (secret) await db.remove('sessions', sessionKey(secret));
 }
 
 function safeUser(user) {
@@ -111,6 +163,9 @@ function isPasswordChangePath(req) {
 async function requireAuth(req, res, next) {
   try {
     const session = await getSession(req);
+    // Housekeeping on the back of a request that was already touching this
+    // table. Throttled inside, and not awaited: see pruneExpiredSessions.
+    void pruneExpiredSessions();
     if (!session || session.pending) return res.status(401).json({ error: 'Not signed in' });
     const user = await db.find('users', session.userId);
     if (!user) return res.status(401).json({ error: 'Not signed in' });
@@ -150,10 +205,21 @@ function requireRole(...roles) {
   };
 }
 
+/** Two secrets, compared without leaking how far they matched. */
+function secretsMatch(a, b) {
+  const left = Buffer.from(String(a), 'utf8');
+  const right = Buffer.from(String(b), 'utf8');
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
 function requireCSRF(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   const token = req.get('X-CSRF-Token');
-  if (!req.session || !token || token !== req.session.csrfToken) {
+  // Constant-time, like every other secret comparison in this codebase. `!==`
+  // stops at the first differing byte, which is a timing signal an attacker
+  // can walk a token out of one character at a time.
+  if (!req.session || !token || !secretsMatch(token, req.session.csrfToken)) {
     return res.status(403).json({ error: 'Invalid or missing CSRF token' });
   }
   next();
@@ -199,17 +265,21 @@ function refreshSession(userId) {
   live.publish('session', { to: [userId] });
 }
 
-const PORTAL_PATH = {
-  admin: '/portal.html',
-  sales: '/portal.html',
-  project_manager: '/portal.html',
-  employee: '/portal.html',
-  client: '/portal.html',
-};
+/**
+ * Where a sign-in sends somebody, which is the same place for everybody.
+ *
+ * This was a map from each of the five roles to `/portal.html`, which then
+ * redirects to `/portal` -- five keys, one value, and an extra hop. It reads
+ * as a routing decision per role and has never been one; the single-page app
+ * works out what to show from the session. Kept as one constant so the two
+ * call sites still have something to name, and so the redirect goes straight
+ * to the real path.
+ */
+const PORTAL_PATH = '/portal';
 
 module.exports = {
   SESSION_COOKIE,
-  createSession, getSession, destroySession, promoteSession, safeUser, sessionTtlFor,
+  createSession, getSession, destroySession, promoteSession, sessionKey, safeUser, sessionTtlFor,
   requireAuth, requireRole, requireCSRF,
-  audit, notify, refreshSession, normalizeIp, PORTAL_PATH,
+  audit, notify, refreshSession, normalizeIp, pruneExpiredSessions, PORTAL_PATH,
 };

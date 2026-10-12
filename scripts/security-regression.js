@@ -490,7 +490,7 @@ async function main() {
   section('Mail page -- stored credentials readable by every admin');
 
   r = await superAdmin.req('POST', '/api/users', {
-    name: 'Mail Probe', email: 'mail.probe@example.com', role: 'client', password: 'Probe#2026!',
+    name: 'Mail Probe', email: 'mail.probe@example.com', role: 'client', password: 'Quiet-Harbour-Signal-7',
   });
   check('AUTHORIZED: creating a client still works', r.status === 201, `${r.status} ${r.text.slice(0, 200)}`);
   const probePassword = r.data.temporaryPassword;
@@ -536,11 +536,21 @@ async function main() {
   check('the approved account keeps every field the proposal carried',
     queuedUser?.slackChannelId === 'C0123ABCD' && queuedUser?.company === 'Queue Co',
     JSON.stringify({ channel: queuedUser?.slackChannelId, company: queuedUser?.company }));
+  /* An account created through the queue is emailed a single-use link to
+     choose its own password, not the password itself -- the same thing the
+     direct route now sends. An email is stored unencrypted at both ends and
+     read by every scanner in between, which is not a channel for a
+     credential.                                                           */
   const queuedMail = (await db.all('email_log')).filter(
+    (m) => m.template === 'account_activation' && m.entityId === queuedUser?.id,
+  );
+  check('the approved account actually receives a way in',
+    queuedMail.length > 0, `${queuedMail.length} activation emails`);
+  const plaintextToQueued = (await db.all('email_log')).filter(
     (m) => m.template === 'credentials' && m.entityId === queuedUser?.id,
   );
-  check('the approved account actually receives its credentials',
-    queuedMail.length > 0, `${queuedMail.length} credential emails`);
+  check('and never its password in plain text',
+    plaintextToQueued.length === 0, `${plaintextToQueued.length} plaintext emails`);
 
   const settled = await db.find('approval_requests', queuedId);
   check('a decided proposal no longer holds the password it carried',
@@ -557,11 +567,11 @@ async function main() {
   const resetId = r.data.request?.id;
   check('the proposal says a new password is part of it',
     String(r.data.request?.summary || '').includes('a new password'), r.data.request?.summary);
-  const beforeReset = (await db.all('email_log')).filter((m) => m.template === 'credentials').length;
+  const beforeReset = (await db.all('email_log')).filter((m) => m.template === 'account_activation').length;
   r = await trusted.req('POST', `/api/approvals/${resetId}/approve`);
   check('AUTHORIZED: the reset is signed off and runs', r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
-  const afterReset = (await db.all('email_log')).filter((m) => m.template === 'credentials').length;
-  check('an approved password reset delivers the new password',
+  const afterReset = (await db.all('email_log')).filter((m) => m.template === 'account_activation').length;
+  check('an approved password reset delivers a link to set a new one',
     afterReset > beforeReset, `${beforeReset} -> ${afterReset}`);
 
   // --------------------------------------------- the two-step toggle bites --
@@ -702,7 +712,7 @@ async function main() {
 
   // A demoted admin's codes go with the role.
   r = await superAdmin.req('POST', '/api/users', {
-    name: 'Short Lived', email: 'short.lived@ethixweb.local', role: 'admin', password: 'Short#2026!',
+    name: 'Short Lived', email: 'short.lived@ethixweb.local', role: 'admin', password: 'Copper-Meadow-Beacon-3',
   });
   check('a new admin is issued backup codes with their password',
     r.status === 201 && (r.data.recoveryCodes || []).length === 8, `${r.status} ${r.text.slice(0, 160)}`);
@@ -819,7 +829,7 @@ async function main() {
   // The fix landed on PUT /api/users/:id. Its siblings have to hold too.
   r = await superAdmin.req('POST', '/api/users', {
     name: 'Sneaky Admin', email: 'sneaky@ethixweb.local', role: 'admin',
-    password: 'Sneaky#2026!', isSuperAdmin: true, is_super_admin: true, adminTrusted: true, admin_trusted: true,
+    password: 'Lantern-Thicket-Marsh-9', isSuperAdmin: true, is_super_admin: true, adminTrusted: true, admin_trusted: true,
   });
   check('AUTHORIZED: the account is still created', r.status === 201, `${r.status} ${r.text.slice(0, 200)}`);
   const sneaky = r.data.user;

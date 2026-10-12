@@ -290,7 +290,7 @@ async function main() {
 
   // --- ticket intake -------------------------------------------------------
   r = await client.req('POST', '/api/tickets', {
-    subject: 'Checkout page throws a 500', category: 'Bug', description: 'Every card payment fails at the last step.',
+    subject: 'Checkout page throws a 500', category: 'Website', description: 'Every card payment fails at the last step.',
     priority: 'Urgent',
   });
   check('client can raise a ticket', r.status === 201, `${r.status} ${r.text.slice(0, 200)}`);
@@ -304,7 +304,16 @@ async function main() {
   check('mail log is readable by an admin', r.status === 200, `${r.status}`);
   check('new-ticket email is logged', templatesLogged.has('new_ticket_staff'), [...templatesLogged].join(','));
   check('client receipt email is logged', templatesLogged.has('ticket_receipt_client'), [...templatesLogged].join(','));
-  check('credentials email is logged', templatesLogged.has('credentials'), [...templatesLogged].join(','));
+  /* A new account is emailed a single-use link to choose its own password,
+     not the password itself: an email is stored unencrypted at both ends,
+     forwarded without thought, and read by every scanner in between. The
+     plaintext `credentials` template survives only as the fallback for a
+     workspace with no APP_BASE_URL, which production refuses to start
+     without.                                                              */
+  check('a new account is emailed an activation link, not its password',
+    templatesLogged.has('account_activation'), [...templatesLogged].join(','));
+  check('and the plaintext credentials email is not what went out',
+    !templatesLogged.has('credentials'), [...templatesLogged].join(','));
 
   // --- template previews ---------------------------------------------------
   r = await admin.req('GET', '/api/mail/templates');
@@ -427,12 +436,12 @@ async function main() {
   check('admin can issue a login that emails a welcome link', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
 
   const welcomeMail = (await admin.req('GET', '/api/mail/log')).data.entries
-    .filter((e) => e.template === 'credentials' && e.entityId === welcomeId)[0];
+    .filter((e) => e.template === 'account_activation' && e.entityId === welcomeId)[0];
   check('the welcome email was rendered for the new client', Boolean(welcomeMail));
 
-  // The Mail page keeps a record of the send, not the message. A credentials
-  // email contains a plaintext password and a live one-tap token, and storing
-  // that made the page a permanent credential store every admin could browse.
+  // The Mail page keeps a record of the send, not the message. This email
+  // carries a live single-use activation token, and storing the body made the
+  // page a permanent credential store every admin could browse.
   const welcomeEntry = welcomeMail
     ? (await admin.req('GET', `/api/mail/log/${welcomeMail.id}`)).data.entry
     : null;
@@ -453,31 +462,71 @@ async function main() {
     String(welcomeLink?.tokenHash || '').slice(0, 20));
 
 
-  let hit = await openLink(linkPath);
-  check('opening the link signs the client in', hit.status === 302 && hit.headers.get('location') === '/portal',
-    `${hit.status} ${hit.headers.get('location')}`);
+  /* Opening the link no longer signs anybody in -- it hands the token to a
+     page, and the button on that page is what spends it.
 
-  const linkCookie = (hit.headers.getSetCookie?.() || [])[0] || '';
+     A single-use GET is used up by whoever fetches it first, and in a
+     corporate inbox that is not the client: Outlook Safe Links and its
+     equivalents follow every URL in a message to check it, seconds after it
+     arrives. By the time the person tapped, the only thing this application
+     could say was "already used". A scanner loads a page and stops.         */
+  const tokenFrom = (location) => {
+    const hash = String(location || '').split('#')[1] || '';
+    return new URLSearchParams(hash).get('token');
+  };
+
+  let hit = await openLink(linkPath);
+  const landed = hit.headers.get('location') || '';
+  check('opening the link lands on a page rather than signing in',
+    hit.status === 302 && landed.startsWith('/sign-in-link#token='), `${hit.status} ${landed}`);
+  check('and the token travels in the fragment, which never reaches a server',
+    !landed.split('#')[0].includes('token'), landed.split('#')[0]);
+
+  const linkToken = tokenFrom(landed);
+
+  // Following the link a second time -- which is exactly what a scanner does
+  // -- must not consume it. This is the whole point of the change.
+  const scanned = await openLink(linkPath);
+  check('a scanner following it twice does not use it up',
+    (scanned.headers.get('location') || '').startsWith('/sign-in-link#token='),
+    scanned.headers.get('location'));
+  const stillLive = (await store.filter('login_links', (l) => !l.consumed && l.userId === clientId));
+  check('and the link is still unspent afterwards', stillLive.length > 0, String(stillLive.length));
+
+  // The POST is what spends it.
+  const consume = (token, cookie) => fetch(`${base}/api/auth/magic-link/consume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ token }),
+  });
+
+  let used = await consume(linkToken);
+  const usedBody = await used.json().catch(() => ({}));
+  check('pressing the button signs the client in', used.status === 200 && usedBody.user?.email === 'qa.client@example.com',
+    `${used.status} ${JSON.stringify(usedBody).slice(0, 160)}`);
+  check('and it says where to go next', usedBody.redirect === '/portal', usedBody.redirect);
+
+  const linkCookie = (used.headers.getSetCookie?.() || [])[0] || '';
   const sid = linkCookie.split(';')[0];
   const meRes = await fetch(`${base}/api/auth/me`, { headers: { Cookie: sid } });
   const meBody = await meRes.json().catch(() => ({}));
   check('the link session is fully signed in, not pending',
     meRes.status === 200 && meBody.user?.email === 'qa.client@example.com', `${meRes.status}`);
 
-  hit = await openLink(linkPath);
-  check('the same link cannot be used twice',
-    hit.status === 302 && hit.headers.get('location') === '/login?linkError=used', `${hit.headers.get('location')}`);
+  used = await consume(linkToken);
+  check('the same link cannot be spent twice',
+    used.status === 400 && (await used.json()).linkError === 'used', `${used.status}`);
 
-  hit = await openLink('/api/auth/magic-link/verify?token=not-a-real.token');
+  used = await consume('not-a-real.token');
   check('a forged token is refused',
-    hit.status === 302 && hit.headers.get('location') === '/login?linkError=invalid', `${hit.headers.get('location')}`);
+    used.status === 400 && (await used.json()).linkError === 'invalid', `${used.status}`);
 
   // A second link cancels the first, so a stale one handed over earlier is dead.
   const first = (await admin.req('POST', `/api/auth/login-link/${clientId}`)).data.path;
   await admin.req('POST', `/api/auth/login-link/${clientId}`);
-  hit = await openLink(first);
+  used = await consume(tokenFrom((await openLink(first)).headers.get('location')));
   check('issuing a new link kills the previous one',
-    hit.status === 302 && hit.headers.get('location') === '/login?linkError=invalid', `${hit.headers.get('location')}`);
+    used.status === 400 && (await used.json()).linkError === 'invalid', `${used.status}`);
 
   // --- super admin, and the second signature -------------------------------
   {
@@ -792,9 +841,16 @@ async function main() {
       JSON.stringify(r.data.plans?.[0]?.prices?.find((p) => p.months === 12)));
     check('manual payment is the default mode', r.data.paymentMode === 'manual', r.data.paymentMode);
 
-    // Signed out, a price list is still not something this app answers to.
+    /* Signed out, the catalogue still answers -- and has to. The public Terms
+       page renders its prices from it, and that page is reached from the
+       footer of every email we send by somebody who is as likely to be signed
+       out as in. Gated, every one of those visitors was shown a Plans section
+       with no plans in it.                                                  */
     r = await makeClient(base).req('GET', '/api/plans');
-    check('the catalogue needs a session', r.status === 401, `${r.status}`);
+    check('the catalogue answers a signed-out visitor', r.status === 200, `${r.status}`);
+    check('and it is the same price list', r.data.plans?.length === 3, String(r.data.plans?.length));
+    check('with nothing about any client in it',
+      !JSON.stringify(r.data).includes('clientId'), 'the payload names a client');
 
     // --- the grandfather clause -------------------------------------------
     // Every client in the workspace is in this position on the morning this
@@ -802,10 +858,39 @@ async function main() {
     // closing. They are asked, not cut off.
     r = await client.req('GET', '/api/membership/status');
     check('a client with no plan can read their membership', r.status === 200, `${r.status}`);
-    check('they are asked to choose one', r.data.membership?.needsPlan === true);
     check('and nothing is gated for them yet', r.data.membership?.grandfathered === true);
     check('so they still read the dashboard as Unlimited',
       r.data.membership?.effectivePlanKey === 'unlimited', r.data.membership?.effectivePlanKey);
+
+    /* This client has an active Stripe subscription in the mirror, put there by
+       the billing tests above -- which makes them exactly the case the first
+       cut of this got wrong. Membership plans arrived into a workspace that
+       already had clients paying by card, and on the morning it shipped every
+       one of them was told their site had been hosted at no charge and shown
+       the choose-a-plan banner. Being asked to start paying is not a sales
+       prompt to somebody whose card we charge every month.                 */
+    check('a client already paying through Stripe is not asked to choose a plan',
+      r.data.membership?.needsPlan === false, String(r.data.membership?.needsPlan));
+    check('and is reported as paying us some other way',
+      r.data.membership?.payingExternally === true, String(r.data.membership?.payingExternally));
+
+    // A client with no plan and no Stripe subscription is the one who *is*
+    // asked, which is the other half of the same rule.
+    {
+      const unpaid = await admin.req('POST', '/api/users', {
+        name: 'Unpaid Client', email: 'never.paid@example.com', role: 'client',
+        password: 'UnpaidPass#1', company: 'Nobody Co',
+      });
+      r = await admin.req('GET', `/api/membership/status?clientId=${unpaid.data.user?.id}`);
+      check('a client paying us nothing is asked to choose a plan',
+        r.data.membership?.needsPlan === true, String(r.data.membership?.needsPlan));
+      check('and is not reported as paying elsewhere',
+        r.data.membership?.payingExternally === false, String(r.data.membership?.payingExternally));
+      check('while keeping the whole dashboard in the meantime',
+        r.data.membership?.effectivePlanKey === 'unlimited', r.data.membership?.effectivePlanKey);
+    }
+
+    r = await client.req('GET', '/api/membership/status');
     check('with no locked panels', r.data.membership?.locked?.length === 0,
       String(r.data.membership?.locked?.length));
     check('but no plan they are paying for', r.data.membership?.planKey === null,
@@ -888,7 +973,7 @@ async function main() {
     // --- one client never reads another -----------------------------------
     const other = await admin.req('POST', '/api/users', {
       name: 'Other Client', email: 'other.member@example.com', role: 'client',
-      password: 'OtherPass#1', company: 'Other Co',
+      password: 'OtherPass#2026!', company: 'Other Co',
     });
     const otherId = other.data.user?.id;
     await db.insert('subscriptions', {
@@ -2125,13 +2210,13 @@ async function main() {
     // A Slack id has a shape; a URL or a channel name is a mistake worth catching.
     r = await admin.req('POST', '/api/users', {
       name: 'Bad Channel', email: 'bad.channel@example.com', role: 'client',
-      password: 'BadPass#1', slackChannelId: 'https://slack.com/app_redirect?channel=general',
+      password: 'BadPass#2026!', slackChannelId: 'https://slack.com/app_redirect?channel=general',
     });
     check('a channel id that is not one is refused', r.status === 400, `${r.status} ${r.text.slice(0, 160)}`);
 
     r = await admin.req('POST', '/api/users', {
       name: 'DM Channel', email: 'dm.channel@example.com', role: 'client',
-      password: 'DmPass#1', slackChannelId: 'D01PRIVATE',
+      password: 'DmPass#2026!', slackChannelId: 'D01PRIVATE',
     });
     check('a direct-message id is refused, it is not a shared room', r.status === 400, `${r.status}`);
 
@@ -2269,8 +2354,16 @@ async function main() {
     check('so the client is not written to twice', afterSecond === before + 1, `${afterSecond}`);
 
     // --- a renewal starts a fresh series -----------------------------------
-    r = await admin.req('POST', `/api/domains/${domainId}/renew`);
-    check('a domain can be renewed', r.status === 200, `${r.status}`);
+    // "Record renewal", not "Renew": nothing here talks to a registrar, and
+    // the route used to assert a valid certificate it had never looked at.
+    r = await admin.req('POST', `/api/domains/${domainId}/record-renewal`);
+    check('a renewal can be recorded', r.status === 200, `${r.status}`);
+    check('and the date is stored as ISO, like every other date in the column',
+      !Number.isNaN(Date.parse(r.data.domain?.expiresAt))
+        && String(r.data.domain?.expiresAt).includes('T'),
+      String(r.data.domain?.expiresAt));
+    check('recording a renewal does not claim anything about the certificate',
+      r.data.domain?.sslStatus !== 'Valid', String(r.data.domain?.sslStatus));
     sweep = await domainWatch.runSweep();
     check('a renewed domain is no longer due',
       mineOnly((await admin.req('GET', '/api/mail/log')).data.entries).length === before + 1, JSON.stringify(sweep));
@@ -2325,8 +2418,22 @@ async function main() {
   check('an admin can create a task', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
   const coverTaskId = r.data.task?.id;
 
+  // 'Complete' is the status a task actually takes. This test used to send
+  // 'Done', which nothing in the product produces -- which is exactly how the
+  // Slack "Task Completed" post and the daily digest both came to compare
+  // against a value no task has ever had.
+  r = await admin.req('PUT', `/api/tasks/${coverTaskId}`, { status: 'Complete' });
+  check('an admin can complete a task', r.status === 200 && r.data.task?.status === 'Complete', `${r.status} ${r.text.slice(0, 160)}`);
+
   r = await admin.req('PUT', `/api/tasks/${coverTaskId}`, { status: 'Done' });
-  check('an admin can complete a task', r.status === 200 && r.data.task?.status === 'Done', `${r.status} ${r.text.slice(0, 160)}`);
+  check('a status nothing in the product produces is refused', r.status === 400, `${r.status}`);
+
+  // Spreading the body let a manager move a task onto another client's board
+  // with one request, which is a client seeing work that is not theirs.
+  r = await admin.req('PUT', `/api/tasks/${coverTaskId}`, { projectId: 'project-elsewhere' });
+  check('a task cannot be moved to another project by a PUT',
+    r.status === 200 && r.data.task?.projectId === coverProjectId,
+    `${r.status} ${r.data.task?.projectId}`);
 
   r = await admin.req('POST', '/api/tasks', { name: 'No project' });
   check('a task without a project is refused', r.status === 400, `${r.status}`);
@@ -2491,16 +2598,24 @@ async function main() {
       check('a delivery can be booked for a moment that has passed', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
       const dueId = r.data.delivery.id;
 
+      /* The sink catches every message the app sends while it is up, not only
+         this one -- the outbox flushes whatever else was queued earlier in the
+         suite through the same transport. So these assertions are about the
+         activation email specifically rather than about the sink being empty
+         of everything else.                                                 */
+      const activations = () => delivered.filter(
+        (m) => /set-password#token=/.test(String(m?.text || '')),
+      );
+
       let sweep = await scheduler.runSweep();
       check('the sweep sends what is due', sweep.sent === 1 && sweep.failed === 0, JSON.stringify(sweep));
-      check('the email really left the building', delivered.length === 1, `${delivered.length} sent`);
-      const activationText = String(delivered[0] && delivered[0].text || '');
+      check('the email really left the building', activations().length === 1, `${activations().length} sent`);
+      const activationText = String(activations()[0] && activations()[0].text || '');
       check('and hands over no password',
         !/^\s*Password:/mi.test(activationText) && !activationText.includes('ClientPass#1'),
         activationText.slice(0, 200));
       check('it carries a single-use set-password link',
-        /set-password#token=/.test(String(delivered[0] && delivered[0].text || '')),
-        String(delivered[0] && delivered[0].text || '').slice(0, 200));
+        /set-password#token=/.test(activationText), activationText.slice(0, 200));
 
       let row = await db.find('credential_deliveries', dueId);
       check('the delivery is marked sent', row.status === 'sent' && Number(row.sentAt) > 0, JSON.stringify(row.status));
@@ -2509,8 +2624,8 @@ async function main() {
       // invocation, a timer racing a page load -- must find nothing to do.
       sweep = await scheduler.runSweep();
       check('a second sweep sends nothing, so nobody gets two credential emails',
-        sweep.sent === 0 && sweep.due === 0 && delivered.length === 1,
-        `${JSON.stringify(sweep)} / ${delivered.length} emails`);
+        sweep.sent === 0 && sweep.due === 0 && activations().length === 1,
+        `${JSON.stringify(sweep)} / ${activations().length} activation emails`);
 
       const stored = await db.filter('password_tokens', (t) => t.userId === clientId && t.purpose === 'activation');
       check('an activation token was stored', stored.length === 1, String(stored.length));
@@ -2521,8 +2636,13 @@ async function main() {
         stored[0] && /^[a-f0-9]{64}$/.test(stored[0].tokenHash) && !replayable,
         JSON.stringify(stored[0] || {}).slice(0, 200));
 
-      const logged = await db.filter('email_log', (e) => e.template === 'account_activation');
-      check('the send is on the mail log', logged.length === 1, String(logged.length));
+      // Scoped to this client: every account now gets an activation email, so
+      // a global count of them is a count of the whole suite's accounts.
+      const logged = await db.filter(
+        'email_log',
+        (e) => e.template === 'account_activation' && e.entityId === clientId,
+      );
+      check('the send is on the mail log', logged.length >= 1, String(logged.length));
       check('with the live token redacted out of the stored body',
         !/set-password#token=[A-Za-z0-9._-]{20,}/.test(String(logged[0] && logged[0].html || '')),
         String(logged[0] && logged[0].html || '').slice(0, 160));
@@ -2613,14 +2733,21 @@ async function main() {
     check('with no token or password in it',
       !/Quiet-Harbour|token/i.test(JSON.stringify(auditRows[0] || {})), JSON.stringify(auditRows[0] || {}).slice(0, 200));
 
-    // --- the monthly policy ------------------------------------------------
+    /* --- the rotation policy -----------------------------------------------
+       Measured against the configured window rather than against the number
+       that happened to be the default when this was written: it moved from 30
+       days to 90 because NIST 800-63B is explicit that a short forced cycle
+       makes passwords worse, and a test that hardcodes the old figure would
+       have to be edited every time that judgement is revisited.            */
     const policy = require('../utils/passwordPolicy');
+    const window = policy.config().maxAgeDays;
+    const warnAt = policy.config().warnDays;
     check('a freshly-set password reads as active', policy.statusFor(afterReset).state === 'reset_completed',
       policy.statusFor(afterReset).state);
-    check('one past its month reads as reset required',
-      policy.statusFor({ password: 'x', passwordChangedAt: Date.now() - 40 * 86400_000 }).state === 'reset_required');
+    check('one past the window reads as reset required',
+      policy.statusFor({ password: 'x', passwordChangedAt: Date.now() - (window + 10) * 86400_000 }).state === 'reset_required');
     check('one nearly there reads as expiring soon',
-      policy.statusFor({ password: 'x', passwordChangedAt: Date.now() - 27 * 86400_000 }).state === 'expiring_soon');
+      policy.statusFor({ password: 'x', passwordChangedAt: Date.now() - (window - Math.max(1, warnAt - 1)) * 86400_000 }).state === 'expiring_soon');
     check('a Google-only account is exempt',
       policy.statusFor({ password: null, googleId: 'g' }).state === 'no_password');
 
@@ -3646,21 +3773,58 @@ async function main() {
       check('it reports one result per recipient', (r.data.results || []).length === 3, JSON.stringify(r.data.results));
 
       const resultFor = (id) => (r.data.results || []).find((x) => x.clientId === id);
-      check('the two clients with phones are marked sent', resultFor(bc1)?.status === 'sent' && resultFor(bc2)?.status === 'sent');
+      /* A broadcast is queued, not sent inside the request. Every recipient
+         used to be texted one after another with no cap, so a large list ran
+         past the function's time limit partway through -- and sending again
+         re-texted everybody it had already reached, because nothing recorded
+         how far it got. One outbox job per recipient, keyed on the broadcast
+         and the client, makes a resend add nothing.                        */
+      check('the two clients with phones are queued', resultFor(bc1)?.status === 'queued' && resultFor(bc2)?.status === 'queued');
       check('the client with no phone is marked failed, not silently dropped', resultFor(bc3)?.status === 'failed');
       check('and it says why', /phone/i.test(resultFor(bc3)?.error || ''), resultFor(bc3)?.error);
+
+      const broadcastOneId = r.data.broadcastId;
+      check('the cost is reported before anybody has to work it out',
+        r.data.segmentsEach === 1, String(r.data.segmentsEach));
 
       const messagesAfterBroadcast = await db.all('sms_messages');
       check('exactly two outbound messages were created (the recipient with no phone sent nothing)',
         messagesAfterBroadcast.length === messagesBeforeBroadcast + 2, `${messagesAfterBroadcast.length - messagesBeforeBroadcast}`);
 
-      const broadcastRows = messagesAfterBroadcast.filter((m) => m.broadcastId === r.data.broadcastId);
+      const broadcastRows = messagesAfterBroadcast.filter((m) => m.broadcastId === broadcastOneId);
       check('both sent messages are tagged with the same broadcast id', broadcastRows.length === 2, broadcastRows.length);
       check('each is a normal outbound message, not a group text', broadcastRows.every((m) => m.direction === 'outbound' && m.channel === 'sms'));
 
-      const broadcastRow = (await db.filter('sms_broadcasts', (b) => b.id === r.data.broadcastId))[0];
+      const broadcastRow = (await db.filter('sms_broadcasts', (b) => b.id === broadcastOneId))[0];
       check('the batch itself was recorded', Boolean(broadcastRow), JSON.stringify(broadcastRow));
       check('with the full recipient count, including the one that failed', broadcastRow?.recipientCount === 3, broadcastRow?.recipientCount);
+
+      /* The queue is what sends. Swept until the SMS jobs are done rather than
+         once: the sweep takes a fixed batch and this suite leaves a backlog of
+         queued email behind it, so one pass does not reach these.            */
+      const outboxLib = require('../utils/outbox');
+      for (let pass = 0; pass < 10; pass += 1) {
+        const left = (await db.all('outbox'))
+          .filter((o) => o.channel === 'sms' && o.status === 'queued');
+        if (left.length === 0) break;
+        for (const job of left) await outboxLib.deliver(job.id);
+      }
+      const sentRows = (await db.all('sms_messages')).filter((m) => m.broadcastId === broadcastOneId);
+      check('the sweep delivers them', sentRows.length === 2 && sentRows.every((m) => m.deliveryStatus === 'sent'),
+        JSON.stringify(sentRows.map((m) => m.deliveryStatus)));
+
+      // Sending the identical broadcast again adds no second text to anybody:
+      // the dedupe key is the whole protection against a half-sent batch being
+      // retried from the beginning.
+      const jobsBeforeRepeat = (await db.all('outbox')).filter((o) => o.channel === 'sms').length;
+      const repeat = await admin.req('POST', '/api/sms/broadcast', {
+        body: 'Scheduled maintenance tonight, expect brief downtime.',
+        clientIds: [bc1, bc2, bc3],
+      });
+      check('a repeat broadcast is its own batch', repeat.data.broadcastId !== broadcastOneId);
+      const jobsAfterRepeat = (await db.all('outbox')).filter((o) => o.channel === 'sms').length;
+      check('with one job per reachable recipient, not a duplicate of the first batch',
+        jobsAfterRepeat - jobsBeforeRepeat === 2, `${jobsAfterRepeat - jobsBeforeRepeat}`);
 
       // A Twilio failure for one recipient must not stop the other from sending.
       const bc4 = await makeClientWithPhone('Broadcast Four', 'broadcast4@example.com', '+15559990004');
@@ -3671,18 +3835,53 @@ async function main() {
         clientIds: [bc4, bc5],
       });
       twilioFailForNumber = null;
+      const batchTwoId = r.data.broadcastId;
       check('the batch with a failing recipient is still accepted', r.status === 201, r.status);
-      check('the good recipient still sent despite the other failing',
-        resultFor(bc4)?.status === 'sent', JSON.stringify(resultFor(bc4)));
-      check('the bad recipient is recorded as failed, not silently skipped',
-        resultFor(bc5)?.status === 'failed', JSON.stringify(resultFor(bc5)));
-      const failedBroadcastRow = (await db.all('sms_messages')).find((m) => m.toNumber === '+15559990005' && m.broadcastId === r.data.broadcastId);
-      check('the failed send is a real row with a failed delivery status, not missing',
-        failedBroadcastRow?.deliveryStatus === 'failed', JSON.stringify(failedBroadcastRow));
+      check('both recipients are queued -- a bad number is the queue\'s problem, not the request\'s',
+        resultFor(bc4)?.status === 'queued' && resultFor(bc5)?.status === 'queued',
+        JSON.stringify([resultFor(bc4), resultFor(bc5)]));
 
-      // Only admin/sales/project_manager may send one at all.
+      for (const job of (await db.all('outbox')).filter((o) => o.channel === 'sms' && o.status === 'queued')) {
+        await outboxLib.deliver(job.id);
+      }
+      const batchTwo = (await db.all('sms_messages')).filter((m) => m.broadcastId === batchTwoId);
+      const good = batchTwo.find((m) => m.toNumber === '+15559990004');
+      const bad = batchTwo.find((m) => m.toNumber === '+15559990005');
+      check('the good recipient still sent despite the other failing',
+        good?.deliveryStatus === 'sent', JSON.stringify(good?.deliveryStatus));
+      check('the failed send is a real row, not missing', Boolean(bad), JSON.stringify(bad));
+
+      // Two clients sharing one phone used to get the same text twice: the
+      // list was deduplicated by client, and a phone is what receives a text.
+      const share1 = await makeClientWithPhone('Shared One', 'shared1@example.com', '+15559990009');
+      const share2 = await makeClientWithPhone('Shared Two', 'shared2@example.com', '+15559990009');
+      r = await admin.req('POST', '/api/sms/broadcast', {
+        body: 'One number, two contacts.', clientIds: [share1, share2],
+      });
+      check('a shared number is texted once', resultFor(share1)?.status === 'queued'
+        && resultFor(share2)?.status === 'skipped',
+        JSON.stringify([resultFor(share1), resultFor(share2)]));
+
+      // An uncapped body is a bill: an SMS is charged per segment.
+      r = await admin.req('POST', '/api/sms/broadcast', {
+        body: 'x'.repeat(1000), clientIds: [bc1],
+      });
+      check('an over-long broadcast is refused with the segment count', r.status === 400
+        && r.data.segments > 1, `${r.status} ${JSON.stringify(r.data)}`);
+
+      // Only an admin may reach a list of customers at all.
       r = await client.req('POST', '/api/sms/broadcast', { body: 'Should never send.', clientIds: [bc1] });
       check('a client account is refused', r.status === 403, `${r.status} ${r.text.slice(0, 160)}`);
+      // Sales too. A broadcast reaches a list of customers and cannot be
+      // recalled, which makes it an administrator's decision.
+      const salesPerson = makeClient(base);
+      await admin.req('POST', '/api/users', {
+        name: 'Sales Broadcast', email: 'sales.broadcast@ethixweb.local', role: 'sales',
+        password: 'SalesBroadcast#1',
+      });
+      await signIn(salesPerson, 'sales.broadcast@ethixweb.local', 'SalesBroadcast#1');
+      r = await salesPerson.req('POST', '/api/sms/broadcast', { body: 'Should never send.', clientIds: [bc1] });
+      check('and so is sales -- a broadcast cannot be recalled', r.status === 403, `${r.status}`);
     }
 
     global.fetch = realFetch;

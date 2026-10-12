@@ -47,6 +47,27 @@ function isTrustedAdmin(user) {
  * role: a project manager cannot reach these operations at all, so routing
  * them through an approval queue would be theatre.
  */
+/**
+ * Whether this person's sensitive actions are held for a second signature.
+ *
+ * A new administrator, until somebody vouches for them. Deliberately about
+ * *standing*, not about role, and that is worth saying out loud because it
+ * reads as an oversight from the outside: an employee or a project manager can
+ * close a ticket -- which emails the client -- while a week-old admin cannot
+ * without a countersignature.
+ *
+ * That asymmetry is the intent. The queue exists because an administrator
+ * account is the one that can reach every client, every payment and every
+ * other account, so a fresh one is the account worth taking over; it is a
+ * brake on a compromised or mistaken *admin*, not a review step for ordinary
+ * work. An employee closing the ticket they have been working all week is that
+ * ordinary work, and routing it through two people would make the queue
+ * something everybody learns to click past -- which is how a real proposal
+ * gets waved through.
+ *
+ * If that calculus ever changes, this is the one function to change: every
+ * gated action in the application asks it rather than deciding for itself.
+ */
 function needsApproval(user) {
   return isAdmin(user) && !isTrustedAdmin(user);
 }

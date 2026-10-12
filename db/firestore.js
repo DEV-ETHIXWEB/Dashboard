@@ -211,7 +211,9 @@ const firestoreDb = {
    * in testing. The documents have already been narrowed by then, so sorting
    * the handful that came back costs nothing worth having.
    */
-  async where(collection, criteria = {}, { limit = null, orderBy = null, direction = 'desc' } = {}) {
+  async where(collection, criteria = {}, {
+    limit = null, orderBy = null, direction = 'desc', select = null,
+  } = {}) {
     let query = getDb().collection(collection);
 
     for (const [key, value] of Object.entries(criteria)) {
@@ -219,6 +221,26 @@ const firestoreDb = {
         throw new Error(`db.where: ${collection}.${key} is not a column`);
       }
       query = query.where(key, '==', value);
+    }
+
+    /**
+     * The same projection as the SQL driver, and here it is worth more: a
+     * Firestore document is billed by the read, but a report's base64 contents
+     * still cross the network and sit in this process's memory for every row
+     * in the list. `select()` makes the server send only the named fields, and
+     * the document id travels with the snapshot regardless.
+     *
+     * A sort or a filter the caller asked for is applied in memory below, so
+     * any field those need has to be requested too -- the caller names them.
+     */
+    if (Array.isArray(select) && select.length) {
+      const wanted = [...new Set([...select, orderBy].filter(Boolean))].filter((f) => f !== 'id');
+      for (const field of wanted) {
+        if (!isWritableField(collection, field)) {
+          throw new Error(`db.where: ${collection}.${field} is not a column`);
+        }
+      }
+      if (wanted.length) query = query.select(...wanted);
     }
 
     const snap = await query.get();
@@ -561,6 +583,37 @@ const firestoreDb = {
       const clean = sanitize(collection, patch);
       tx.update(ref, clean);
       return { id: doc.id, ...data, ...clean };
+    });
+  },
+
+  /**
+   * The Postgres driver's `claimField`: move a row only if the named field is
+   * still empty, and tell exactly one caller it was theirs to move. The claim
+   * a held update request needs, which has no status column to key on.
+   */
+  async claimField(collection, id, field, patch = {}) {
+    const ref = getDb().collection(collection).doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data[field] !== null && data[field] !== undefined) return null;
+      const clean = sanitize(collection, patch);
+      tx.update(ref, clean);
+      return { id: doc.id, ...data, ...clean };
+    });
+  },
+
+  /** The Postgres driver's `claimOtp`, as a transaction: one code, one session. */
+  async claimOtp(id) {
+    const ref = getDb().collection('otp_codes').doc(String(id));
+    return getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data.consumed === true) return null;
+      tx.update(ref, { consumed: true });
+      return { id: doc.id, ...data, consumed: true };
     });
   },
 

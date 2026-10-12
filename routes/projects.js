@@ -161,8 +161,21 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
     const project = await db.find('projects', req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const patch = { ...req.body };
-    delete patch.id;
+    /**
+     * The fields an edit may touch, named rather than subtracted.
+     *
+     * Spreading the body made every column writable, `createdAt` and the
+     * ClickUp mirror ids included, and left moving a project between clients
+     * as something any of the three roles here could do with one request.
+     */
+    const EDITABLE = [
+      'name', 'type', 'clientId', 'assignedPmId', 'status', 'description',
+      'service', 'serviceContext',
+    ];
+    const patch = {};
+    for (const field of EDITABLE) {
+      if (field in req.body) patch[field] = req.body[field];
+    }
 
     // Checked before the write, not after: an unknown service key saved and
     // then rejected would leave a project that looks configured and announces
@@ -175,6 +188,12 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
     // change of owner is checked rather than taken on trust -- pointing a
     // project at a staff id, or at nothing, puts it somewhere nobody expects.
     const movingClient = 'clientId' in patch && patch.clientId !== project.clientId;
+    // And it is an admin's decision, the same way moving a ticket or a domain
+    // is. A project carries its tasks, its reports and its whole history into
+    // the portal of whoever it is pointed at.
+    if (movingClient && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only an admin can move a project to a different client.' });
+    }
     if (movingClient) {
       const nextClient = await db.find('users', patch.clientId);
       if (!nextClient || nextClient.role !== 'client') {
@@ -197,7 +216,10 @@ router.put('/:id', requireCSRF, requireRole('admin', 'sales', 'project_manager')
     });
 
     if (patch.status && patch.status !== project.status) {
-      await notify(project.clientId, `Your project "${project.name}" moved to ${patch.status}`, 'project');
+      // The client who has the project now, not the one who used to. On a
+      // move these are different people, and the old one was being told about
+      // a project that is no longer theirs -- while the new one heard nothing.
+      await notify(updated.clientId, `Your project "${project.name}" moved to ${patch.status}`, 'project');
       // And, if this project delivers one of our services and has just gone
       // live, the client gets the announcement for it. Deliberately only on an
       // update and not on create: a project entered after the fact, already
@@ -226,10 +248,21 @@ router.delete('/:id', requireCSRF, requireRole('admin'), async (req, res, next) 
 
     // Tell this client's open tabs, not everyone's.
     res.locals.liveAudience = [project.clientId];
-    const removedTasks = await db.removeWhere('tasks', (t) => t.projectId === req.params.id);
-    await db.remove('projects', req.params.id);
-    await audit(req.user.id, 'delete', 'project', req.params.id, { removedTasks });
-    res.json({ ok: true, removedTasks });
+
+    /**
+     * One routine, shared with the approval queue.
+     *
+     * Both paths used to remove the project and its tasks and stop there,
+     * leaving every ClickUp mirror of those tasks on the board -- so the team
+     * kept seeing work for a project that no longer existed, which is the
+     * failure that makes people stop trusting the board. See
+     * utils/projectErasure.js for what goes and what deliberately stays.
+     */
+    const erased = await require('../utils/projectErasure').eraseProject(req.params.id);
+    if (!erased) return res.status(404).json({ error: 'Project not found' });
+
+    await audit(req.user.id, 'delete', 'project', req.params.id, erased.removed);
+    res.json({ ok: true, ...erased.removed });
   } catch (err) {
     next(err);
   }

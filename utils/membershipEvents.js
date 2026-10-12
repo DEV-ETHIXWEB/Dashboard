@@ -44,6 +44,28 @@ const EVENT_TYPES = [
   'extra_update_purchased',
   'request_queued',
   'handover_requested',
+  // The lifecycle of a period, which nothing recorded because nothing ran it.
+  // `renewal_due` is a paid period ending and a renewal being asked for;
+  // `plan_lapsed` is that renewal never arriving; `plan_choice_expired` is a
+  // chosen plan nobody ever paid for being dropped. Without the three of them
+  // the funnel could tell you who bought and never who stopped.
+  'renewal_due',
+  'plan_lapsed',
+  'plan_choice_expired',
+  // A scheduled downgrade reaching the day it starts. This was already being
+  // logged by the sweep that promotes it and was *not* in this list, so every
+  // one of them was refused at the door and printed a warning -- the one event
+  // that says a client changed plans without being asked for money again.
+  'scheduled_change_due',
+  // A held request whose release date came round while the new month's
+  // allowance was already spent, and the one that follows it when a client
+  // files an improbable number of the requests that are not counted.
+  'request_deferred',
+  'non_update_overused',
+  // Staff deciding that what a client filed as an outage, a billing query or
+  // a question is really a change to their site. It spends the allowance at
+  // that point, so it is a money event and belongs in the trail.
+  'request_recategorised',
 ];
 
 const EVENT_TYPE_SET = new Set(EVENT_TYPES);

@@ -776,7 +776,10 @@ async function sendSlackDigest({ channelId, tasks = [], projects = [] }) {
   }
 
   const activeProjects = projects.filter((p) => p.status !== 'Completed');
-  const openTasks = tasks.filter((t) => t.status !== 'Done');
+  // 'Complete', not 'Done'. No task has ever had the status this used to
+  // compare against, so every finished task in the workspace was counted as
+  // open and the digest's headline number has always been wrong.
+  const openTasks = tasks.filter((t) => t.status !== 'Complete');
   const highPriorityTasks = openTasks.filter((t) => t.priority === 'High' || t.priority === 'Urgent');
 
   const lines = [

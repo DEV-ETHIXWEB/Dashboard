@@ -31,10 +31,20 @@ const crypto = require('crypto');
  * endpoint's secret separate from whatever else the platform's cron reaches.
  */
 function authorisedCron(req, secretNames = ['CRON_SECRET']) {
+  /**
+   * Every configured secret is accepted, not just the first one found.
+   *
+   * This took the first name that had a value, so setting both
+   * OUTBOX_CRON_SECRET and CRON_SECRET meant only the first was valid -- and
+   * Vercel's own cron sends CRON_SECRET, so the platform's scheduler got a
+   * 401 on every invocation while an operator looked at two correctly-set
+   * variables. A caller-specific secret is meant to be *additional* to the
+   * platform's, not instead of it.
+   */
   const expected = secretNames
     .map((name) => String(process.env[name] || '').trim())
-    .find(Boolean);
-  if (!expected) return false;
+    .filter(Boolean);
+  if (expected.length === 0) return false;
 
   // Vercel's cron sends a bearer token. The explicit header is for anything
   // else that finds one awkward.
@@ -45,9 +55,15 @@ function authorisedCron(req, secretNames = ['CRON_SECRET']) {
   if (!provided) return false;
 
   const a = Buffer.from(provided, 'utf8');
-  const b = Buffer.from(expected, 'utf8');
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  // Every candidate is compared, and the comparison is not short-circuited on
+  // the first match: `some` would return early and leak which secret matched
+  // through timing. The cost is a few microseconds on a scheduler's request.
+  let matched = false;
+  for (const candidate of expected) {
+    const b = Buffer.from(candidate, 'utf8');
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) matched = true;
+  }
+  return matched;
 }
 
 module.exports = { authorisedCron };

@@ -5,6 +5,15 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>EthixWeb CRM</title>
+    <!-- A private CRM has nothing a search engine should hold. robots.txt asks
+         politely; this is the half that applies to a page a crawler reached by
+         a link rather than by crawling the root. The legal pages opt back in
+         from inside the app, because they are meant to be findable. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta
+      name="description"
+      content="The Ethixweb client dashboard: your website, your requests, and what we are working on."
+    />
     <!-- Added to a phone home screen, the icon opens straight at /portal in its
          own window: one tap from the home screen to project status. -->
     <link rel="manifest" href="/manifest.webmanifest" />

@@ -40,9 +40,28 @@ function sectionLabels(user) {
 }
 
 /**
- * Email someone the credentials an admin just issued them. Best-effort: an
- * unreachable inbox must not fail the account creation, and the admin still
- * sees the password on screen on the direct route either way.
+ * Email somebody a link that lets them choose their own password.
+ *
+ * It used to email them the password itself, in plain text, in a message that
+ * then sits in an inbox and in whatever backs it up for as long as the account
+ * exists. Email is not a channel for a credential: it is stored unencrypted at
+ * both ends, forwarded without thought, and read by every scanner between
+ * here and there. The password was also returned in the API response, so it
+ * was in a browser's memory and quite possibly in somebody's screenshot.
+ *
+ * The scheduled delivery path has done it properly all along -- it mints a
+ * single-use token and sends a `/set-password` link, and only the hash of that
+ * token is written down. This now does the same thing, so there is one answer
+ * to "how does a new account get in" rather than two, and the weaker one is
+ * not the default.
+ *
+ * `temporaryPassword` is still accepted and still set on the account, because
+ * an admin sometimes has to read a password to somebody on the telephone and
+ * because a link that fails to send must not leave an account nobody can
+ * reach. It is simply no longer put in an email.
+ *
+ * Best-effort throughout: an unreachable inbox must not fail the account
+ * creation that already succeeded.
  */
 async function emailCredentials(user, temporaryPassword, { invitedBy, isReset = false, ipAddress = null } = {}) {
   // Clients get a one-tap link in the same email, so the first sign-in costs
@@ -60,6 +79,53 @@ async function emailCredentials(user, temporaryPassword, { invitedBy, isReset = 
     }
   }
 
+  /**
+   * The activation link, which is what the email actually carries.
+   *
+   * Minted here so its clock starts when the message goes out. Only the
+   * SHA-256 of its secret is stored, and the secret travels in the URL
+   * fragment, which no browser sends to a server -- so it stays out of access
+   * logs and out of the `Referer` header on any onward click.
+   */
+  const base = baseUrl();
+  if (base) {
+    try {
+      const passwordTokens = require('./passwordTokens');
+      const { path, expiresAt } = await passwordTokens.issueFor(user, {
+        purpose: isReset ? 'reset' : 'activation',
+        ipAddress,
+      });
+
+      const result = await mailer.sendTemplate({
+        to: user.email,
+        message: messages.accountActivation({
+          user,
+          activationUrl: `${base}${path}`,
+          expiresAt,
+          kind: isReset ? 'reset' : 'activation',
+          sections: user.role === 'client' ? sectionLabels(user) : null,
+          invitedBy,
+        }),
+        template: 'account_activation',
+        entity: 'user',
+        entityId: user.id,
+      });
+      return Boolean(result.ok);
+    } catch (err) {
+      console.error(`Could not send the activation link to ${user.id}:`, err.message);
+      return false;
+    }
+  }
+
+  /**
+   * No public address configured, so a link would point nowhere.
+   *
+   * The old email is the fallback rather than the default. A workspace with no
+   * APP_BASE_URL cannot send a working link, and an account nobody can sign in
+   * to is worse than a password in an inbox -- but the application now refuses
+   * to start in production without that variable, so this is a local-only
+   * path. See utils/bootConfig.js.
+   */
   const result = await mailer.sendTemplate({
     to: user.email,
     message: messages.credentialsIssued({

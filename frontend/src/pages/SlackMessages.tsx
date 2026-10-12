@@ -1,4 +1,3 @@
-import * as emoji from "node-emoji";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -63,6 +62,22 @@ const CATEGORY_META: Record<string, { icon: typeof MessageSquare; short: string 
   general: { icon: MessageSquare, short: "General" },
 };
 
+/**
+ * The shortcodes Slack actually sends, and what to draw for each.
+ *
+ * This list used to be a fallback behind `node-emoji`, whose full table is
+ * 288KB of JavaScript shipped to the browser so that a handful of `:thumbsup:`
+ * strings could be turned into characters. Slack sends real unicode emoji in
+ * the body of nearly every message; what arrives as a shortcode is this short
+ * list plus the odd custom one, and a custom one has no unicode character to
+ * map to anyway.
+ *
+ * Anything not named here is left as the literal `:shortcode:`, which is what
+ * the full table did for an unknown code too -- so the only behaviour lost is
+ * on standard emoji nobody in this workspace has used. Add a line if one turns
+ * up; that is a cheaper trade than a quarter of a megabyte on every load of
+ * this page.
+ */
 const SLACK_EMOJIS: Record<string, string> = {
   "+1": "👍",
   "-1": "👎",
@@ -299,6 +314,7 @@ export default function SlackMessages() {
                 <Input
                   className="h-10 pl-9"
                   placeholder="Search messages, authors, channels"
+                  aria-label="Search messages"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
@@ -1002,8 +1018,7 @@ function ThreadViewerDialog({
 function FormattedSlackText({ text }: { text: string }) {
   if (!text) return <span className="italic text-muted-foreground">(no text)</span>;
 
-  const emojified = emoji.emojify(text);
-  const processedText = emojified.replace(/:([a-z0-9_+-]+):/g, (match, code) => SLACK_EMOJIS[code] || match);
+  const processedText = text.replace(/:([a-z0-9_+-]+):/g, (match, code) => SLACK_EMOJIS[code] || match);
   const lines = processedText.split("\n");
 
   return (

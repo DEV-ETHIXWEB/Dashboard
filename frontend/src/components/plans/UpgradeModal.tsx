@@ -124,6 +124,39 @@ export function UpgradeModal() {
               {usd(shown.quote.amountUsd)} USD
             </span>{" "}
             today.
+            {/* Said out loud, because a client who has handed over twelve
+                months and is moving to a one-month plan can see that the
+                credit is bigger than the bill and will reasonably assume the
+                difference has gone. It has not: it buys time instead. */}
+            {shown.quote.creditCarriedUsd > 0 && shown.quote.bonusDays > 0 && (
+              <>
+                {" "}
+                The remaining{" "}
+                <span className="numeric">{usd(shown.quote.creditCarriedUsd)}</span> is not lost
+                either -- it adds{" "}
+                <span className="numeric font-medium text-foreground">
+                  {shown.quote.bonusDays} days
+                </span>{" "}
+                to your {shown.to.name} period.
+              </>
+            )}
+          </p>
+        )}
+
+        {/* An early renewal, or re-subscribing inside a period already paid
+            for. The days left are carried onto the new period rather than
+            started over, and a client about to pay deserves to be told so
+            before they wonder where they went. */}
+        {!scheduled && shown.quote.continuesFrom && (
+          <p className="t-caption text-muted-foreground">
+            You keep the days left on your current period: the new one starts{" "}
+            <span className="font-medium text-foreground">
+              {new Date(shown.quote.continuesFrom).toLocaleDateString(undefined, {
+                month: "long",
+                day: "numeric",
+              })}
+            </span>
+            , not today.
           </p>
         )}
 

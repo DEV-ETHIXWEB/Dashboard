@@ -90,6 +90,13 @@ export interface Subscription {
   amountUsd: number;
   listAmountUsd: number | null;
   creditUsd: number | null;
+  /** How the credit was spent. See Quote for why the leftover is kept. */
+  creditAppliedUsd: number | null;
+  creditCarriedUsd: number | null;
+  bonusDays: number | null;
+  /** When a period that ran out with no renewal confirmed stopped being paid for. */
+  pastDueSince: string | null;
+  lapsedAt: string | null;
   /** Only set on a scheduled row: the day the cheaper plan may begin. */
   startsAt: string | null;
   startedAt: string | null;
@@ -122,12 +129,30 @@ export interface Quote {
   currency: "USD";
   listAmountUsd: number;
   creditUsd: number;
+  /** What the credit took off this bill. Never more than the list price. */
+  creditAppliedUsd: number;
+  /**
+   * Credit left over after the bill was covered. Twelve months of Managed
+   * moved onto one month of Unlimited leaves about $152 here, and it buys
+   * `bonusDays` of extra time rather than disappearing.
+   */
+  creditCarriedUsd: number;
+  bonusDays: number;
   amountUsd: number;
   kind: "new" | "renewal" | "upgrade" | "downgrade";
   /** A downgrade is not bought now; it starts when the paid period ends. */
   scheduled: boolean;
   startsAt: string | null;
   dueNowUsd: number;
+  /** When this period would begin and end if it were paid for today. */
+  periodStartsAt: string | null;
+  renewsAt: string | null;
+  /**
+   * Set when the new period starts later than today because the current one
+   * has days left on it -- an early renewal, or re-subscribing after a cancel.
+   * Those days are kept rather than restarted.
+   */
+  continuesFrom: string | null;
   from: {
     planKey: PlanKey;
     planName: string;
@@ -167,10 +192,22 @@ export interface Membership {
   locked: { key: string; label: string; surface: EntitlementSurface | null }[];
   /** Never paid us for a plan, so nothing is gated for them yet. */
   grandfathered: boolean;
+  /**
+   * Already paying us through Stripe rather than through a membership plan.
+   * They are never shown the banner or the first-login modal: asking somebody
+   * whose card we charge every month to start paying reads as a company that
+   * has lost its own records.
+   */
+  payingExternally: boolean;
   /** Worth asking them to choose one. Never gates access on its own. */
   needsPlan: boolean;
   awaitingPayment: boolean;
   pastDue: boolean;
+  /**
+   * When the extras stop if the renewal is not confirmed. A period that ran
+   * out keeps granting for a grace window, and this is the end of it.
+   */
+  graceEndsAt: string | null;
   /** A cancellation that has not run out yet: when hosting ends. */
   endingAt: string | null;
   usage: UpdateAllowance;

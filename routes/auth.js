@@ -3,13 +3,14 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const userLookup = require('../utils/userLookup');
 const rateLimit = require('express-rate-limit');
 const live = require('../utils/liveBus');
 const router = express.Router();
 
 const { db } = require('../db/setup');
 const {
-  SESSION_COOKIE, createSession, destroySession, safeUser,
+  SESSION_COOKIE, createSession, destroySession, sessionKey, safeUser,
   requireAuth, requireRole, requireCSRF, audit, notify, PORTAL_PATH, sessionTtlFor,
   normalizeIp,
 } = require('../middleware/auth');
@@ -67,7 +68,7 @@ async function finishLogin(req, res, user) {
   // passwords could pick out the accounts with no second step. One path now,
   // one reply shape.
   const pendingSession = await createSession(user.id, { pending: true, req });
-  res.cookie(SESSION_COOKIE, pendingSession.id, COOKIE_OPTS);
+  res.cookie(SESSION_COOKIE, pendingSession.cookie, COOKIE_OPTS);
 
   await db.pruneExpiredOtps();
   await db.invalidateUserOtps(user.id);
@@ -123,14 +124,42 @@ function maskEmail(email) {
   return `${head}${'*'.repeat(Math.max(1, name.length - 2))}@${domain}`;
 }
 
+/**
+ * A real bcrypt hash of a value nobody will ever submit.
+ *
+ * Compared against when the address has no account, so the reply costs the
+ * same time either way. Generated once at module load rather than written in,
+ * so there is no constant in this repository that is also a password hash.
+ */
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 10);
+
 router.post('/login', loginLimiter, async (req, res, next) => {
   try {
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
 
-    const users = await db.filter('users', (u) => u.email.toLowerCase() === String(email).toLowerCase());
-    const user = users[0];
-    if (!user || !user.password || !bcrypt.compareSync(password, user.password)) {
+    const user = await userLookup.findByEmail(email);
+
+    /**
+     * The hash is compared whether or not the account exists.
+     *
+     * bcrypt is slow on purpose, so running it only for real accounts made the
+     * reply measurably faster for an address nobody has registered -- which is
+     * an oracle: anybody can ask this endpoint which of a list of email
+     * addresses have accounts here, at the speed of an HTTP request. Comparing
+     * against a fixed hash for a missing account spends the same time and
+     * answers the same sentence.
+     *
+     * Async rather than `compareSync`, because this is the hottest blocking
+     * call in the application: a synchronous bcrypt holds the whole event loop
+     * for the duration, so one sign-in delays every other request on the
+     * instance.
+     */
+    const ok = user?.password
+      ? await bcrypt.compare(password, user.password)
+      : await bcrypt.compare(password, DUMMY_HASH);
+
+    if (!user || !user.password || !ok) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
     await finishLogin(req, res, user);
@@ -147,9 +176,23 @@ router.post('/google', loginLimiter, async (req, res, next) => {
     const { idToken } = req.body || {};
     if (!idToken) return res.status(400).json({ error: 'idToken is required' });
 
-    const { googleId, email } = await verifyGoogleIdToken(idToken);
-    const users = await db.filter('users', (u) => u.email.toLowerCase() === email.toLowerCase());
-    const user = users[0];
+    const { googleId, email, emailVerified } = await verifyGoogleIdToken(idToken);
+
+    /**
+     * Google saying who someone is, not merely which address they typed.
+     *
+     * `email_verified` is false on a Google account whose address has not been
+     * confirmed -- which, on a Workspace domain an attacker controls, means
+     * the claim is theirs to make. Reading only the `email` claim turned that
+     * into a sign-in as whoever holds that address here.
+     */
+    if (emailVerified === false) {
+      return res.status(403).json({
+        error: 'Google has not verified that address. Confirm it with Google and try again.',
+      });
+    }
+
+    const user = await userLookup.findByEmail(email);
     if (!user) {
       return res.status(403).json({ error: `No account found for ${email}. Ask your admin to add you first.` });
     }
@@ -253,10 +296,49 @@ router.post(
  * answers with a redirect rather than JSON, and failures land back on the
  * login page with a reason the UI can explain.
  */
+/**
+ * Open a sign-in link.
+ *
+ * This no longer signs anybody in. It hands the token to a page, which shows a
+ * button, and the button is what spends it.
+ *
+ * The reason is that a single-use GET is used up by whoever fetches it first,
+ * and in a corporate inbox that is not the client -- Outlook Safe Links,
+ * Proofpoint and the rest follow every URL in a message to check it, seconds
+ * after it arrives. By the time the person clicked, the link was already
+ * spent, and the only thing this application could tell them was "already
+ * used", which is both true and impossible to act on.
+ *
+ * A scanner follows the redirect, loads a page and stops. The link survives,
+ * because nothing has consumed it yet.
+ *
+ * The token travels on in the fragment, which no browser sends to a server: it
+ * stays out of access logs and out of the `Referer` header on any onward
+ * click. The same bargain /set-password already makes.
+ */
 router.get('/magic-link/verify', async (req, res, next) => {
-  const fail = (reason) => res.redirect(`/login?linkError=${reason}`);
   try {
-    const parsed = loginLinks.parseToken(req.query.token);
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) return res.redirect('/login?linkError=invalid');
+    // No lookup and no validation here. Checking the token would tell a
+    // scanner whether it is live, and this endpoint is the one a scanner
+    // reaches; everything is decided by the POST below.
+    return res.redirect(`/sign-in-link#token=${encodeURIComponent(token)}`);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/**
+ * Spend the link, and sign in.
+ *
+ * A POST, because that is the part a link scanner does not do. Everything the
+ * GET used to decide happens here, at the moment somebody actually asked.
+ */
+router.post('/magic-link/consume', async (req, res, next) => {
+  const fail = (reason, status = 400) => res.status(status).json({ linkError: reason });
+  try {
+    const parsed = loginLinks.parseToken(req.body?.token);
     if (!parsed) return fail('invalid');
 
     const row = await db.find('login_links', parsed.id);
@@ -280,17 +362,32 @@ router.get('/magic-link/verify', async (req, res, next) => {
 
     const ttlMs = sessionTtlFor(user);
     const session = await createSession(user.id, { ttlMs, req });
-    res.cookie(SESSION_COOKIE, session.id, { ...COOKIE_OPTS, maxAge: ttlMs });
-    // Name the admin who minted the link. Without it the log shows the client
-    // signing themselves in, which is exactly what an admin walking in through
-    // a link they made would want it to say.
-    const issued = (await db.filter('activity_log', (a) => a.action === 'issue_login_link' && a.entityId === user.id))
-      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+    res.cookie(SESSION_COOKIE, session.cookie, { ...COOKIE_OPTS, maxAge: ttlMs });
+
+    /**
+     * Name the admin who minted the link. Without it the log shows the client
+     * signing themselves in, which is exactly what an admin walking in through
+     * a link they made would want it to say.
+     *
+     * Asked for by entity rather than read whole: this used to scan the entire
+     * activity log -- the fastest-growing table in the application -- on every
+     * link sign-in. See the activity_log indexes in db/setup.js.
+     */
+    const issued = (await db.where(
+      'activity_log',
+      { action: 'issue_login_link', entity: 'user', entityId: user.id },
+      { orderBy: 'createdAt', limit: 1 },
+    ))[0];
     await audit(user.id, 'login', 'user', user.id, {
       via: 'magic_link',
       linkIssuedBy: issued?.actorId || null,
     });
-    res.redirect('/portal');
+
+    res.json({
+      user: safeUser(user),
+      csrfToken: session.csrfToken,
+      redirect: PORTAL_PATH,
+    });
   } catch (err) {
     next(err);
   }
@@ -298,9 +395,11 @@ router.get('/magic-link/verify', async (req, res, next) => {
 
 router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
   try {
-    const sid = req.cookies?.[SESSION_COOKIE];
-    if (!sid) return res.status(401).json({ error: 'No pending login found. Please sign in again.' });
-    const session = await db.find('sessions', sid);
+    // The cookie holds the secret; the table is keyed on its hash. See
+    // `sessionKey` in middleware/auth.js.
+    const secret = req.cookies?.[SESSION_COOKIE];
+    if (!secret) return res.status(401).json({ error: 'No pending login found. Please sign in again.' });
+    const session = await db.find('sessions', sessionKey(secret));
     if (!session || !session.pending || Number(session.expiresAt) < Date.now()) {
       return res.status(401).json({ error: 'Your verification step expired. Please sign in again.' });
     }
@@ -332,7 +431,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
       const ttlMs = sessionTtlFor(user);
       const recovered = await createSession(user.id, { ttlMs, req });
       await db.remove('sessions', session.id);
-      res.cookie(SESSION_COOKIE, recovered.id, { ...COOKIE_OPTS, maxAge: ttlMs });
+      res.cookie(SESSION_COOKIE, recovered.cookie, { ...COOKIE_OPTS, maxAge: ttlMs });
 
       const left = await recoveryCodes.statusFor(user.id);
       await audit(user.id, 'login', 'user', user.id, { via: 'recovery_code', remaining: left.remaining });
@@ -348,7 +447,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
       return res.json({
         user: safeUser(user),
         csrfToken: recovered.csrfToken,
-        redirect: PORTAL_PATH[user.role] || '/portal.html',
+        redirect: PORTAL_PATH,
         usedRecoveryCode: true,
         recoveryCodesRemaining: left.remaining,
       });
@@ -369,7 +468,19 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
       return res.status(403).json({ error: 'Incorrect code.' });
     }
 
-    await db.update('otp_codes', otp.id, { consumed: true });
+    /**
+     * Claimed, not written. Exactly one submission of a code opens a session.
+     *
+     * The attempts counter above is already atomic; marking the code used was
+     * not, so two correct submissions arriving together both passed and both
+     * got in. A sign-in code is single-use by design, and "single" has to mean
+     * it under concurrency or it means nothing.
+     */
+    const claimed = await db.claimOtp(otp.id);
+    if (!claimed) {
+      return res.status(403).json({ error: 'That code has already been used. Please sign in again.' });
+    }
+
     const ttlMs = sessionTtlFor(user);
 
     // A brand-new identifier at the moment access is granted, not the one that
@@ -378,7 +489,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
     // including whoever might have planted it -- holds a dead cookie.
     const session2 = await createSession(user.id, { ttlMs, req });
     await db.remove('sessions', session.id);
-    res.cookie(SESSION_COOKIE, session2.id, { ...COOKIE_OPTS, maxAge: ttlMs });
+    res.cookie(SESSION_COOKIE, session2.cookie, { ...COOKIE_OPTS, maxAge: ttlMs });
 
     await audit(user.id, 'login', 'user', user.id, { via: 'otp' });
 
@@ -390,7 +501,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
     res.json({
       user: safeUser(user),
       csrfToken: session2.csrfToken,
-      redirect: PORTAL_PATH[user.role] || '/portal.html',
+      redirect: PORTAL_PATH,
       ...(backup ? { recoveryCodesRemaining: backup.remaining } : {}),
     });
   } catch (err) {
@@ -558,7 +669,7 @@ router.post('/password/forgot', passwordResetLimiter, async (req, res, next) => 
     const email = String(req.body?.email || '').trim().toLowerCase();
     if (!email || !email.includes('@')) return sameAnswer();
 
-    const users = await db.filter('users', (u) => String(u.email).toLowerCase() === email);
+    const users = await userLookup.allByEmail(email);
     const user = users[0];
 
     // Nothing to reset: no such account, or one whose password lives at Google.
@@ -767,17 +878,27 @@ router.get('/me', requireAuth, (req, res) => {
 });
 
 /**
- * Stamp the first sign-in, and greet a client who was never greeted.
+ * Greet a client who was never greeted, and then stamp the first sign-in.
  *
- * The stamp is written first and unconditionally. A client who signed in
- * before this feature existed has no welcome email on record and gets one; a
- * client created after it does, and `sendWelcome` declines on the timestamp.
- * So the same call covers both without either having to know about the other.
+ * That order is the whole of it. The stamp used to go first, which made this
+ * un-retryable: on Vercel the function is frozen the moment the response is
+ * flushed, and this runs after it, so a client whose greeting was cut off
+ * half-way had `first_login_at` written and never came back through here. One
+ * missed welcome email, permanently, with nothing to show it had happened.
+ *
+ * Stamping last means a run that does not finish leaves the account looking
+ * exactly as it did before, and the client's next request tries again. The
+ * email itself is queued in the outbox, which has its own retries, so getting
+ * as far as `sendWelcome` is enough -- and `sendWelcome` declines on its own
+ * timestamp, so a second attempt after a successful enqueue sends nothing.
+ *
+ * A client created after this feature shipped was greeted at signup and is
+ * declined on the same timestamp, so one call covers both kinds of account.
  */
 async function markFirstLogin(user) {
   try {
-    await db.update('users', user.id, { firstLoginAt: new Date().toISOString() });
     await require('../utils/subscriptions').sendWelcome(user, { reason: 'first_login' });
+    await db.update('users', user.id, { firstLoginAt: new Date().toISOString() });
   } catch (err) {
     console.error(`Could not record the first sign-in for ${user.id}:`, err.message);
   }

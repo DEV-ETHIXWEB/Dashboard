@@ -6,12 +6,36 @@ const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
+const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 
 const { seed } = require('./db/setup');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+/**
+ * The settings without which this application is quietly wrong, checked before
+ * anything else happens.
+ *
+ * At import rather than in the `app.listen` branch below, because on Vercel
+ * nothing calls `listen`: the function imports this file and handles a
+ * request. Every boot warning in that branch has therefore never run in the
+ * environment it was written for. In production a missing setting throws and
+ * fails the deployment, which is the only place a configuration mistake can be
+ * caught by somebody who can fix it. See utils/bootConfig.js.
+ */
+require('./utils/bootConfig').verify();
+
+/**
+ * Catch what escapes every try/catch.
+ *
+ * This codebase starts a lot of work with `void somethingAsync()` so that
+ * nobody waits on an email, and an unhandled rejection in one of those is
+ * otherwise a line Node prints on its way out. Installed at import, which on a
+ * serverless platform is the only moment that reliably happens.
+ */
+require('./utils/errorReporter').install();
 
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 
@@ -37,10 +61,18 @@ app.use(helmet({
       workerSrc: ["'self'"], // the offline shell service worker, nothing else
       baseUri: ["'self'"],
       formAction: ["'self'"],
-      frameAncestors: ["'self'"], // no embedding this app in someone else's page
+      frameAncestors: ["'none'"], // nobody embeds this app, not even us
       upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null,
     },
   },
+  // DENY rather than helmet's SAMEORIGIN default. Nothing in this application
+  // frames anything of its own, so the stricter value costs nothing and closes
+  // the clickjacking surface on the login page for browsers that read the
+  // header and not the CSP.
+  frameguard: { action: 'deny' },
+  // A year, which is what every preload list asks for; helmet's default is
+  // 180 days.
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
 }));
 
 // A named list only. `*` is refused outright rather than quietly passed to the
@@ -204,11 +236,41 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+/**
+ * The ceiling on ordinary API traffic.
+ *
+ * Counted per session where there is one, and per IP otherwise. By IP alone an
+ * office behind a single address shared one budget between everybody in it,
+ * and in the browser test one admin hit 429s after about sixty-five page
+ * views and was dropped to the login screen -- a rate limit that logs your own
+ * staff out is a denial of service you are running against yourself.
+ *
+ * A signed-in request also gets a much higher ceiling than an anonymous one.
+ * This limiter exists to blunt scraping and brute force, and both of those
+ * arrive without a session; the strict limits that actually matter are on the
+ * auth routes, where they are counted per account.
+ *
+ * Note this is still a per-instance memory store: see utils/rateLimits.js for
+ * why that is weaker than it looks on Vercel, and what the auth routes do
+ * about it.
+ */
 app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 600,
+  limit: (req) => (req.cookies?.ew_sid ? 3000 : 300),
+  // The session, so one person's heavy afternoon is their own budget and not
+  // their colleagues'. Falling back to the IP for anybody with no session at
+  // all, which is who this limit is really for.
+  keyGenerator: (req) => {
+    // Hashed, not the cookie itself: a rate-limit key lives in this process's
+    // memory and gets printed in diagnostics, and the cookie is a live
+    // credential. Truncated because a limiter key only has to be unique.
+    const sid = req.cookies?.ew_sid;
+    if (!sid) return `ip:${req.ip}`;
+    return `sid:${crypto.createHash('sha256').update(sid).digest('hex').slice(0, 32)}`;
+  },
   standardHeaders: true,
   legacyHeaders: false,
+  message: { error: 'Too many requests. Give it a minute and try again.' },
 }));
 
 app.use(dbReady);
@@ -280,17 +342,51 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.get('/portal.html', (req, res) => res.redirect(301, '/portal'));
 
+/**
+ * An API path nobody routed is a 404 in JSON, not the app's HTML.
+ *
+ * Everything under /api is answered by a router above. Anything still here is
+ * a path that does not exist, and it used to fall through to the single-page
+ * app -- so a typo'd endpoint, or a client calling a route that was renamed,
+ * came back as 200 with a page of HTML. Every caller then failed at
+ * `JSON.parse`, somewhere far away from the cause.
+ */
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `No such endpoint: ${req.method} /api${req.path}` });
+});
+
+/**
+ * Paths that are not this application's, answered as what they are.
+ *
+ * Every non-API path returned the app page with status 200, `/.env` and
+ * `/.git/config` included. Nothing was leaked -- the response is the same
+ * HTML everybody gets -- but a scanner reads 200 as "this file exists" and
+ * flags the deployment, and a person reading the report then has to prove it
+ * is nothing. Saying 404 to a request for a file we do not serve is both true
+ * and quieter.
+ */
+const NOT_OURS = /^\/(\.|wp-|wordpress|xmlrpc\.php|vendor\/|phpmyadmin|admin\.php|config\.(json|yml|yaml|php)$|backup|\.well-known\/security\.txt$)/i;
+
 app.get(/^\/(?!api\/).*/, (req, res) => {
+  if (NOT_OURS.test(req.path)) {
+    return res.status(404).type('text/plain').send('Not found');
+  }
   // The document naming this deploy's hashed bundles. Revalidated every time,
   // so a deploy reaches a returning visitor on their next load.
   res.setHeader('Cache-Control', 'no-cache');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
-  console.error(err);
-  res.status(500).json({ error: 'Something went wrong on the server.' });
-});
+/**
+ * The last handler. Reports the failure somewhere a person looks, then answers
+ * the same generic 500 it always did.
+ *
+ * `console.error(err)` was the whole of this, which on a serverless platform
+ * means a line in a log nobody opens -- so the first person to learn about a
+ * broken deploy was a client, by telephone. See utils/errorReporter.js: it
+ * still writes to the console, and posts to ERROR_WEBHOOK_URL when one is set.
+ */
+app.use(require('./utils/errorReporter').middleware);
 
 if (require.main === module) {
   app.listen(PORT, () => {

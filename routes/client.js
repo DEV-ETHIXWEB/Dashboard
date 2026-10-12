@@ -40,17 +40,57 @@ function showsFullSlackThread() {
  * Whose progress this request is about. Clients are pinned to themselves; staff
  * may name a client, and default to the first one they have work for.
  */
+/**
+ * Whether an employee has any business reading this client.
+ *
+ * `clientId` was taken from the query string for every staff role alike, so an
+ * employee working one ticket for one customer could read any client's whole
+ * portal -- their projects, their request history, their progress -- and post
+ * into that client's Slack channel, by changing a number in a URL. Admins,
+ * project managers and sales run the workspace and legitimately need every
+ * client; an employee works the tickets that are theirs.
+ *
+ * "Theirs" is the same definition the ticket routes already use: assigned to
+ * them, or one they were invited onto. An employee with no connection to a
+ * client gets the same answer as a stranger.
+ */
+async function employeeMayRead(user, clientId) {
+  const assigned = await db.where('tickets', { clientId, assigneeId: user.id });
+  if (assigned.length > 0) return true;
+
+  const invites = await db.where('ticket_collaborators', { userId: user.id });
+  for (const invite of invites) {
+    const ticket = await db.find('tickets', invite.ticketId);
+    if (ticket && ticket.clientId === clientId) return true;
+  }
+  return false;
+}
+
 async function resolveScope(req) {
   if (req.user.role === 'client') return req.user;
   if (!STAFF_ROLES.includes(req.user.role)) return null;
 
   const requested = req.query.clientId;
-  if (requested) {
-    const client = await db.find('users', requested);
-    return client && client.role === 'client' ? client : null;
+
+  /**
+   * No client named, no client shown.
+   *
+   * This used to fall back to whichever client sorted first alphabetically,
+   * so a member of staff opening a portal page with nothing selected was
+   * shown one real customer's data chosen by their name -- and had no way to
+   * tell that was what had happened. An empty state that says "pick a client"
+   * is both honest and harder to misread.
+   */
+  if (!requested) return null;
+
+  const client = await db.find('users', requested);
+  if (!client || client.role !== 'client') return null;
+
+  if (req.user.role === 'employee' && !(await employeeMayRead(req.user, client.id))) {
+    return null;
   }
-  const clients = await db.filter('users', (u) => u.role === 'client');
-  return clients.sort((a, b) => a.name.localeCompare(b.name))[0] || null;
+
+  return client;
 }
 
 /** Client-safe view of a ticket: no internal ids, no assignee email. */
@@ -110,13 +150,36 @@ router.get('/progress', requirePage('progress'), async (req, res, next) => {
     const nameById = new Map(users.map((u) => [u.id, u.name]));
 
     const sorted = tickets.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    const enriched = [];
-    for (const ticket of sorted) {
-      enriched.push({
-        ...publicTicket(ticket, { assigneeName: ticket.assigneeId ? nameById.get(ticket.assigneeId) || null : null }),
-        board: await boardStateFor(ticket),
-      });
-    }
+
+    /**
+     * The board state for each ticket, fetched together rather than one after
+     * another.
+     *
+     * Each of these is a ClickUp API call, and they ran in sequence: a client
+     * with forty tickets meant forty round trips before the page could render,
+     * one after the other. ClickUp allows a hundred calls a minute, so a
+     * couple of clients opening their portal at once could also spend the
+     * whole workspace's budget and start getting 429s.
+     *
+     * Capped concurrency rather than a bare Promise.all for the same reason:
+     * forty simultaneous calls is how you hit the rate limit from the other
+     * direction. `boardStateFor` swallows its own failures, so one unreachable
+     * board costs that ticket's panel and not the page.
+     */
+    const enriched = new Array(sorted.length);
+    const CONCURRENCY = 5;
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, sorted.length) }, async () => {
+      for (let i = cursor++; i < sorted.length; i = cursor++) {
+        const ticket = sorted[i];
+        enriched[i] = {
+          ...publicTicket(ticket, {
+            assigneeName: ticket.assigneeId ? nameById.get(ticket.assigneeId) || null : null,
+          }),
+          board: await boardStateFor(ticket),
+        };
+      }
+    }));
 
     const open = enriched.filter((t) => !['Resolved', 'Closed'].includes(t.status));
     res.json({
@@ -215,7 +278,13 @@ router.get('/tickets/:id/activity', requirePage('progress'), loadOwnTicket, asyn
           id: c.id, author: c.authorName, body: c.text, at: c.createdAt,
         }));
       } catch (err) {
-        board.error = err.message;
+        // The client gets a sentence, not ClickUp's. An upstream message can
+        // name a list id, a workspace, a token scope or a rate-limit detail --
+        // all of it our internal plumbing, none of it any use to the person
+        // reading, and some of it a description of how this workspace is set
+        // up. The detail goes to the log, where somebody can act on it.
+        console.error(`[portal] could not read the board for ${ticket.id}: ${err.message}`);
+        board.error = 'The work board could not be reached just now.';
       }
     }
 
@@ -236,7 +305,8 @@ router.get('/tickets/:id/activity', requirePage('progress'), loadOwnTicket, asyn
           id: m.id, author: m.authorName, body: m.text, at: m.at, isBot: m.isBot,
         }));
       } catch (err) {
-        chat.error = err.message;
+        console.error(`[portal] could not read the thread for ${ticket.id}: ${err.message}`);
+        chat.error = 'The message thread could not be reached just now.';
       }
     }
 
@@ -339,7 +409,13 @@ router.get('/channel', requirePage('messages'), async (req, res, next) => {
     // A channel the bot cannot reach is a setup problem with an instruction
     // attached, not a server fault. The page shows the sentence.
     if (err && err.name === 'SlackError') {
-      return res.json({ enabled: true, channel: null, messages: [], slackError: err.message });
+      console.error(`[portal] Slack was unreachable for a client channel: ${err.message}`);
+      return res.json({
+        enabled: true,
+        channel: null,
+        messages: [],
+        slackError: 'Messages could not be loaded just now. Your team has been told.',
+      });
     }
     next(err);
   }

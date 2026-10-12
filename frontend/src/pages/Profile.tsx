@@ -119,6 +119,11 @@ export default function Profile() {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  // Only asked for when the address is actually changing. Making somebody
+  // re-type their password to fix a typo in their own name would be theatre.
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const emailChanging = editing && email.trim().toLowerCase() !== (user?.email ?? "").toLowerCase();
 
   const status = data?.passwordStatus ?? user?.passwordStatus;
   const otherSessions = useMemo(
@@ -129,6 +134,7 @@ export default function Profile() {
   function startEditing() {
     setName(user?.name ?? "");
     setEmail(user?.email ?? "");
+    setCurrentPassword("");
     setEditing(true);
   }
 
@@ -137,10 +143,24 @@ export default function Profile() {
       toast.error("A name is required");
       return;
     }
+    if (emailChanging && !currentPassword) {
+      toast.error("Enter your current password to change your email address");
+      return;
+    }
     try {
-      await updateDetails.mutateAsync({ name: name.trim(), email: email.trim() });
+      const result = await updateDetails.mutateAsync({
+        name: name.trim(),
+        email: email.trim(),
+        ...(emailChanging ? { currentPassword } : {}),
+      });
       setEditing(false);
-      toast.success("Profile updated");
+      setCurrentPassword("");
+      setPendingEmail(result.emailChangePending);
+      toast.success(
+        result.emailChangePending
+          ? `Check ${result.emailChangePending} for a link to confirm the new address`
+          : "Profile updated",
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save those details");
     }
@@ -243,6 +263,26 @@ export default function Profile() {
                     <Input id="profile-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="bg-background/50" />
                     <p className="text-xs text-muted-foreground">This is also the address you sign in with.</p>
                   </div>
+                  {/* Only when the address is actually changing, and said out
+                      loud: an email change is the one profile edit that can be
+                      turned into an account takeover, so it costs a password
+                      and a click in the new inbox. */}
+                  {emailChanging && (
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label htmlFor="profile-current-password">Current password</Label>
+                      <Input
+                        id="profile-current-password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        We will send a link to {email.trim() || "the new address"} to confirm it.
+                        Nothing changes until it is opened.
+                      </p>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 sm:col-span-2">
                     <Button size="sm" onClick={saveDetails} disabled={updateDetails.isPending} className="gap-1.5">
                       {updateDetails.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
@@ -257,6 +297,15 @@ export default function Profile() {
                 <div className="grid gap-5 sm:grid-cols-2">
                   <Fact icon={UserRound} label="Full name" value={user?.name ?? "—"} />
                   <Fact icon={AtSign} label="Email" value={user?.email ?? "—"} />
+                  {/* An address that has been asked for and not yet confirmed.
+                      Shown because the screen otherwise keeps displaying the
+                      old one and looks as though the change did not save. */}
+                  {pendingEmail && (
+                    <p className="t-caption text-muted-foreground sm:col-span-2">
+                      Waiting on <span className="font-medium text-foreground">{pendingEmail}</span> to
+                      confirm the change. Nothing moves until that link is opened.
+                    </p>
+                  )}
                   <Fact icon={Shield} label="Role" value={ROLE_LABEL[user?.role ?? ""] ?? user?.role ?? "—"} />
                   {user?.company && <Fact icon={Building2} label="Company" value={user.company} />}
                   <Fact

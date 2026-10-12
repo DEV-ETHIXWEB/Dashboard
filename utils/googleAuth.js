@@ -18,7 +18,14 @@ async function verifyGoogleIdToken(idToken) {
     audience: process.env.GOOGLE_CLIENT_ID,
   });
   const payload = ticket.getPayload();
-  return { googleId: payload.sub, email: payload.email, name: payload.name };
+  // `email_verified` travels with the rest. Without it the caller is trusting
+  // an address claim Google itself has not confirmed. See routes/auth.js.
+  return {
+    googleId: payload.sub,
+    email: payload.email,
+    name: payload.name,
+    emailVerified: payload.email_verified !== false,
+  };
 }
 
 module.exports = { isGoogleSignInConfigured, verifyGoogleIdToken };

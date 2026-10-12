@@ -48,6 +48,12 @@ const SCHEMAS = {
     // and resets the moment somebody clicks through or upgrades -- three in a
     // row drops the ceiling from 7 days to 30. `upsell_last_message` is the
     // weekly line they last read, so the next one is never the same one twice.
+    // An email change in flight. The address is not written to `email` until
+    // somebody has opened the link sent to it, so a stolen session cannot
+    // quietly move the account to an inbox the thief controls and then take it
+    // over through forgot-password. Only the SHA-256 of the link's secret is
+    // kept, the same way password_tokens does it.
+    'pending_email', 'pending_email_hash', 'pending_email_expires_at',
     'welcome_email_sent_at', 'first_login_at', 'plans_modal_seen_at',
     'upsell_snoozed_until', 'upsell_dismiss_streak',
     'upsell_last_shown_at', 'upsell_last_message',
@@ -114,6 +120,11 @@ const SCHEMAS = {
     // it renew?" without a round trip on every page load.
     'currency', 'amount', 'interval', 'current_period_end', 'cancel_at_period_end',
     'card_brand', 'card_last4', 'latest_invoice_url', 'synced_at',
+    // When the last subscription event we applied was created, in Stripe's
+    // clock. Webhooks arrive in whatever order the network delivers them, and
+    // a `customer.subscription.updated` landing after the `.deleted` that
+    // followed it would otherwise flip a cancelled client back to active.
+    'last_event_at',
   ],
   // One row per real money movement, mirrored from Stripe. Stripe stays the
   // source of truth: nothing here is ever created by hand, and every row is
@@ -292,6 +303,13 @@ const SCHEMAS = {
     // What this upgrade was credited for, and which subscription it replaced.
     // Both null on a first purchase. See UPGRADE_BILLING in utils/subscriptions.js.
     'credit_usd', 'previous_subscription_id',
+    // How that credit was actually spent. `credit_applied_usd` came off this
+    // bill; `credit_carried_usd` was more than the bill and bought
+    // `bonus_days` of extra time instead, because money a client has already
+    // handed over is theirs until they have had the service. Twelve months of
+    // Managed moved onto one month of Unlimited is the case that proves it:
+    // without these three columns about $152 of paid-for time vanished.
+    'credit_applied_usd', 'credit_carried_usd', 'bonus_days',
     // `starts_at` is only set on a *scheduled* row -- a downgrade, which is
     // not bought today. It is the date the cheaper plan may begin, which is
     // the day the period they already paid for runs out. `started_at` is when
@@ -301,9 +319,17 @@ const SCHEMAS = {
     // Who confirmed the money arrived. Under PAYMENT_MODE=manual this is an
     // admin; under stripe it is the webhook, recorded as 'stripe'.
     'marked_paid_by', 'marked_paid_at',
-    // Said once each: the "you unlocked" modal, the confirmation email, and
-    // the reminder that goes out 7 days before a multi-month period renews.
+    // Said once each: the "you unlocked" modal, the confirmation email, the
+    // reminder that goes out 7 days before a multi-month period renews, and
+    // the payment details the reminder promises.
     'unlock_seen_at', 'confirmation_sent_at', 'renewal_reminder_sent_at',
+    'payment_details_sent_at',
+    // The end of a paid period. `past_due_since` is when the period ran out
+    // with no renewal confirmed -- the perks keep running from here for the
+    // grace window in utils/subscriptions.js and then stop, which is the
+    // whole reason a paid plan is no longer permanent. `lapsed_at` is when
+    // they stopped.
+    'past_due_since', 'lapsed_at',
     // Cancellation. `handover_requested_at` is the client asking for their
     // website files -- we prepare the files, we do not migrate the site, and
     // the request has to be a record rather than a conversation.
@@ -322,8 +348,16 @@ const SCHEMAS = {
   // `count` is the included allowance consumed; `extra_count` is the requests
   // past it that we quote and charge for separately. They are two different
   // numbers to a client and must not be added together.
+  //
+  // `non_update_count` is the third number: the requests that are deliberately
+  // not counted against the allowance -- outages, billing queries, questions.
+  // They stay uncounted, because an outage must always get through, but they
+  // are the categories a client declares for themselves and so the one way to
+  // get change work done for free. Counting them is what lets the team be
+  // told, once, when somebody files an improbable number in a month.
   update_request_usage: [
-    'id', 'client_id', 'period_start', 'period_end', 'count', 'extra_count', 'updated_at',
+    'id', 'client_id', 'period_start', 'period_end', 'count', 'extra_count',
+    'non_update_count', 'non_update_alerted_at', 'updated_at',
   ],
   // A request a Managed client chose to hold until their allowance resets,
   // rather than pay for as an extra or upgrade for.
@@ -333,9 +367,15 @@ const SCHEMAS = {
   // the ticket queue would start a clock nobody agreed to and bury the real
   // queue. It becomes a ticket when `release_at` passes, and `ticket_id`
   // records which one so a release cannot happen twice.
+  //
+  // `deferred_count` is how many times its release date came round while the
+  // new month's allowance was already spent. Without it the request sat due
+  // for ever, retried every minute, and the client was never told -- which is
+  // worse than having refused it in the first place.
   queued_requests: [
     'id', 'client_id', 'subject', 'category', 'description', 'priority',
     'release_at', 'released_at', 'ticket_id', 'cancelled_at', 'created_at',
+    'deferred_count', 'deferred_at',
   ],
   // One entry in the record of work done on a client's site.
   //

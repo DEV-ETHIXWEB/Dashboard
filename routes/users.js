@@ -22,6 +22,7 @@ const {
   sensitiveAdminLimiter, credentialIssueLimiter, recoveryCodeLimiter, avatarUploadLimiter,
 } = require('../utils/rateLimits');
 const recoveryCodes = require('../utils/recoveryCodes');
+const erasure = require('../utils/userErasure');
 const { baseUrl } = require('../utils/appUrl');
 const multer = require('multer');
 const passwordPolicy = require('../utils/passwordPolicy');
@@ -69,6 +70,83 @@ function acceptAvatarFile(req, res, next) {
     return next(err);
   });
 }
+
+/**
+ * Open the link, and the address moves.
+ *
+ * Deliberately not behind `requireAuth`: somebody confirming a new address may
+ * well be reading the email on a device that has never signed in, and making
+ * them log in first -- with the address that is about to change -- is a loop.
+ * The token is the authentication, which is the same bargain every link in
+ * this application makes.
+ *
+ * Every open session except the one making the request is ended. An email
+ * change is the event a stolen session would be used for, so if this one was
+ * not the owner's, the owner signing in afterwards closes it.
+ */
+router.post('/me/email/confirm', async (req, res, next) => {
+  try {
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    if (!token) return res.status(400).json({ error: 'That link is missing its token.' });
+
+    const hash = crypto.createHash('sha256').update(token).digest('hex');
+    const matches = await db.where('users', { pendingEmailHash: hash });
+    const user = matches[0] || null;
+
+    // One sentence for every way this can fail, so a guess learns nothing
+    // about which addresses exist or which links are live.
+    const expired = user?.pendingEmailExpiresAt
+      && new Date(user.pendingEmailExpiresAt).getTime() < Date.now();
+    if (!user || !user.pendingEmail || expired) {
+      return res.status(400).json({ error: 'That link has expired or has already been used.' });
+    }
+
+    // Somebody else may have taken the address in the meantime.
+    const taken = await db.filter(
+      'users',
+      (u) => u.id !== user.id && String(u.email).toLowerCase() === String(user.pendingEmail).toLowerCase(),
+    );
+    if (taken.length > 0) {
+      await db.update('users', user.id, {
+        pendingEmail: null, pendingEmailHash: null, pendingEmailExpiresAt: null,
+      });
+      return res.status(409).json({ error: 'That email is now in use by another account.' });
+    }
+
+    const previousEmail = user.email;
+    const updated = await db.update('users', user.id, {
+      email: user.pendingEmail,
+      pendingEmail: null,
+      pendingEmailHash: null,
+      pendingEmailExpiresAt: null,
+    });
+
+    // Every other session goes. See the note above.
+    await db.removeWhere('sessions', (s) => s.userId === user.id && s.id !== req.session?.id);
+
+    await audit(user.id, 'update', 'user', user.id, {
+      action: 'email_changed', from: previousEmail, to: updated.email,
+    });
+
+    // And the address they left keeps one last message, which is the only
+    // thing that reaches the real owner if this was not them.
+    try {
+      await mailer.sendTemplate({
+        to: previousEmail,
+        message: messages.emailChanged({ user: updated, previousEmail }),
+        template: 'email_changed',
+        entity: 'user',
+        entityId: user.id,
+      });
+    } catch (err) {
+      console.error('Could not confirm the email change to the old address:', err.message);
+    }
+
+    res.json({ ok: true, email: updated.email });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.use(requireAuth);
 
@@ -140,10 +218,58 @@ router.post('/me/2fa/enable', requireCSRF, async (req, res, next) => {
   }
 });
 
+/**
+ * Turning the second factor off, which needs more than the session that it
+ * exists to protect.
+ *
+ * It used to need only a signed-in cookie. That is the wrong way round: the
+ * whole purpose of a second factor is to be worth something when a session has
+ * been taken, and a protection that can be removed by the thing it is
+ * protecting against is decoration. Switching it ON is already proven with a
+ * verified Firebase token; switching it off was free.
+ *
+ * The password is what is asked for, because it is the one thing a borrowed
+ * session does not carry. An account that signs in with Google has none, and
+ * is sent to an administrator rather than waved through -- a person in the
+ * loop is the point.
+ *
+ * The old address is told either way: if this was not the owner, that message
+ * is how they find out.
+ */
 router.post('/me/2fa/disable', requireCSRF, async (req, res, next) => {
   try {
+    if (!req.user.twoFactorEnabled) {
+      return res.json({ user: safeUser(req.user) });
+    }
+
+    const { currentPassword } = req.body || {};
+    if (!req.user.password) {
+      return res.status(400).json({
+        error: 'This account signs in with Google, so there is no password to confirm with. '
+          + 'Ask an administrator to turn two-step verification off.',
+      });
+    }
+    if (!currentPassword || !bcrypt.compareSync(currentPassword, req.user.password)) {
+      return res.status(403).json({
+        error: 'Enter your current password to turn two-step verification off.',
+      });
+    }
+
     const updated = await db.update('users', req.user.id, { twoFactorEnabled: false, twoFactorContact: null });
     await audit(req.user.id, 'update', 'user', req.user.id, { action: '2fa_disabled' });
+
+    try {
+      await mailer.sendTemplate({
+        to: updated.email,
+        message: messages.twoFactorDisabled({ user: updated, ipAddress: normalizeIp(req.ip) }),
+        template: 'two_factor_disabled',
+        entity: 'user',
+        entityId: req.user.id,
+      });
+    } catch (err) {
+      console.error('Could not send the two-step-verification notice:', err.message);
+    }
+
     res.json({ user: safeUser(updated) });
   } catch (err) {
     next(err);
@@ -205,6 +331,76 @@ router.post('/me/recovery-codes', requireCSRF, recoveryCodeLimiter, async (req, 
   }
 });
 
+/** How long a confirmation link to a new address is good for. */
+const EMAIL_CHANGE_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Park the new address and send the two emails that make the change safe.
+ *
+ * Only the SHA-256 of the link's secret is written down, the same way
+ * utils/passwordTokens.js does it, so a database leak yields nothing that can
+ * be replayed into an account takeover. The secret travels in the URL
+ * fragment, which no browser sends to a server -- it stays out of access logs
+ * and out of `Referer` headers on any onward click.
+ *
+ * Never throws. The rest of the profile save has already happened, and a mail
+ * transport that is down must not turn it into an error; the address simply
+ * does not move, which is the safe outcome.
+ */
+async function startEmailChange(req, user, nextEmail) {
+  const secret = crypto.randomBytes(32).toString('base64url');
+  const hash = crypto.createHash('sha256').update(secret).digest('hex');
+  const expiresAt = new Date(Date.now() + EMAIL_CHANGE_TTL_MS).toISOString();
+
+  await db.update('users', user.id, {
+    pendingEmail: nextEmail,
+    pendingEmailHash: hash,
+    pendingEmailExpiresAt: expiresAt,
+  });
+
+  const base = baseUrl();
+  const confirmUrl = base ? `${base}/confirm-email#token=${secret}` : null;
+
+  // To the new address: the link that actually moves it.
+  try {
+    await mailer.sendTemplate({
+      to: nextEmail,
+      message: messages.confirmEmailChange({
+        user, nextEmail, confirmUrl, expiresAt, ipAddress: normalizeIp(req.ip),
+      }),
+      template: 'confirm_email_change',
+      entity: 'user',
+      entityId: user.id,
+    });
+  } catch (err) {
+    console.error(`Could not send the email-change confirmation to ${nextEmail}:`, err.message);
+    return false;
+  }
+
+  /**
+   * To the old address: that somebody asked.
+   *
+   * The half that matters when the session was not the owner's. The link goes
+   * to an inbox the attacker controls, so the only person it can reach is the
+   * one being attacked -- and they are the one who needs to know.
+   */
+  try {
+    await mailer.sendTemplate({
+      to: user.email,
+      message: messages.emailChangeRequested({
+        user, nextEmail, ipAddress: normalizeIp(req.ip),
+      }),
+      template: 'email_change_requested',
+      entity: 'user',
+      entityId: user.id,
+    });
+  } catch (err) {
+    console.error('Could not warn the old address about an email change:', err.message);
+  }
+
+  return true;
+}
+
 router.put('/me', requireCSRF, async (req, res, next) => {
   try {
     const { name, email, password, currentPassword } = req.body || {};
@@ -216,21 +412,51 @@ router.put('/me', requireCSRF, async (req, res, next) => {
       patch.name = cleanName;
     }
 
-    // Changing the email must not collide with another account, or that
-    // account could no longer sign in -- and it must be an address at all.
-    // This used to call .toLowerCase() on whatever arrived, so a body with a
-    // number or an object in `email` was a 500 rather than a refusal.
+    /**
+     * Changing the email is a request, not a write.
+     *
+     * It used to be one field in this patch: no password, no confirmation to
+     * the new address, no word to the old one. A session somebody had borrowed
+     * for five minutes could therefore be turned into the account itself --
+     * move the address, ask for a password reset, and the real owner is locked
+     * out of their own workspace with no notification that anything happened.
+     *
+     * Three things now stand between a session and that:
+     *
+     *   the current password   so holding the cookie is not enough,
+     *   a link to the new      so the address has to be one they can read,
+     *   a notice to the old    so the real owner finds out either way.
+     *
+     * Nothing is written to `email` here. The address is parked in
+     * `pending_email` and only moves when the link is opened.
+     */
+    let emailChange = null;
     if (email !== undefined && email !== null && email !== '') {
       const cleanEmail = userFields.normalizeEmail(email);
       if (!cleanEmail) return res.status(400).json({ error: 'That is not a valid email address.' });
 
       if (cleanEmail !== String(req.user.email).toLowerCase()) {
+        // Proving the current password. An account that signs in with Google
+        // has none to prove, so it cannot take this route at all -- the change
+        // has to go through an administrator, which is a person rather than a
+        // borrowed cookie.
+        if (!req.user.password) {
+          return res.status(400).json({
+            error: 'This account signs in with Google, so there is no password to confirm the '
+              + 'change with. Ask an administrator to move the address.',
+          });
+        }
+        if (!currentPassword || !bcrypt.compareSync(currentPassword, req.user.password)) {
+          return res.status(403).json({ error: 'Enter your current password to change your email address.' });
+        }
+
         const taken = await db.filter(
           'users',
           (u) => u.id !== req.user.id && String(u.email).toLowerCase() === cleanEmail,
         );
         if (taken.length > 0) return res.status(409).json({ error: 'That email is already in use' });
-        patch.email = cleanEmail;
+
+        emailChange = cleanEmail;
       }
     }
 
@@ -285,8 +511,24 @@ router.put('/me', requireCSRF, async (req, res, next) => {
       }
     }
 
-    await audit(req.user.id, 'update', 'user', req.user.id, { self: true, passwordChanged: Boolean(patch.password) });
-    res.json({ user: safeUser(updated) });
+    // The address does not move until the link is opened. Both emails go out
+    // here, and neither is allowed to fail the rest of the save.
+    let emailPending = false;
+    if (emailChange) {
+      emailPending = await startEmailChange(req, updated, emailChange);
+    }
+
+    await audit(req.user.id, 'update', 'user', req.user.id, {
+      self: true,
+      passwordChanged: Boolean(patch.password),
+      ...(emailChange ? { emailChangeRequested: emailChange } : {}),
+    });
+    res.json({
+      user: safeUser(await db.find('users', req.user.id)),
+      // So the screen can say "check your new inbox" rather than showing the
+      // old address back and looking as though nothing happened.
+      emailChangePending: emailPending ? emailChange : null,
+    });
   } catch (err) {
     next(err);
   }
@@ -307,10 +549,30 @@ router.put('/me', requireCSRF, async (req, res, next) => {
  */
 router.get('/me/profile', async (req, res, next) => {
   try {
-    const [sessions, log] = await Promise.all([
-      db.filter('sessions', (s) => s.userId === req.user.id && !s.pending),
-      db.recent('activity_log', 400),
+    /**
+     * This account's own rows, asked for by actor.
+     *
+     * `db.recent('activity_log', 400)` was the last 400 entries in the *whole
+     * workspace*, filtered afterwards to the ones about this person -- so on a
+     * busy afternoon somebody's own security history was empty, because four
+     * hundred other people's events had happened since. The page is a record
+     * of your own sign-ins and it silently stopped being one exactly when
+     * there was most to look at.
+     *
+     * Entries about this account that somebody else performed -- an admin
+     * resetting a password -- are the second read. Both are indexed; see the
+     * activity_log indexes in db/setup.js.
+     */
+    const [sessions, byMe, aboutMe] = await Promise.all([
+      db.where('sessions', { userId: req.user.id }),
+      db.where('activity_log', { actorId: req.user.id }, { orderBy: 'createdAt', limit: 200 }),
+      db.where('activity_log', { entity: 'user', entityId: req.user.id }, { orderBy: 'createdAt', limit: 200 }),
     ]);
+
+    const seen = new Set();
+    const log = [...byMe, ...aboutMe]
+      .filter((row) => (seen.has(row.id) ? false : seen.add(row.id)))
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 
     const mine = log.filter((row) => isOwnSecurityEvent(row, req.user.id));
     const lastLogin = mine.find((row) => row.action === 'login' && row.actorId === req.user.id) || null;
@@ -326,6 +588,7 @@ router.get('/me/profile', async (req, res, next) => {
       // actually read rather than a full history export.
       activity: mine.slice(0, 25).map((row) => publicActivity(row, req.user.id)),
       sessions: sessions
+        .filter((s) => !s.pending)
         .sort((a, b) => Number(b.createdAt) - Number(a.createdAt))
         .map((s) => ({
           id: s.id,
@@ -627,14 +890,16 @@ router.get('/', async (req, res, next) => {
       // Whoever this client can already see the work of: the manager on their
       // projects, and the person handling each of their tickets. Names, so the
       // portal can say who replied -- never the role, so the roster stays shut.
-      const [projects, tickets] = await Promise.all([db.all('projects'), db.all('tickets')]);
+      // Asked for by client, not read whole and filtered. This list is three
+      // names long and it was scanning every project and every ticket in the
+      // workspace to build it -- on Firestore, a billed read per row.
+      const [projects, tickets] = await Promise.all([
+        db.where('projects', { clientId: req.user.id }, { select: ['assignedPmId'] }),
+        db.where('tickets', { clientId: req.user.id }, { select: ['assigneeId'] }),
+      ]);
       const connected = new Set();
-      for (const p of projects) {
-        if (p.clientId === req.user.id && p.assignedPmId) connected.add(p.assignedPmId);
-      }
-      for (const t of tickets) {
-        if (t.clientId === req.user.id && t.assigneeId) connected.add(t.assigneeId);
-      }
+      for (const p of projects) if (p.assignedPmId) connected.add(p.assignedPmId);
+      for (const t of tickets) if (t.assigneeId) connected.add(t.assigneeId);
 
       const self = users.find((u) => u.id === req.user.id);
       const visible = [
@@ -696,6 +961,24 @@ router.post('/', requireCSRF, requireRole('admin'), credentialIssueLimiter, asyn
       pages = role === 'client' ? normalizeAllowedPages(allowedPages) : null;
     } catch (err) {
       return res.status(400).json({ error: err.message });
+    }
+
+    /**
+     * A password an admin typed is held to the same policy as one somebody
+     * sets for themselves.
+     *
+     * The edit route already does this; creation did not, so the weakest
+     * password in the workspace could be set on the day an account was made --
+     * and that is the one the account is emailed and most likely to keep. An
+     * admin typing "password1" for a colleague is the same weakness as the
+     * colleague typing it.
+     *
+     * A *generated* password skips the check because it is generated to pass
+     * it; see utils/userProvisioning.js.
+     */
+    if (password) {
+      const rejection = passwordPolicy.rejectionFor(password, { email, name });
+      if (rejection) return res.status(422).json({ error: rejection });
     }
 
     const plaintextPassword = password || provisioning.generatePassword();
@@ -1025,19 +1308,21 @@ router.delete('/:id', requireCSRF, requireRole('admin'), handleAdmin(async (req,
   });
   if (gate.held) return;
 
-  const ok = await db.remove('users', req.params.id);
-  if (!ok) return res.status(404).json({ error: 'User not found' });
+  /**
+   * One routine, shared with the approval queue.
+   *
+   * This used to do its own cleanup inline and the approval path did none, so
+   * an account deleted through the queue -- which exists *because* the action
+   * is sensitive -- kept its live sessions, and whoever held one stayed signed
+   * in as a user who no longer existed. See utils/userErasure.js for what is
+   * removed and what is deliberately kept.
+   */
+  const erased = await erasure.eraseUser(req.params.id);
+  if (!erased) return res.status(404).json({ error: 'User not found' });
 
-  await db.removeWhere('sessions', (s) => s.userId === req.params.id);
-  await db.removeWhere('otp_codes', (o) => o.userId === req.params.id);
-  await recoveryCodes.clearFor(req.params.id);
-
-  const tasks = await db.filter('tasks', (t) => t.assigneeId === req.params.id);
-  for (const t of tasks) await db.update('tasks', t.id, { assigneeId: null });
-  const tickets = await db.filter('tickets', (t) => t.assigneeId === req.params.id);
-  for (const t of tickets) await db.update('tickets', t.id, { assigneeId: null });
-
-  await audit(req.user.id, 'delete', 'user', req.params.id);
+  // The counts, not just the fact. "Deleted an account" is a poor record of an
+  // irreversible act; what was removed with it is what makes it a real one.
+  await audit(req.user.id, 'delete', 'user', req.params.id, erased.removed);
   if (target.role === 'admin') {
     await announceRosterChange({ actor: req.user, target, change: 'removed' });
   }

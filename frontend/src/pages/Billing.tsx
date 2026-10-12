@@ -28,15 +28,33 @@ import type { Billing as BillingRecord } from "@/lib/entities";
 
 const NEEDS_ACTION = new Set(["past_due", "unpaid", "incomplete", "incomplete_expired", "canceled"]);
 
+/**
+ * What this costs beyond the plan itself, which is nothing.
+ *
+ * Two of these used to contradict the product. "Paying by card: no surcharge"
+ * sat on a page that also says we never hold a card, because payment is by
+ * bank transfer -- a client reading both would reasonably wonder which is
+ * true. And "Changing or cancelling: stop any time" read as a refund promise
+ * next to terms that say a period already paid for is not refunded; both are
+ * true and the sentence has to say which it means.
+ */
 const FEE_ROWS = [
   {
-    label: "Your monthly plan",
+    label: "Your plan",
     amount: "Shown before you pay",
-    explain: "You see the exact amount on the payment screen, before you confirm anything.",
+    explain: "You see the exact amount before you confirm anything, credit included.",
   },
   { label: "Setting up your account", amount: 0, explain: "There is no joining fee." },
-  { label: "Paying by card", amount: 0, explain: "We do not add a surcharge for card payments." },
-  { label: "Changing or cancelling", amount: 0, explain: "Stop any time. You are not tied in." },
+  {
+    label: "Paying us",
+    amount: 0,
+    explain: "By bank transfer, with the details sent to you. We add nothing on top, and no card is stored.",
+  },
+  {
+    label: "Changing or cancelling",
+    amount: 0,
+    explain: "Change or stop any time, with nothing to pay to do it. A period you have already paid for runs to its end rather than being refunded.",
+  },
 ] as const;
 
 function describeStatus(status: string | undefined): { headline: string; detail: string; ok: boolean } {

@@ -22,7 +22,13 @@ export default defineConfig({
           if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
             return 'vendor-react'
           }
-          if (/[\\/]node_modules[\\/](recharts|d3-.*|victory-.*)[\\/]/.test(id)) return 'vendor-charts'
+          /* recharts is deliberately NOT given a manual chunk.
+             Naming it here pinned it to a chunk the entry preloads, so the
+             whole 292KB charting stack was downloaded by every page --
+             including the login screen, which has no chart and nobody
+             signed in. Left alone it follows the one lazy() boundary that
+             actually uses it (components/money/SpendDonut.tsx) and arrives
+             with the panel that draws one. */
           if (/[\\/]node_modules[\\/](framer-motion|motion-dom|motion-utils)[\\/]/.test(id)) return 'vendor-motion'
           if (/[\\/]node_modules[\\/](@firebase|firebase)[\\/]/.test(id)) return 'vendor-firebase'
           return undefined

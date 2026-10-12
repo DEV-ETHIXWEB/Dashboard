@@ -520,7 +520,7 @@ async function main() {
       eq(`${label}: the plan still governs`, state.planKey, 'managed');
       eq(`${label}: two updates are showing`, state.usage.remaining, 2);
 
-      const gate = await updates.check(who, { category: 'General' });
+      const gate = await updates.check(who, { category: 'Website' });
       eq(`${label}: the request is allowed`, gate.ok, true);
       eq(`${label}: and it counts against the allowance`, gate.counts, true);
 
@@ -626,6 +626,417 @@ async function main() {
     eq('promoted once in total, not once per sweep', a + b, 1);
     eq('and it is awaiting payment',
       (await db.find('subscriptions', scheduled.id)).status, 'pending_payment');
+  }
+
+  /* ------------------------------------------------------------------ QA --
+     Everything below was found by testing the money flows against the real
+     code rather than against the tests. Each block names the behaviour it
+     pins, because every one of them was a way for a client to be charged
+     wrongly, kept for nothing, or billed twice.                            */
+
+  /** A client with nothing on their account, for a test that needs a clean one. */
+  async function freshClient(label) {
+    return db.insert('users', {
+      name: label,
+      email: `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@probe.test`,
+      role: 'client',
+      password: 'x',
+    });
+  }
+
+  section('A paid period ends, and asks to be renewed');
+  {
+    /* The largest gap in the feature: nothing read `renews_at`. A plan went
+       active, the renewal date came and went, and the row stayed `active` for
+       ever -- so one payment bought the product permanently and no second
+       period was ever collected.                                           */
+    const subs = require('../utils/subscriptions');
+    const plansLib = require('../lib/plans');
+
+    const who = await freshClient('Renews');
+    const startedAt = new Date(Date.now() - 40 * 864e5);
+    const running = await db.insert('subscriptions', {
+      clientId: who.id, planKey: 'managed', period: 1, amountUsd: 19, status: 'active',
+      startedAt: startedAt.toISOString(),
+      renewsAt: plansLib.renewalDate(startedAt, 1).toISOString(),
+      markedPaidAt: startedAt.toISOString(), createdAt: startedAt.toISOString(),
+    });
+
+    const dayAfter = new Date(new Date(running.renewsAt).getTime() + 864e5);
+    // Counted per row rather than per sweep: this suite leaves other
+    // subscriptions behind and the sweep is workspace-wide.
+    check('the sweep picks it up', (await subs.renewDue(dayAfter)) >= 1);
+
+    const ended = await db.find('subscriptions', running.id);
+    eq('the finished period is past due', ended.status, 'past_due');
+    eq('and records the day it ran out', ended.pastDueSince, running.renewsAt);
+
+    const history = await subs.historyFor(who.id);
+    const renewal = history.find((row) => row.status === 'pending_payment');
+    check('a renewal is waiting on payment', Boolean(renewal));
+    eq('for the same plan', renewal.planKey, 'managed');
+    eq('for the same period', renewal.period, 1);
+    eq('at the list price, uncredited', renewal.amountUsd, plansLib.amountFor('managed', 1));
+    eq('and it knows which period it follows', renewal.previousSubscriptionId, running.id);
+
+    // The perks keep running while we collect, which is the whole reason
+    // `past_due` grants at all under a manual payment flow.
+    const during = await subs.stateFor(who, dayAfter);
+    eq('the plan still governs inside the grace window', during.effectivePlanKey, 'managed');
+    check('and the client is told when that ends', Boolean(during.graceEndsAt));
+
+    // And then they stop, which is the half that makes the first half honest.
+    const afterGrace = new Date(
+      new Date(running.renewsAt).getTime() + (subs.PAST_DUE_GRACE_DAYS + 1) * 864e5,
+    );
+    const after = await subs.stateFor(who, afterGrace);
+    eq('past the grace window it grants nothing', after.effectivePlanKey, null);
+
+    check('the lapse is swept up', (await subs.expireLapsed(afterGrace)) >= 1);
+    eq('the row is expired, not cancelled -- nobody asked to leave',
+      (await db.find('subscriptions', running.id)).status, 'expired');
+    eq('and a second sweep has nothing left to do', await subs.expireLapsed(afterGrace), 0);
+
+    // Two sweeps at once must open one renewal, not two bills.
+    const other = await freshClient('Renews Race');
+    const raceStart = new Date(Date.now() - 40 * 864e5);
+    const raceRow = await db.insert('subscriptions', {
+      clientId: other.id, planKey: 'basic', period: 1, amountUsd: 9, status: 'active',
+      startedAt: raceStart.toISOString(),
+      renewsAt: plansLib.renewalDate(raceStart, 1).toISOString(),
+      markedPaidAt: raceStart.toISOString(), createdAt: raceStart.toISOString(),
+    });
+    const raceAt = new Date(new Date(raceRow.renewsAt).getTime() + 864e5);
+    const [x, y] = await Promise.all([subs.renewDue(raceAt), subs.renewDue(raceAt)]);
+    eq('two sweeps together renew once, not twice', x + y, 1);
+    eq('so there is exactly one renewal to collect',
+      (await subs.historyFor(other.id)).filter((r) => r.status === 'pending_payment').length, 1);
+  }
+
+  section('An upgrade is priced when the money lands, not when it was chosen');
+  {
+    /* The credit on an upgrade is the unused part of the plan being replaced,
+       and it shrinks every day. Frozen at the moment of choosing, a plan
+       picked on day 1 and paid for on day 300 still credited the whole of a
+       twelve-month Managed plan -- about $181.90 against $31.98 of real
+       remaining value, so we handed over $150 of Unlimited for nothing.    */
+    const subs = require('../utils/subscriptions');
+    const plansLib = require('../lib/plans');
+
+    const who = await freshClient('Reprice');
+    const startedAt = new Date(Date.UTC(2026, 0, 1));
+    const managed = await db.insert('subscriptions', {
+      clientId: who.id, planKey: 'managed', period: 12,
+      amountUsd: plansLib.amountFor('managed', 12), status: 'active',
+      startedAt: startedAt.toISOString(),
+      renewsAt: plansLib.renewalDate(startedAt, 12).toISOString(),
+      markedPaidAt: startedAt.toISOString(), createdAt: startedAt.toISOString(),
+    });
+
+    // Chosen on day one, when almost the whole year is unused.
+    const dayOne = new Date(startedAt.getTime() + 864e5);
+    const quotedThen = await subs.quoteFor(who.id, 'unlimited', 12, dayOne);
+    check('the credit on day one is nearly the whole year',
+      quotedThen.creditUsd > 170, String(quotedThen.creditUsd));
+
+    const chosen = await db.insert('subscriptions', {
+      clientId: who.id, planKey: 'unlimited', period: 12,
+      amountUsd: quotedThen.amountUsd, creditUsd: quotedThen.creditUsd,
+      previousSubscriptionId: managed.id, status: 'pending_payment',
+      createdAt: dayOne.toISOString(),
+    });
+
+    // Paid for 300 days later, by which time there is almost nothing left.
+    const muchLater = new Date(startedAt.getTime() + 300 * 864e5);
+    const repriced = await subs.repriceFor(chosen, muchLater);
+    check('by day 300 the credit is a fraction of that',
+      repriced.creditUsd < 40, String(repriced.creditUsd));
+    check('and the amount owed has gone up to match',
+      repriced.amountUsd > quotedThen.amountUsd, `${repriced.amountUsd} vs ${quotedThen.amountUsd}`);
+    check('which is flagged as a change from the quote', repriced.changed === true);
+
+    const result = await subs.activate(chosen.id, { byUserId: 'test', now: muchLater });
+    eq('the row records what was actually owed', result.subscription.amountUsd, repriced.amountUsd);
+    eq('and the credit that was actually given', result.subscription.creditUsd, repriced.creditUsd);
+    eq('the plan it replaced is retired', (await db.find('subscriptions', managed.id)).status, 'expired');
+  }
+
+  section('A credit bigger than the bill buys time instead of vanishing');
+  {
+    /* Twelve months of Managed moved onto one month of Unlimited: the bill is
+       $29 and the credit is about $182. Clamping the credit to the price made
+       the month free and silently burned the other ~$152 of time the client
+       had already paid for.                                                */
+    const subs = require('../utils/subscriptions');
+    const plansLib = require('../lib/plans');
+
+    const who = await freshClient('Carry');
+    const startedAt = new Date(Date.UTC(2026, 0, 1));
+    const managed = await db.insert('subscriptions', {
+      clientId: who.id, planKey: 'managed', period: 12,
+      amountUsd: plansLib.amountFor('managed', 12), status: 'active',
+      startedAt: startedAt.toISOString(),
+      renewsAt: plansLib.renewalDate(startedAt, 12).toISOString(),
+      markedPaidAt: startedAt.toISOString(), createdAt: startedAt.toISOString(),
+    });
+
+    const at = new Date(startedAt.getTime() + 864e5);
+    const quote = await subs.quoteFor(who.id, 'unlimited', 1, at);
+    eq('the month itself costs nothing', quote.amountUsd, 0);
+    check('but the leftover is reported, not dropped',
+      quote.creditCarriedUsd > 140, String(quote.creditCarriedUsd));
+    check('and it is expressed as real days', quote.bonusDays > 140, String(quote.bonusDays));
+
+    const chosen = await db.insert('subscriptions', {
+      clientId: who.id, planKey: 'unlimited', period: 1,
+      amountUsd: quote.amountUsd, creditUsd: quote.creditUsd,
+      previousSubscriptionId: managed.id, status: 'pending_payment',
+      createdAt: at.toISOString(),
+    });
+
+    const result = await subs.activate(chosen.id, { byUserId: 'test', now: at });
+    check('the carried credit is written down', Number(result.subscription.creditCarriedUsd) > 140,
+      String(result.subscription.creditCarriedUsd));
+    const renews = new Date(result.subscription.renewsAt);
+    const plainMonth = plansLib.renewalDate(at, 1);
+    check('and the period runs well past a bare month',
+      renews.getTime() > plainMonth.getTime() + 140 * 864e5,
+      `${result.subscription.renewsAt} vs ${plainMonth.toISOString()}`);
+  }
+
+  section('A period continues from the old one rather than restarting');
+  {
+    /* Two clients lost days to this. One renewed five days early and had those
+       five days started over. One cancelled, changed their mind inside the
+       period they had already paid for, and lost the whole remainder -- 61
+       days in the report that found it.                                     */
+    const subs = require('../utils/subscriptions');
+    const plansLib = require('../lib/plans');
+
+    // --- renewing early ---------------------------------------------------
+    const early = await freshClient('Early');
+    const startedAt = new Date(Date.UTC(2026, 0, 1));
+    const oldRenews = plansLib.renewalDate(startedAt, 1);
+    await db.insert('subscriptions', {
+      clientId: early.id, planKey: 'managed', period: 1, amountUsd: 19, status: 'active',
+      startedAt: startedAt.toISOString(), renewsAt: oldRenews.toISOString(),
+      markedPaidAt: startedAt.toISOString(), createdAt: startedAt.toISOString(),
+    });
+
+    const fiveDaysEarly = new Date(oldRenews.getTime() - 5 * 864e5);
+    const renewal = await db.insert('subscriptions', {
+      clientId: early.id, planKey: 'managed', period: 1, amountUsd: 19,
+      status: 'pending_payment', createdAt: fiveDaysEarly.toISOString(),
+    });
+    const paid = await subs.activate(renewal.id, { byUserId: 'test', now: fiveDaysEarly });
+    eq('an early renewal starts when the old period ends, not today',
+      paid.subscription.renewsAt, plansLib.renewalDate(oldRenews, 1).toISOString());
+
+    // --- re-subscribing after cancelling ----------------------------------
+    const back = await freshClient('Returning');
+    const backStart = new Date(Date.UTC(2026, 0, 1));
+    const backRenews = plansLib.renewalDate(backStart, 6);
+    await db.insert('subscriptions', {
+      clientId: back.id, planKey: 'managed', period: 6,
+      amountUsd: plansLib.amountFor('managed', 6), status: 'cancelled',
+      startedAt: backStart.toISOString(), renewsAt: backRenews.toISOString(),
+      cancelledAt: new Date(backStart.getTime() + 864e5).toISOString(),
+      markedPaidAt: backStart.toISOString(), createdAt: backStart.toISOString(),
+    });
+
+    const twoMonthsIn = new Date(backStart.getTime() + 61 * 864e5);
+    const again = await db.insert('subscriptions', {
+      clientId: back.id, planKey: 'managed', period: 6,
+      amountUsd: plansLib.amountFor('managed', 6),
+      status: 'pending_payment', createdAt: twoMonthsIn.toISOString(),
+    });
+    const resumed = await subs.activate(again.id, { byUserId: 'test', now: twoMonthsIn });
+    eq('re-subscribing keeps the days already paid for',
+      resumed.subscription.renewsAt, plansLib.renewalDate(backRenews, 6).toISOString());
+
+    // --- but an upgrade credits those days instead of extending -----------
+    // Credit or time, never both: an upgrade hands the unused days back as
+    // money, so extending the period as well would pay for them twice.
+    const up = await freshClient('Upgrading');
+    const upStart = new Date(Date.UTC(2026, 0, 1));
+    const upRenews = plansLib.renewalDate(upStart, 6);
+    const upOld = await db.insert('subscriptions', {
+      clientId: up.id, planKey: 'managed', period: 6,
+      amountUsd: plansLib.amountFor('managed', 6), status: 'active',
+      startedAt: upStart.toISOString(), renewsAt: upRenews.toISOString(),
+      markedPaidAt: upStart.toISOString(), createdAt: upStart.toISOString(),
+    });
+    const upAt = new Date(upStart.getTime() + 30 * 864e5);
+    const upQuote = await subs.quoteFor(up.id, 'unlimited', 6, upAt);
+    check('the upgrade is credited', upQuote.creditUsd > 0, String(upQuote.creditUsd));
+    eq('so the new period starts today', upQuote.periodStartsAt, upAt.toISOString());
+    eq('and nothing is said about continuing', upQuote.continuesFrom, null);
+    eq('the old row is the one being replaced', upQuote.from.subscriptionId, upOld.id);
+  }
+
+  section('A held request becomes one ticket, however many sweeps run');
+  {
+    /* Reproduced in the QA report: one held request, two Vercel instances
+       running the release sweep, two tickets, and two of the client's two
+       updates spent. Writing `released_at` after creating the ticket was a
+       read followed by a write, which is not a decision when two callers make
+       it at once.                                                           */
+    const updates = require('../utils/updateRequests');
+    const plansLib = require('../lib/plans');
+
+    const who = await freshClient('Holder');
+    const startedAt = new Date(Date.now() - 2 * 864e5);
+    await db.insert('subscriptions', {
+      clientId: who.id, planKey: 'managed', period: 1, amountUsd: 19, status: 'active',
+      startedAt: startedAt.toISOString(),
+      renewsAt: plansLib.renewalDate(startedAt, 1).toISOString(),
+      markedPaidAt: startedAt.toISOString(), createdAt: startedAt.toISOString(),
+    });
+
+    const held = await db.insert('queued_requests', {
+      clientId: who.id, subject: 'Swap the hero image', category: 'Website',
+      description: 'The new one is attached.', priority: 'Normal',
+      releaseAt: new Date(Date.now() - 864e5).toISOString(),
+      createdAt: new Date(Date.now() - 5 * 864e5).toISOString(),
+    });
+
+    const before = (await db.all('tickets')).length;
+    const [a, b] = await Promise.all([updates.releaseDue(), updates.releaseDue()]);
+    eq('released once in total, not once per sweep', a + b, 1);
+    eq('so exactly one ticket was raised', (await db.all('tickets')).length - before, 1);
+
+    const row = await db.find('queued_requests', held.id);
+    check('the held request is marked released', Boolean(row.releasedAt));
+    check('and points at the ticket it became', Boolean(row.ticketId));
+
+    const usage = await db.find(
+      'update_request_usage',
+      usageId(who.id, require('../utils/subscriptions').usageWindow(
+        await require('../utils/subscriptions').governingFor(who.id),
+      ).periodStart),
+    );
+    eq('and it spent one update, not two', Number(usage.count), 1);
+  }
+
+  section('A held request nobody has room for is moved on, not stuck');
+  {
+    /* It sat permanently due instead: retried every minute for ever, with
+       neither the client nor the team ever told it had not landed.          */
+    const updates = require('../utils/updateRequests');
+    const plansLib = require('../lib/plans');
+    const subs = require('../utils/subscriptions');
+
+    const who = await freshClient('Crowded');
+    const startedAt = new Date(Date.now() - 2 * 864e5);
+    await db.insert('subscriptions', {
+      clientId: who.id, planKey: 'managed', period: 1, amountUsd: 19, status: 'active',
+      startedAt: startedAt.toISOString(),
+      renewsAt: plansLib.renewalDate(startedAt, 1).toISOString(),
+      markedPaidAt: startedAt.toISOString(), createdAt: startedAt.toISOString(),
+    });
+
+    // Spend the whole allowance first, which is exactly how a client gets
+    // here: they held one request and then raised two others.
+    const state = await subs.stateFor(who);
+    await updates.consume(who.id, state);
+    await updates.consume(who.id, state);
+
+    const held = await db.insert('queued_requests', {
+      clientId: who.id, subject: 'Add the new team page', category: 'Website',
+      description: '', priority: 'Normal',
+      releaseAt: new Date(Date.now() - 864e5).toISOString(),
+      createdAt: new Date(Date.now() - 5 * 864e5).toISOString(),
+    });
+
+    const before = (await db.all('tickets')).length;
+    eq('nothing is released', await updates.releaseDue(), 0);
+    eq('and no ticket was raised', (await db.all('tickets')).length - before, 0);
+
+    const row = await db.find('queued_requests', held.id);
+    eq('the request is still being held', row.releasedAt, null);
+    eq('it has been counted as deferred once', Number(row.deferredCount), 1);
+    check('its release date has moved into the future',
+      new Date(row.releaseAt).getTime() > Date.now(), row.releaseAt);
+
+    const told = await db.filter('notifications', (n) => n.userId === who.id);
+    check('and the client was told rather than left wondering', told.length > 0);
+  }
+
+  section('A chosen plan nobody paid for does not wait for ever');
+  {
+    const subs = require('../utils/subscriptions');
+
+    const who = await freshClient('Forgot');
+    const longAgo = new Date(Date.now() - (subs.PENDING_CHOICE_DAYS + 3) * 864e5);
+    const stale = await db.insert('subscriptions', {
+      clientId: who.id, planKey: 'unlimited', period: 1, amountUsd: 29,
+      status: 'pending_payment', createdAt: longAgo.toISOString(),
+    });
+    const fresh = await db.insert('subscriptions', {
+      clientId: (await freshClient('Just Chose')).id, planKey: 'unlimited', period: 1,
+      amountUsd: 29, status: 'pending_payment', createdAt: new Date().toISOString(),
+    });
+
+    eq('the stale one is dropped', await subs.expireStalePending(), 1);
+    eq('and recorded as expired', (await db.find('subscriptions', stale.id)).status, 'expired');
+    eq("today's choice is left alone",
+      (await db.find('subscriptions', fresh.id)).status, 'pending_payment');
+    check('the client was told, with the offer to choose again',
+      (await db.filter('notifications', (n) => n.userId === who.id)).length > 0);
+  }
+
+  section('An allowance anchored to the 31st resets on a day that exists');
+  {
+    /* A plan started on January 31st put the whole of March 1st and 2nd into a
+       window beginning March 3rd -- so the window did not contain the day it
+       was being asked about, the allowance reset twice, and neither reset was
+       on the client's billing day.                                          */
+    const subs = require('../utils/subscriptions');
+
+    const subscription = {
+      startedAt: new Date(Date.UTC(2026, 0, 31, 9, 0, 0)).toISOString(),
+      status: 'active',
+    };
+
+    for (const day of [
+      Date.UTC(2026, 0, 31), Date.UTC(2026, 1, 1), Date.UTC(2026, 1, 28),
+      Date.UTC(2026, 2, 1), Date.UTC(2026, 2, 2), Date.UTC(2026, 2, 3),
+      Date.UTC(2026, 2, 31), Date.UTC(2026, 3, 15), Date.UTC(2027, 1, 28),
+    ]) {
+      const at = new Date(day + 12 * 3600 * 1000);
+      const window = subs.usageWindow(subscription, at);
+      check(`the window contains ${at.toISOString().slice(0, 10)}`,
+        new Date(window.periodStart) <= at && new Date(window.periodEnd) > at,
+        `${window.periodStart} .. ${window.periodEnd}`);
+    }
+
+    // Consecutive windows have to tile the calendar exactly: a gap is a free
+    // allowance and an overlap is one the client paid for and cannot spend.
+    let cursor = new Date(Date.UTC(2026, 0, 31, 12, 0, 0));
+    let previousEnd = null;
+    for (let i = 0; i < 14; i += 1) {
+      const window = subs.usageWindow(subscription, cursor);
+      if (previousEnd) {
+        eq(`window ${i} starts exactly where the last one ended`, window.periodStart, previousEnd);
+      }
+      previousEnd = window.periodEnd;
+      cursor = new Date(new Date(window.periodEnd).getTime() + 12 * 3600 * 1000);
+    }
+  }
+
+  section('Every event the code logs is an event the log accepts');
+  {
+    /* `scheduled_change_due` was logged by the sweep that promotes a downgrade
+       and was missing from EVENT_TYPES, so every one of them was refused at
+       the door with a console warning -- the single event that says a client
+       changed plans without being asked for money again.                    */
+    const eventsLib = require('../utils/membershipEvents');
+    for (const type of [
+      'scheduled_change_due', 'renewal_due', 'plan_lapsed', 'plan_choice_expired',
+      'request_deferred', 'non_update_overused', 'request_recategorised',
+    ]) {
+      check(`${type} is a known event type`, eventsLib.EVENT_TYPES.includes(type));
+    }
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

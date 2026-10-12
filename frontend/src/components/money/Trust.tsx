@@ -68,10 +68,24 @@ export function FeeBreakdown({
 }
 
 export function TrustFooter({ className }: { className?: string }) {
+  /**
+   * Three claims a client can check, rather than three badges.
+   *
+   * "Identity verified", "Details encrypted" and "Money protected" each sound
+   * like a certification and were backed by nothing specific -- verified by
+   * whom, encrypted where, protected against what. A trust badge nobody can
+   * check is worth less than a plain sentence somebody can, and on a billing
+   * page it is the sentence that actually answers the question the person is
+   * asking.
+   *
+   * Each of these is true of how this product takes money: payment is by bank
+   * transfer, a person confirms it, and no card details are ever stored here
+   * because there is nowhere to store them.
+   */
   const badges = [
-    { icon: BadgeCheck, label: "Identity verified" },
-    { icon: Lock, label: "Details encrypted" },
-    { icon: ShieldCheck, label: "Money protected" },
+    { icon: BadgeCheck, label: "A person confirms every payment" },
+    { icon: Lock, label: "We never hold your card" },
+    { icon: ShieldCheck, label: "Cancel any time, from this page" },
   ];
 
   const action =
