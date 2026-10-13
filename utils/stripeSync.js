@@ -126,6 +126,89 @@ function mergePayment(existing, incoming) {
   return merged;
 }
 
+/**
+ * One entry per real payment, with the other views of it kept alongside.
+ *
+ * Stripe reports an invoice and the charge that paid it as two objects, and on
+ * current API versions neither carries a link to the other, so both were
+ * mirrored. `upsertPayment` now joins them as they arrive, but every row
+ * written before that is already stored apart, and no sync deletes rows -- so
+ * a history recorded back then still lists each payment twice and still totals
+ * exactly double what the client paid. Folding them on read repairs that
+ * without destroying a row some receipt link may still point at.
+ *
+ * Only exact joins are used: the shared payment intent, or the invoice a
+ * charge names. Two payments of the same amount on the same day are a normal
+ * thing for one price list to produce -- two clients on the same plan, say --
+ * so same-looking is never treated as same.
+ */
+function collapsePayments(rows) {
+  const parent = new Map(rows.map((r) => [r.id, r.id]));
+  const find = (id) => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root);
+    while (parent.get(id) !== root) {
+      const next = parent.get(id);
+      parent.set(id, root);
+      id = next;
+    }
+    return root;
+  };
+  const union = (a, b) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  const byObject = new Map();
+  for (const row of rows) if (row.stripeObjectId) byObject.set(row.stripeObjectId, row);
+
+  const byIntent = new Map();
+  for (const row of rows) {
+    if (row.stripePaymentIntent) {
+      const seen = byIntent.get(row.stripePaymentIntent);
+      if (seen) union(seen.id, row.id);
+      else byIntent.set(row.stripePaymentIntent, row);
+    }
+    if (row.stripeInvoiceId) {
+      const invoice = byObject.get(row.stripeInvoiceId);
+      if (invoice) union(invoice.id, row.id);
+    }
+  }
+
+  // Grouped in the order they arrived, so the caller's sort survives.
+  const groups = new Map();
+  for (const row of rows) {
+    const root = find(row.id);
+    const group = groups.get(root);
+    if (group) group.push(row);
+    else groups.set(root, [row]);
+  }
+
+  return [...groups.values()].map((members) => {
+    if (members.length === 1) return members[0];
+
+    // The invoice leads: it is the document the client is shown, and it is what
+    // says what the payment was for. The charge adds the card that paid it.
+    const lead = members.find((m) => m.kind === 'invoice') || members[0];
+    let folded = lead;
+    for (const member of members) {
+      if (member.id !== lead.id) folded = mergePayment(folded, member);
+    }
+
+    // The money arriving is the fact the client cares about, and it is the
+    // charge that knows it. An invoice left sitting at `open` next to its own
+    // paid charge would otherwise report a settled payment as outstanding.
+    if (members.some((m) => m.status === 'refunded')) folded.status = 'refunded';
+    else if (members.some((m) => m.status === 'paid')) folded.status = 'paid';
+
+    // Every row behind this one, so the screen can open it up and show its
+    // working rather than asking anyone to take the fold on trust.
+    folded.records = members;
+    return folded;
+  });
+}
+
 /** The payment intent that settled an invoice, wherever this API version files it. */
 function paymentIntentOf(invoice) {
   const direct = invoice.payment_intent;
@@ -180,6 +263,9 @@ function fromCharge(charge, { clientId = null } = {}) {
     stripeCustomerId: typeof charge.customer === 'string' ? charge.customer : charge.customer?.id || null,
     stripeObjectId: charge.id,
     stripePaymentIntent: typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id || null,
+    // Empty on current API versions, kept because older accounts still report
+    // it and it is a second exact way to recognise the invoice this settled.
+    stripeInvoiceId: typeof charge.invoice === 'string' ? charge.invoice : charge.invoice?.id || null,
     kind: charge.refunded ? 'refund' : 'charge',
     description: charge.description || 'Payment',
     amount: fromMinorUnits(charge.amount_refunded > 0 ? charge.amount_refunded : charge.amount, currency),
@@ -440,7 +526,8 @@ async function releasePayments(clientId, stripeCustomerId) {
  * charges grouped by what they were for, biggest first.
  */
 async function summariseForClient(clientId) {
-  const rows = await db.filter('payments', (p) => p.clientId === clientId);
+  const stored = await db.filter('payments', (p) => p.clientId === clientId);
+  const rows = collapsePayments(stored);
   const paid = rows.filter((p) => p.status === 'paid');
 
   const total = paid.reduce((sum, p) => sum + Number(p.amount || 0), 0);
@@ -467,6 +554,7 @@ async function summariseForClient(clientId) {
 module.exports = {
   getStripe,
   isEnabled,
+  collapsePayments,
   fromMinorUnits,
   isoFromUnix,
   billingForClient,

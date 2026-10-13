@@ -94,14 +94,22 @@ router.get('/payments', requireBillingReader, async (req, res, next) => {
       return res.json({ enabled: stripeSync.isEnabled(), client: { id: client.id, name: client.name }, ...summary });
     }
 
-    const rows = (await db.all('payments')).sort((a, b) =>
-      String(b.paidAt || b.createdAt).localeCompare(String(a.paidAt || a.createdAt)));
+    // Folded before anything is counted: an invoice and the charge that paid it
+    // are one payment, and a workspace total that adds both is the number the
+    // whole page is read for.
+    const rows = stripeSync.collapsePayments(
+      (await db.all('payments')).sort((a, b) =>
+        String(b.paidAt || b.createdAt).localeCompare(String(a.paidAt || a.createdAt))),
+    );
     const paid = rows.filter((p) => p.status === 'paid');
     res.json({
       enabled: stripeSync.isEnabled(),
       total: paid.reduce((sum, p) => sum + Number(p.amount || 0), 0),
       currency: paid[0]?.currency || 'usd',
       count: paid.length,
+      // Payments nobody is credited for. Staff-only, and the one number on this
+      // page that is a job rather than a figure.
+      unlinked: rows.filter((p) => !p.clientId).length,
       categories: [],
       payments: rows,
     });

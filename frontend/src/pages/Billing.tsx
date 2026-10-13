@@ -289,7 +289,17 @@ export default function Billing() {
           title={focus ? `Payments from ${clientName(focus)}` : "Payments received"}
           subtitle={
             payments && payments.count > 0
-              ? `${paymentMoney(payments.total, payments.currency)} across ${payments.count} payment${payments.count === 1 ? "" : "s"}`
+              ? [
+                  `${paymentMoney(payments.total, payments.currency)} across ${payments.count} payment${payments.count === 1 ? "" : "s"}`,
+                  // Said here because it is the reason a client's own total can
+                  // look short: the money arrived, but nobody is credited for it
+                  // until their Stripe customer is linked above.
+                  !focus && payments.unlinked
+                    ? `${payments.unlinked} not linked to a client`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
               : "Nothing recorded yet"
           }
           action={
@@ -309,7 +319,13 @@ export default function Billing() {
                   : "No payments have come through Stripe yet. Sync pulls in anything already on the account."}
             </PanelEmpty>
           ) : (
-            <PaymentList payments={payments.payments.slice(0, 25)} />
+            <PaymentList
+              payments={payments.payments.slice(0, 25)}
+              // Who paid, on every line. Staff read this list across every
+              // account at once, where an amount with no name against it is
+              // not an answer to anything.
+              clientName={(id) => (id ? users?.find((u) => u.id === id)?.name ?? null : null)}
+            />
           )}
         </MoneyPanel>
 
