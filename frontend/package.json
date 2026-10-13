@@ -49,5 +49,10 @@
   },
   "overridesExplained": {
     "@grpc/grpc-js": "Pinned past GHSA advisory <1.13.6. It arrives through @firebase/firestore, which this application never imports -- the browser uses firebase/app and firebase/auth only, and gRPC is a Node transport with no place in a bundle. Verified absent from dist/. The alternative npm offers is firebase@9, a major downgrade of a package we do use, to fix code we do not ship."
+  },
+  "allowScripts": {
+    "@firebase/util": false,
+    "protobufjs": false,
+    "fsevents": false
   }
 }

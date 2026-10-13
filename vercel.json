@@ -19,7 +19,7 @@
   "crons": [
     {
       "path": "/api/outbox/sweep",
-      "schedule": "*/2 * * * *"
+      "schedule": "0 5 * * *"
     },
     {
       "path": "/api/mail/cron/service-sweep",
@@ -27,7 +27,7 @@
     },
     {
       "path": "/api/membership/cron/sweep",
-      "schedule": "17 * * * *"
+      "schedule": "17 6 * * *"
     }
   ],
   "headers": [
@@ -52,7 +52,7 @@
         },
         {
           "key": "Cross-Origin-Opener-Policy",
-          "value": "same-origin"
+          "value": "same-origin-allow-popups"
         },
         {
           "key": "Cross-Origin-Resource-Policy",
@@ -69,6 +69,15 @@
         {
           "key": "Strict-Transport-Security",
           "value": "max-age=31536000; includeSubDomains; preload"
+        }
+      ]
+    },
+    {
+      "source": "/(ethixweb.png|emblem-mark.png|emblem-mark-red.png|mail-icons/.*)",
+      "headers": [
+        {
+          "key": "Cross-Origin-Resource-Policy",
+          "value": "cross-origin"
         }
       ]
     },

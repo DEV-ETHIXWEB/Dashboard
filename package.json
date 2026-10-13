@@ -44,5 +44,9 @@
   },
   "devDependencies": {
     "pg-mem": "^3.0.14"
+  },
+  "allowScripts": {
+    "@firebase/util": false,
+    "protobufjs": false
   }
 }
