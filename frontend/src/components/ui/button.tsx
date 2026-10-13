@@ -8,15 +8,27 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/80",
+        // The depth lives in `.ctl-raised` (see index.css), not here, because
+        // the lighting has to agree across every control on the page -- a
+        // button that invents its own highlight angle reads as a mistake
+        // rather than as a different button.
+        //
+        // The border is a shade of the fill rather than transparent: a raised
+        // face needs an edge, and `border-transparent` on a coloured button
+        // leaves the top highlight floating with nothing to sit on.
+        default:
+          "ctl-raised border-[color-mix(in_oklch,var(--primary),black_22%)] bg-primary text-primary-foreground hover:bg-[color-mix(in_oklch,var(--primary),white_6%)] dark:border-[color-mix(in_oklch,var(--primary),black_30%)]",
         outline:
-          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "ctl-raised-soft border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
+          "ctl-raised-soft bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
+        // Ghost and link stay flat on purpose. If every control on a row is
+        // raised then none of them is, and the row of tertiary actions beside
+        // a primary one is exactly where that hierarchy has to hold.
         ghost:
           "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
         destructive:
-          "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+          "ctl-raised-soft border-destructive/20 bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

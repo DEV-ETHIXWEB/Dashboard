@@ -775,3 +775,276 @@
     letter-spacing: -0.02em;
   }
 }
+
+@layer utilities {
+  /*
+   * Controls that read as objects rather than as rectangles of colour.
+   *
+   * Three things together make a surface look raised, and leaving any one of
+   * them out makes it look like a flat button wearing a shadow: light landing
+   * on the top face (the inset highlight), the thickness of the edge that
+   * light falls over (the inset dark line along the bottom), and the shadow
+   * the whole thing casts (a tight contact shadow plus a wider ambient one).
+   * The gradient is what stops the face itself reading as a single flat fill.
+   *
+   * Pressing has to be the same model run backwards, or the button looks like
+   * it is sliding rather than depressing: the cast shadow collapses, the
+   * highlight moves to the bottom, and the face takes an inner shadow as it
+   * drops below the surface. The 1px of travel comes from the button's own
+   * base class, so it is not repeated here.
+   *
+   * The one `box-shadow` declaration below is Tailwind's own composition
+   * order, written out by hand. That is not decoration: a focus ring in this
+   * framework *is* a box-shadow, so a rule that sets `box-shadow` to its own
+   * value wins against the ring utility and silently deletes the focus
+   * indicator from every raised button on the page. Keyboard users lose the
+   * only thing telling them where they are. Each state therefore changes
+   * `--ctl-depth` and nothing else, and the ring keeps its slot.
+   *
+   * Every state carries five shadow layers, including the pressed one, so the
+   * transition between them interpolates instead of jumping.
+   */
+  .ctl-raised,
+  .ctl-raised-soft,
+  .ctl-sunken {
+    /* Written to Tailwind's own shadow slot as well as to `box-shadow`. The
+       line below is what paints normally; the variable is what survives when
+       the focus-visible rule takes `box-shadow` over, so a focused button
+       keeps its depth instead of flattening under the ring. */
+    --tw-shadow: var(--ctl-depth, 0 0 #0000);
+    box-shadow:
+      var(--tw-inset-shadow, 0 0 #0000),
+      var(--tw-inset-ring-shadow, 0 0 #0000),
+      var(--tw-ring-offset-shadow, 0 0 #0000),
+      var(--tw-ring-shadow, 0 0 #0000),
+      var(--ctl-depth, 0 0 #0000);
+    transition:
+      box-shadow 150ms cubic-bezier(0.4, 0, 0.2, 1),
+      background-color 150ms cubic-bezier(0.4, 0, 0.2, 1),
+      background-image 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .ctl-raised {
+    --ctl-top: oklch(1 0 0 / 0.26);
+    --ctl-edge: oklch(0 0 0 / 0.20);
+    --ctl-cast: oklch(0.16 0.02 275 / 0.16);
+
+    --ctl-depth:
+      inset 0 1px 0 0 var(--ctl-top),
+      inset 0 -1px 0 0 var(--ctl-edge),
+      0 1px 1px -0.5px var(--ctl-cast),
+      0 3px 6px -2px var(--ctl-cast),
+      0 8px 18px -8px var(--ctl-cast);
+    background-image: linear-gradient(
+      to bottom,
+      oklch(1 0 0 / 0.15) 0%,
+      oklch(1 0 0 / 0.03) 48%,
+      oklch(0 0 0 / 0.07) 100%
+    );
+  }
+
+  /* Lifted: the cast shadow grows and softens, as it would if the object came
+     closer to the viewer and further from the surface behind it. */
+  .ctl-raised:hover:not(:disabled) {
+    --ctl-depth:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.32),
+      inset 0 -1px 0 0 var(--ctl-edge),
+      0 1px 1px -0.5px var(--ctl-cast),
+      0 5px 10px -3px var(--ctl-cast),
+      0 14px 26px -10px var(--ctl-cast);
+    background-image: linear-gradient(
+      to bottom,
+      oklch(1 0 0 / 0.21) 0%,
+      oklch(1 0 0 / 0.05) 48%,
+      oklch(0 0 0 / 0.05) 100%
+    );
+  }
+
+  .ctl-raised:active:not(:disabled) {
+    --ctl-depth:
+      inset 0 2px 5px -1px oklch(0 0 0 / 0.30),
+      inset 0 1px 0 0 oklch(0 0 0 / 0.14),
+      inset 0 -1px 0 0 oklch(1 0 0 / 0.10),
+      0 1px 1px -1px var(--ctl-cast),
+      0 0 0 0 oklch(0 0 0 / 0);
+    background-image: linear-gradient(
+      to bottom,
+      oklch(0 0 0 / 0.08) 0%,
+      oklch(0 0 0 / 0.02) 60%,
+      oklch(1 0 0 / 0.04) 100%
+    );
+  }
+
+  /* A control nobody can press is not an object sitting on the page; it is a
+     label. Giving it depth invites the click it is about to refuse. */
+  .ctl-raised:disabled,
+  .ctl-raised-soft:disabled {
+    --ctl-depth: 0 0 #0000;
+    background-image: none;
+  }
+
+  /*
+   * Dark mode is not the light values inverted. A face lit from above in a
+   * dark room catches far less light, so the highlight drops to roughly a
+   * third; but the shadow it casts has more room to be seen, so it deepens.
+   */
+  .dark .ctl-raised {
+    --ctl-top: oklch(1 0 0 / 0.12);
+    --ctl-edge: oklch(0 0 0 / 0.34);
+    --ctl-cast: oklch(0 0 0 / 0.46);
+    background-image: linear-gradient(
+      to bottom,
+      oklch(1 0 0 / 0.08) 0%,
+      oklch(1 0 0 / 0.03) 48%,
+      oklch(0 0 0 / 0.12) 100%
+    );
+  }
+
+  .dark .ctl-raised:hover:not(:disabled) {
+    --ctl-depth:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.17),
+      inset 0 -1px 0 0 var(--ctl-edge),
+      0 1px 1px -0.5px var(--ctl-cast),
+      0 5px 10px -3px var(--ctl-cast),
+      0 14px 26px -10px var(--ctl-cast);
+    background-image: linear-gradient(
+      to bottom,
+      oklch(1 0 0 / 0.13) 0%,
+      oklch(1 0 0 / 0.04) 48%,
+      oklch(0 0 0 / 0.10) 100%
+    );
+  }
+
+  /*
+   * The quieter cousin, for controls that are not the main action on screen:
+   * the same lighting model, about half the travel. An outline button that
+   * casts as much shadow as the primary one is not a secondary button.
+   */
+  .ctl-raised-soft {
+    --ctl-top: oklch(1 0 0 / 0.70);
+    --ctl-edge: oklch(0 0 0 / 0.06);
+    --ctl-cast: oklch(0.16 0.02 275 / 0.10);
+
+    --ctl-depth:
+      inset 0 1px 0 0 var(--ctl-top),
+      inset 0 -1px 0 0 var(--ctl-edge),
+      0 1px 1px -0.5px var(--ctl-cast),
+      0 2px 4px -2px var(--ctl-cast),
+      0 0 0 0 oklch(0 0 0 / 0);
+    background-image: linear-gradient(
+      to bottom,
+      oklch(1 0 0 / 0.55) 0%,
+      oklch(1 0 0 / 0) 55%,
+      oklch(0 0 0 / 0.02) 100%
+    );
+  }
+
+  .ctl-raised-soft:hover:not(:disabled) {
+    --ctl-depth:
+      inset 0 1px 0 0 var(--ctl-top),
+      inset 0 -1px 0 0 var(--ctl-edge),
+      0 1px 1px -0.5px var(--ctl-cast),
+      0 4px 8px -3px var(--ctl-cast),
+      0 10px 20px -10px var(--ctl-cast);
+  }
+
+  .ctl-raised-soft:active:not(:disabled) {
+    --ctl-depth:
+      inset 0 2px 4px -1px oklch(0 0 0 / 0.16),
+      inset 0 1px 0 0 oklch(0 0 0 / 0.06),
+      inset 0 -1px 0 0 oklch(1 0 0 / 0.06),
+      0 1px 1px -1px var(--ctl-cast),
+      0 0 0 0 oklch(0 0 0 / 0);
+    background-image: linear-gradient(to bottom, oklch(0 0 0 / 0.045), oklch(0 0 0 / 0));
+  }
+
+  .dark .ctl-raised-soft {
+    --ctl-top: oklch(1 0 0 / 0.09);
+    --ctl-edge: oklch(0 0 0 / 0.26);
+    --ctl-cast: oklch(0 0 0 / 0.40);
+    background-image: linear-gradient(
+      to bottom,
+      oklch(1 0 0 / 0.055) 0%,
+      oklch(1 0 0 / 0) 55%,
+      oklch(0 0 0 / 0.07) 100%
+    );
+  }
+
+  /* Repeated for dark mode, and last, because `.dark .ctl-raised` carries the
+     same specificity as the disabled rule above: without this the dark theme's
+     gradient wins on source order and a disabled button still looks pressable,
+     which is the one thing the disabled rule exists to prevent. */
+  .dark .ctl-raised:disabled,
+  .dark .ctl-raised-soft:disabled {
+    --ctl-depth: 0 0 #0000;
+    background-image: none;
+  }
+
+  /*
+   * The opposite of a button: a groove cut into the page for something to sit
+   * in. Same light source, so the shading is the mirror of `.ctl-raised` --
+   * the shadow falls from the top edge inwards and the far wall catches the
+   * highlight, which is what tells the eye the surface is below the page
+   * rather than above it.
+   *
+   * Shares the composed `box-shadow` above so a focus ring still has its slot;
+   * a switch is focusable and must not lose its outline to its own styling.
+   */
+  .ctl-sunken {
+    --ctl-depth:
+      inset 0 1.5px 3px 0 oklch(0 0 0 / 0.22),
+      inset 0 1px 1px 0 oklch(0 0 0 / 0.14),
+      inset 0 -1px 0 0 oklch(1 0 0 / 0.30),
+      0 0 0 0 oklch(0 0 0 / 0),
+      0 0 0 0 oklch(0 0 0 / 0);
+  }
+
+  .dark .ctl-sunken {
+    --ctl-depth:
+      inset 0 1.5px 3px 0 oklch(0 0 0 / 0.55),
+      inset 0 1px 1px 0 oklch(0 0 0 / 0.35),
+      inset 0 -1px 0 0 oklch(1 0 0 / 0.07),
+      0 0 0 0 oklch(0 0 0 / 0),
+      0 0 0 0 oklch(0 0 0 / 0);
+  }
+
+  /*
+   * The knob. A real one is a separate object resting in the groove, so it
+   * carries its own highlight and casts its own small shadow onto the track --
+   * without that it reads as a coloured rectangle sliding about inside a pill.
+   */
+  .ctl-knob {
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.85),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.10),
+      0 1px 2px 0 oklch(0 0 0 / 0.28),
+      0 2px 4px -1px oklch(0 0 0 / 0.18);
+    background-image: linear-gradient(to bottom, oklch(1 0 0 / 0.55), oklch(0 0 0 / 0.06));
+  }
+
+  /*
+   * The knob flips colour with the switch in dark mode: near-white when off,
+   * near-black when on. One sheen has to suit both, so it stays light enough
+   * to be a highlight on the dark fill without washing the pale one out --
+   * the sheen tuned for light mode turned the dark knob a muddy grey and
+   * flattened it against the track.
+   */
+  .dark .ctl-knob {
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.30),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.26),
+      0 1px 2px 0 oklch(0 0 0 / 0.55),
+      0 2px 5px -1px oklch(0 0 0 / 0.40);
+    background-image: linear-gradient(to bottom, oklch(1 0 0 / 0.16), oklch(0 0 0 / 0.10));
+  }
+
+  /* The depth is lighting, not motion, so it stays. The travel it was paired
+     with is what a reduced-motion setting is asking us to drop. */
+  @media (prefers-reduced-motion: reduce) {
+    .ctl-raised,
+    .ctl-raised-soft,
+    .ctl-sunken {
+      transition: none;
+    }
+  }
+}
