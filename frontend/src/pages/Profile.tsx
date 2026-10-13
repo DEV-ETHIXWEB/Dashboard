@@ -295,8 +295,8 @@ export default function Profile() {
                 </div>
               ) : (
                 <div className="grid gap-5 sm:grid-cols-2">
-                  <Fact icon={UserRound} label="Full name" value={user?.name ?? "—"} />
-                  <Fact icon={AtSign} label="Email" value={user?.email ?? "—"} />
+                  <Fact icon={UserRound} label="Full name" value={user?.name ?? "Not set"} />
+                  <Fact icon={AtSign} label="Email" value={user?.email ?? "Not set"} />
                   {/* An address that has been asked for and not yet confirmed.
                       Shown because the screen otherwise keeps displaying the
                       old one and looks as though the change did not save. */}
@@ -306,12 +306,12 @@ export default function Profile() {
                       confirm the change. Nothing moves until that link is opened.
                     </p>
                   )}
-                  <Fact icon={Shield} label="Role" value={ROLE_LABEL[user?.role ?? ""] ?? user?.role ?? "—"} />
+                  <Fact icon={Shield} label="Role" value={ROLE_LABEL[user?.role ?? ""] ?? user?.role ?? "Not set"} />
                   {user?.company && <Fact icon={Building2} label="Company" value={user.company} />}
                   <Fact
                     icon={Fingerprint}
                     label="User ID"
-                    value={<span className="font-mono text-xs">{user?.id ?? "—"}</span>}
+                    value={<span className="font-mono text-xs">{user?.id ?? "Not set"}</span>}
                     hint="Quote this if you ever need support with your account."
                   />
                   {user?.passwordExpiresAt != null && (
@@ -363,7 +363,7 @@ export default function Profile() {
               <Fact
                 icon={LogIn}
                 label="Last sign-in"
-                value={data?.lastLoginAt ? formatDateTime(new Date(data.lastLoginAt).getTime()) : "—"}
+                value={data?.lastLoginAt ? formatDateTime(new Date(data.lastLoginAt).getTime()) : "Never"}
               />
             </CardContent>
           </Card>
@@ -457,7 +457,7 @@ export default function Profile() {
                 <CardTitle className="text-base">Backup sign-in codes</CardTitle>
                 <CardDescription>
                   Administrators sign in with a password and an emailed code. Backup codes stand in when email is
-                  not reaching you — they live on the Security page.
+                  not reaching you. They live on the Security page.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -481,7 +481,7 @@ export default function Profile() {
               <CardTitle className="text-base">Notifications</CardTitle>
               <CardDescription>
                 You are notified in the dashboard about work assigned to you and about anything that touches your
-                account's security. Those alerts cannot be switched off — they are the record that something
+                account's security. Those alerts cannot be switched off, because they are the record that something
                 happened.
               </CardDescription>
             </CardHeader>

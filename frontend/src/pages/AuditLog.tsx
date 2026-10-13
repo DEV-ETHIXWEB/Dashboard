@@ -32,7 +32,7 @@ const DESTRUCTIVE = new Set(["delete", "reject", "standing", "reveal"]);
  *
  * Every write in this app already calls `audit()`; this is the first screen
  * that reads it. Newest first, one row per entry, with the person named rather
- * than an id — an id in a log is a second lookup nobody performs.
+ * than an id. An id in a log is a second lookup nobody performs.
  */
 export default function AuditLog() {
   const { data, isLoading, isError, error, refetch } = useAuditLog();
@@ -166,7 +166,7 @@ function LogRow({ entry, first }: { entry: AuditEntry; first: boolean }) {
           <span className="text-muted-foreground">{entry.entity}</span>
         </p>
         <p className="mt-0.5 truncate text-xs text-muted-foreground">
-          {entry.entityId ?? "—"}
+          {entry.entityId ?? "None"}
         </p>
       </div>
 

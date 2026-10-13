@@ -18,7 +18,7 @@ export interface ChannelBoard {
   channel: { id: string; name: string | null } | null;
   client?: { id: string; name: string };
   messages: ChannelMessage[];
-  /** Slack refused the read — usually the bot needs inviting to a private room. */
+  /** Slack refused the read. Usually the bot needs inviting to a private room. */
   slackError?: string;
 }
 

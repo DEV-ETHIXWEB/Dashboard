@@ -167,7 +167,7 @@ export default function WorkProgress() {
             <SummaryCard icon={Gauge} value={`${data.summary.averageProgress}%`} label="Average progress" />
             <SummaryCard
               icon={Clock}
-              value={data.summary.nextDeadline ? formatRelativeTime(data.summary.nextDeadline) : "—"}
+              value={data.summary.nextDeadline ? formatRelativeTime(data.summary.nextDeadline) : "None set"}
               label="Next reply due"
               tone={data.summary.nextDeadline && data.summary.nextDeadline < Date.now() ? "danger" : "muted"}
             />

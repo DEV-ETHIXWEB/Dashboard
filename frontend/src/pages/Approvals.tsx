@@ -257,7 +257,7 @@ function Row({ request }: { request: ApprovalRequest }) {
       {request.decidedByName && request.status !== "pending" && (
         <p className="mt-2 text-xs text-muted-foreground">
           {request.status === "approved" ? "Approved" : "Decided"} by {request.decidedByName}
-          {request.decisionNote ? ` — "${request.decisionNote}"` : ""}
+          {request.decisionNote ? `: "${request.decisionNote}"` : ""}
         </p>
       )}
     </>

@@ -301,7 +301,7 @@ export default function SlackMessages() {
                     <ul className="mt-1 space-y-0.5 text-muted-foreground">
                       {feed.data.skipped.map((s) => (
                         <li key={s.channelId}>
-                          #{s.channelName} — {s.reason}
+                          #{s.channelName}: {s.reason}
                         </li>
                       ))}
                     </ul>

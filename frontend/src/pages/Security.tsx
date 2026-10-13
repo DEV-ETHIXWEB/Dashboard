@@ -17,11 +17,11 @@ import { cn } from "@/lib/utils";
  *
  * The page exists because of one scenario: the mail transport is down, every
  * admin happens to be signed out, and the emailed code that finishes an admin
- * sign-in never arrives. The Login Codes page is no help — reaching it means
+ * sign-in never arrives. The Login Codes page is no help, because reaching it means
  * already being signed in. These codes are the way back into the building.
  *
  * They are shown exactly once, here, at the moment they are generated. The
- * server keeps only their hashes, so nothing can re-display them afterwards —
+ * server keeps only their hashes, so nothing can re-display them afterwards:
  * which is the point. A screen that could show them again would be as good as
  * the codes themselves.
  */
@@ -44,7 +44,7 @@ export default function Security() {
       setCodes(result.codes);
       setConfirming(false);
       setCopied(false);
-      toast.success("New backup codes generated. Save them now — this is the only time they are shown.");
+      toast.success("New backup codes generated. Save them now, because this is the only time they are shown.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not generate backup codes");
     }
@@ -57,14 +57,14 @@ export default function Security() {
         setCopied(true);
         toast.success("Copied to the clipboard");
       },
-      () => toast.error("Could not copy — select the codes and copy them by hand"),
+      () => toast.error("Could not copy. Select the codes and copy them by hand"),
     );
   }
 
   function downloadAll() {
     if (!codes) return;
     const body = [
-      `EthixWeb CRM — backup sign-in codes for ${user?.email ?? "your account"}`,
+      `EthixWeb CRM backup sign-in codes for ${user?.email ?? "your account"}`,
       `Generated ${formatDateTime(Date.now())}`,
       "",
       "Each code works once, in place of the emailed sign-in code.",
@@ -98,7 +98,7 @@ export default function Security() {
               Your new backup codes
             </CardTitle>
             <CardDescription>
-              Save these somewhere you can reach <strong>without</strong> this dashboard — a password manager, or
+              Save these somewhere you can reach <strong>without</strong> this dashboard: a password manager, or
               printed and locked away. They are not shown again, and any earlier set has stopped working.
             </CardDescription>
           </CardHeader>
@@ -166,7 +166,7 @@ export default function Security() {
                   <strong>
                     {remaining} of {status?.total} codes remaining
                   </strong>
-                  {status?.used ? ` — ${status.used} already used` : null}
+                  {status?.used ? `, ${status.used} already used` : null}
                   {status?.generatedAt ? (
                     <span className="block text-muted-foreground">
                       Generated {formatDateTime(new Date(status.generatedAt).getTime())}

@@ -51,7 +51,7 @@ const FAILURE_COPY: Record<string, { title: string; body: string }> = {
   },
   used: {
     title: "That link has already been used",
-    body: "Each link works exactly once. If you did not use it, ask an administrator — somebody else may have.",
+    body: "Each link works exactly once. If you did not use it, ask an administrator, because somebody else may have.",
   },
   invalid: {
     title: "That link is not valid",
@@ -186,7 +186,7 @@ export default function SetPassword() {
                 {check?.purpose === "activation" ? "Set up your password" : "Choose a new password"}
               </CardTitle>
               <CardDescription>
-                {check?.name ? `${check.name} — ` : ""}
+                {check?.name ? `${check.name}: ` : ""}
                 {check?.emailHint ? `for ${check.emailHint}. ` : ""}
                 Nobody here will ever see what you pick.
               </CardDescription>

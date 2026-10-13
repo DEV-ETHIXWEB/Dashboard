@@ -630,7 +630,7 @@ export default function Team() {
           <DialogDescription>
             Administrators sign in with a password and an emailed code. These eight one-time codes stand in for
             that emailed code when email is not reaching them. Give them to {newAdminCodes?.name} along with the
-            password — this is the only time they are shown.
+            password. This is the only time they are shown.
           </DialogDescription>
           <ul className="my-2 grid grid-cols-2 gap-2">
             {(newAdminCodes?.codes ?? []).map((c) => (

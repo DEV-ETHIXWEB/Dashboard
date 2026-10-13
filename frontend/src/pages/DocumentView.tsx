@@ -176,7 +176,7 @@ export default function DocumentView() {
             >
               Open it in a new tab
             </a>{" "}
-            — some browsers are set to download documents rather than display them.
+            instead. Some browsers are set to download documents rather than display them.
           </p>
         </>
       ) : (

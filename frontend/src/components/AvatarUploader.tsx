@@ -132,7 +132,7 @@ export function AvatarUploader({
               // The format rule lives here rather than as a line of body text
               // under the picture: it only matters at the moment of choosing,
               // and picking a GIF says so plainly enough on its own.
-              title={`${hasPicture ? "Replace" : "Upload"} picture — PNG, JPEG or WebP`}
+              title={`${hasPicture ? "Replace" : "Upload"} picture. PNG, JPEG or WebP`}
               className="focus-clear group absolute inset-0 grid touch-manipulation place-items-center rounded-full disabled:cursor-not-allowed"
             >
               {/* Dark wash over the picture so a white camera reads against a

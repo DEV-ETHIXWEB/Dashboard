@@ -11,7 +11,7 @@ export function formatDate(value: string | null | undefined): string {
 
 /** "3h ago" / "in 2d" for epoch-millisecond timestamps. */
 export function formatRelativeTime(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms)) return "—";
+  if (ms == null || !Number.isFinite(ms)) return "Not set";
   const diff = ms - Date.now();
   const abs = Math.abs(diff);
 
@@ -31,7 +31,7 @@ export function formatRelativeTime(ms: number | null | undefined): string {
 }
 
 export function formatDateTime(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms)) return "—";
+  if (ms == null || !Number.isFinite(ms)) return "Not set";
   return new Date(ms).toLocaleString("en-US", {
     month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
   });

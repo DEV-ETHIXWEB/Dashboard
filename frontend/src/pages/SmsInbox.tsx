@@ -380,7 +380,7 @@ export default function SmsInbox() {
                         {r.status === "sent" ? "Sent" : "Failed"}
                       </Pill>
                       <span>{c?.name ?? r.clientId}</span>
-                      {r.error && <span className="text-xs text-muted-foreground">— {r.error}</span>}
+                      {r.error && <span className="text-xs text-muted-foreground">{r.error}</span>}
                     </div>
                   );
                 })}

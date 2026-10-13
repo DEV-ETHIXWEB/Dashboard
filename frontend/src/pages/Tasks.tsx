@@ -283,7 +283,7 @@ export default function Tasks() {
                           or simply has nobody in it. Say which. */}
                       {employees.length === 0 && (
                         <p className="text-[11px] text-muted-foreground">
-                          No team members yet — add one under Team.
+                          No team members yet. Add one under Team.
                         </p>
                       )}
                     </div>

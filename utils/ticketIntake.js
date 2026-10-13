@@ -247,7 +247,7 @@ async function openSlackThread(ticket, { client, assignee }) {
   const due = ticket.responseDueAt ? new Date(ticket.responseDueAt).toLocaleString() : 'no deadline set';
 
   const lines = [
-    `🎫 *New ${ticket.priority} ticket* — ${ticket.subject}`,
+    `🎫 *New ${ticket.priority} ticket*: ${ticket.subject}`,
     `• Ticket: ${ticket.id}`,
     `• From: ${who}`,
     `• Category: ${ticket.category}`,

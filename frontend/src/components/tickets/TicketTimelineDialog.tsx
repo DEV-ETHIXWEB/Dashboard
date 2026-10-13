@@ -246,7 +246,7 @@ export function TicketTimelineDialog({
                         max={100}
                         value={progress}
                         onChange={(e) => setProgress(e.target.value)}
-                        placeholder="Optional — defaults to the stage"
+                        placeholder="Optional. Defaults to the stage"
                       />
                     </div>
                   </div>
@@ -450,7 +450,7 @@ function Timeline({
         const Icon = KIND_ICON[update.kind];
         const pending = isRequest(update) && update.status === "pending";
         // Only the person asked can answer. An admin can unblock a request
-        // aimed at somebody unavailable — but never one they sent themselves,
+        // aimed at somebody unavailable, but never one they sent themselves,
         // or "ask someone to take this" becomes "assign it to whoever I like
         // and log it as their decision". The server enforces the same rule.
         const canAnswer =

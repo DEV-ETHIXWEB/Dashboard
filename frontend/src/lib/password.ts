@@ -104,7 +104,7 @@ export function localPasswordProblem(
   // error path left the two indistinguishable -- the message only changed
   // colour, and somebody typing quickly saw nothing happen at all.
   if (password.length < minLength) {
-    return `Too short — ${minLength - password.length} more character${minLength - password.length === 1 ? "" : "s"} needed.`;
+    return `Too short. ${minLength - password.length} more character${minLength - password.length === 1 ? "" : "s"} needed.`;
   }
   if (/^(.)\1*$/.test(password)) return "That is one character repeated.";
 

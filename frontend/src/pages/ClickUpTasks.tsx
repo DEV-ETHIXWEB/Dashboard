@@ -160,7 +160,7 @@ export default function ClickUpTasks() {
             { key: "CLICKUP_TEAM_ID", hint: "Pin a specific workspace. Defaults to the first one the token can see.", optional: true },
             {
               key: "CLICKUP_TICKETS_LIST_ID",
-              hint: "Mirror every ticket raised here into this ClickUp list. Open the list in ClickUp — the id is the number in the URL after /v/li/.",
+              hint: "Mirror every ticket raised here into this ClickUp list. Open the list in ClickUp. The id is the number in the URL after /v/li/.",
               optional: true,
             },
           ]}
@@ -197,7 +197,7 @@ export default function ClickUpTasks() {
           <p className="min-w-0 text-sm text-muted-foreground">
             Tickets raised in this dashboard are not being copied into ClickUp. Set{" "}
             <code className="rounded bg-secondary px-1 font-mono text-xs">CLICKUP_TICKETS_LIST_ID</code> to the list you
-            want them to land in — open that list in ClickUp and copy the number from the URL after{" "}
+            want them to land in, then open that list in ClickUp and copy the number from the URL after{" "}
             <code className="rounded bg-secondary px-1 font-mono text-xs">/v/li/</code>.
           </p>
         </Panel>

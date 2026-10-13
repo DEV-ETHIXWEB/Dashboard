@@ -352,7 +352,7 @@ export default function Login() {
         toast.warning(
           left === 0
             ? "That was your last backup code. Generate a new set on the Security page now."
-            : `Backup code used. ${left} left — generate a new set from the Security page.`,
+            : `Backup code used. ${left} left. Generate a new set from the Security page.`,
         );
       } else if (d.user?.role === "admin" && d.recoveryCodesRemaining === 0) {
         toast.warning("You have no backup codes. Without them, an email outage locks you out.");

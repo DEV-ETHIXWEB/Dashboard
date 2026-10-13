@@ -277,7 +277,7 @@ export default function Projects() {
                             or simply has nobody in it. Say which. */}
                         {pms.length === 0 && (
                           <p className="text-[11px] text-muted-foreground">
-                            No managers yet — add one under Team.
+                            No managers yet. Add one under Team.
                           </p>
                         )}
                       </div>
