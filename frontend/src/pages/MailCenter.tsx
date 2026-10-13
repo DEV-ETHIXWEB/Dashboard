@@ -85,6 +85,7 @@ export default function MailCenter() {
       sent: entries.filter((e) => e.status === "sent").length,
       failed: entries.filter((e) => e.status === "failed").length,
       skipped: entries.filter((e) => e.status === "skipped").length,
+      held: entries.filter((e) => e.status === "held").length,
     };
   }, [log.data]);
 
@@ -127,7 +128,7 @@ export default function MailCenter() {
         />
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {/* Messages the outbound queue is still carrying. Not a warning tone:
             a message waiting a minute for the next sweep is working as
             designed, and colouring it like a problem would train an admin to
@@ -136,6 +137,11 @@ export default function MailCenter() {
         <SummaryCard icon={MailCheck} value={counts.sent} label="Delivered" tone="success" />
         <SummaryCard icon={MailX} value={counts.failed} label="Failed" tone={counts.failed ? "danger" : "muted"} />
         <SummaryCard icon={Inbox} value={counts.skipped} label="Held (no transport)" tone={counts.skipped ? "warning" : "muted"} />
+        {/* Messages we chose not to send, because the client they were for is
+            not being emailed yet. Muted on purpose: this is the rule working,
+            not a fault -- but it is countable, so "have we written to them?"
+            has an answer somebody can check rather than assume. */}
+        <SummaryCard icon={MailX} value={counts.held} label="Not sent (muted client)" tone="muted" />
       </div>
 
       <Tabs defaultValue="templates">
@@ -487,7 +493,7 @@ function TemplatePreview({ templateKey }: { templateKey: string | null }) {
         <div className="min-w-0">
           <div className="t-label text-muted-foreground">Subject</div>
           <div className="truncate text-sm font-semibold">
-            {preview.data?.subject ?? (preview.isLoading ? "Loading…" : "—")}
+            {preview.data?.subject ?? (preview.isLoading ? "Loading…" : "No subject")}
           </div>
         </div>
         <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => setShowText((v) => !v)}>
@@ -524,10 +530,20 @@ const STATUS_STYLE: Record<EmailStatus, string> = {
   sent: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
   failed: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
   skipped: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+  // Not a warning: a message held because the client is not being emailed yet
+  // is the rule doing its job, and colouring it like a failure would train
+  // everyone to ignore the colour.
+  held: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/20",
 };
 
 function StatusChip({ status }: { status: EmailStatus }) {
-  const label = { queued: "Sending", sent: "Delivered", failed: "Failed", skipped: "Held" }[status] ?? status;
+  const label = {
+    queued: "Sending",
+    sent: "Delivered",
+    failed: "Failed",
+    skipped: "Held",
+    held: "Not sent",
+  }[status] ?? status;
   return (
     <span
       className={cn(

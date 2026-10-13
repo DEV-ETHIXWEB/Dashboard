@@ -266,9 +266,14 @@ async function main() {
   }
 
   // --- client login with page toggles --------------------------------------
+  // This account stands in for a live, paying client for the rest of the file,
+  // so it is created with its email on. A client created without that hears
+  // nothing from us at all -- which is the default, and which has its own
+  // block further down.
   r = await admin.req('POST', '/api/users', {
     name: 'Test Client', email: 'qa.client@example.com', role: 'client', company: 'QA Co',
     password: 'ClientPass#1', allowedPages: ['tickets', 'progress', 'projects'],
+    mailEnabled: true,
   });
   check('admin can issue a client login', r.status === 201, `${r.status} ${r.text.slice(0, 200)}`);
   const clientId = r.data.user?.id;
@@ -1910,9 +1915,13 @@ async function main() {
     const welcomes = () => db.filter('email_log', (e) => e.template === 'welcome_with_plans');
 
     // --- a brand new client is greeted at once ----------------------------
+    // `mailEnabled` is what this whole block is about: a client created
+    // without it hears nothing from us at all, which is the point of the
+    // switch and is covered by its own tests further down. This one is
+    // checking what a client who *is* being emailed receives.
     r = await admin.req('POST', '/api/users', {
       name: 'Welcome Tester', email: 'welcome.tester@example.com', role: 'client',
-      password: 'WelcomePass#1', company: 'Welcome Co',
+      password: 'WelcomePass#1', company: 'Welcome Co', mailEnabled: true,
     });
     check('a new client account is created', r.status === 201, `${r.status}`);
     const welcomedId = r.data.user?.id;

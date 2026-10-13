@@ -18,6 +18,14 @@ export interface UserRecord {
   credentialDelivery?: CredentialDelivery | null;
   hasAvatar?: boolean;
   avatarUpdatedAt?: number | null;
+  /**
+   * Whether this client may be emailed yet. The server resolves "no setting"
+   * to true, so this is never null -- an account created before the switch
+   * existed keeps receiving exactly what it receives today.
+   */
+  mailEnabled?: boolean;
+  /** Email template keys this client is switched off, while email is on. */
+  mailOptOuts?: string[];
 }
 
 export interface Project {
@@ -132,6 +140,8 @@ export interface Payment {
   stripeObjectId: string;
   /** Shared by an invoice and the charge that paid it, so the two never double up. */
   stripePaymentIntent?: string | null;
+  /** The invoice a charge settled, where Stripe still reports it. */
+  stripeInvoiceId?: string | null;
   kind: "invoice" | "charge" | "refund";
   description?: string | null;
   amount: number;
@@ -147,6 +157,12 @@ export interface Payment {
   cardLast4?: string | null;
   failureMessage?: string | null;
   createdAt?: string;
+  /**
+   * Every stored row this one payment was folded from, set only when there is
+   * more than one -- the invoice and the charge that paid it, say. The figure
+   * shown is the fold; this is what it was folded from.
+   */
+  records?: Payment[];
 }
 
 /** What `GET /api/billing/payments` returns. */
@@ -156,6 +172,8 @@ export interface PaymentSummary {
   currency: string;
   count: number;
   lastPaidAt?: string | null;
+  /** Staff view only: payments that are not credited to any client yet. */
+  unlinked?: number;
   categories: { id: string; label: string; amount: number }[];
   payments: Payment[];
   client?: { id: string; name: string };

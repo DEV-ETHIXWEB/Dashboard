@@ -12,6 +12,7 @@ const {
 const roles = require('../utils/roles');
 const approvals = require('../utils/approvals');
 const { CLIENT_PAGES, normalizeAllowedPages, parseAllowedPages, allowedPagesFor } = require('../utils/clientPages');
+const clientMail = require('../utils/clientMail');
 const mailer = require('../utils/mailer');
 const messages = require('../utils/emailMessages');
 const admins = require('../utils/admins');
@@ -924,7 +925,7 @@ router.post('/', requireCSRF, requireRole('admin'), credentialIssueLimiter, asyn
   try {
     const {
       role, company, password, passwordExpiresAt, allowedPages, sendEmail,
-      slackChannelId, slackChannelName,
+      slackChannelId, slackChannelName, mailEnabled,
     } = req.body || {};
     const { name: rawName, email: rawEmail } = req.body || {};
     if (!rawName || !rawEmail || !role) return res.status(400).json({ error: 'name, email, and role are required' });
@@ -954,6 +955,20 @@ router.post('/', requireCSRF, requireRole('admin'), credentialIssueLimiter, asyn
     if (role === 'admin' && !roles.canManageAdmins(req.user)) {
       return res.status(403).json({ error: 'Only a super admin can create an administrator.' });
     }
+
+    /**
+     * Whether this client may be emailed at all.
+     *
+     * Off by default for a new client, and only for a client. Accounts are
+     * created in here before anybody has agreed to pay for anything -- a site
+     * already running on our servers gets a profile so there is something to
+     * hang its domains and payments on -- and a welcome email to somebody who
+     * never signed up for a dashboard is the one thing that must not happen.
+     * An admin turns it on when they take a membership.
+     *
+     * Staff are never gated, so the column stays null for them.
+     */
+    const mailOn = role === 'client' ? mailEnabled === true : null;
 
     // Page toggles only mean anything for clients; staff always see their whole role.
     let pages;
@@ -991,6 +1006,7 @@ router.post('/', requireCSRF, requireRole('admin'), credentialIssueLimiter, asyn
         name, email, role, company: company || null, plaintextPassword,
         passwordExpiresAt: passwordExpiresAt != null ? Number(passwordExpiresAt) : null,
         allowedPages: pages === undefined ? null : pages,
+        mailEnabled: mailOn,
         ...(role === 'client' ? normaliseChannel(slackChannelId, slackChannelName) : {}),
       },
     });
@@ -1000,6 +1016,7 @@ router.post('/', requireCSRF, requireRole('admin'), credentialIssueLimiter, asyn
       name, email, role, company: company || null, plaintextPassword,
       passwordExpiresAt: passwordExpiresAt != null ? Number(passwordExpiresAt) : null,
       allowedPages: pages === undefined ? null : pages,
+      mailEnabled: mailOn,
       ...(role === 'client' ? normaliseChannel(slackChannelId, slackChannelName) : {}),
     });
     await audit(req.user.id, 'create', 'user', user.id, {
@@ -1336,6 +1353,128 @@ router.delete('/:id', requireCSRF, requireRole('admin'), handleAdmin(async (req,
  * Promoting someone is not the same kind of act as fixing a typo in a name,
  * and it should not be possible to do one while meaning the other.
  */
+/**
+ * What this client is sent, and whether they are sent anything at all.
+ *
+ * The template list comes from utils/emailMessages.js rather than from a copy
+ * kept here, so a message added to the app appears on this screen without
+ * anybody remembering to add it. Only the ones a client actually reads are
+ * offered: there is no sense asking whether a customer wants our own internal
+ * approval notices.
+ */
+router.get('/:id/mail', requireRole('admin'), handleAdmin(async (req, res) => {
+  const target = await db.find('users', req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role !== 'client') {
+    return res.status(400).json({ error: 'Only a client account has email settings.' });
+  }
+
+  const optOuts = clientMail.parseOptOuts(target.mailOptOuts);
+  const groups = messages.listGroups()
+    .map((group) => ({
+      heading: group.heading,
+      templates: group.templates
+        .filter((t) => t.audience === 'client' || t.audience === 'both')
+        .map((t) => ({ ...t, enabled: !optOuts.includes(t.key) })),
+    }))
+    .filter((group) => group.templates.length > 0);
+
+  res.json({
+    user: { id: target.id, name: target.name, email: target.email },
+    mailEnabled: clientMail.isMailEnabled(target),
+    // Whether they have ever been welcomed, so the screen can offer to do it
+    // rather than leaving an admin wondering whether turning the switch on
+    // sends anything by itself. It does not -- see the route below.
+    welcomeEmailSentAt: target.welcomeEmailSentAt || null,
+    optOuts,
+    groups,
+  });
+}));
+
+/**
+ * Turn this client's email on or off, and pick which messages they get.
+ *
+ * Turning it on sends nothing by itself -- deliberately. A client muted since
+ * March has months of held messages behind them, and releasing that backlog
+ * the moment somebody pays would be a worse first impression than the silence
+ * was. The switch only governs what happens from now on; the welcome is a
+ * separate, deliberate press.
+ */
+router.put('/:id/mail', requireCSRF, requireRole('admin'), handleAdmin(async (req, res) => {
+  const target = await db.find('users', req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role !== 'client') {
+    return res.status(400).json({ error: 'Only a client account has email settings.' });
+  }
+
+  const { mailEnabled, optOuts } = req.body || {};
+  const patch = {};
+
+  if (mailEnabled !== undefined) {
+    if (typeof mailEnabled !== 'boolean') {
+      return res.status(400).json({ error: 'mailEnabled must be true or false.' });
+    }
+    patch.mailEnabled = mailEnabled;
+  }
+
+  if (optOuts !== undefined) {
+    let clean;
+    try {
+      clean = clientMail.normalizeOptOuts(optOuts);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    patch.mailOptOuts = JSON.stringify(clean);
+  }
+
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nothing to change' });
+
+  const updated = await db.update('users', target.id, patch);
+  await audit(req.user.id, 'update', 'user', target.id, {
+    mailEnabled: patch.mailEnabled,
+    ...(patch.mailOptOuts ? { optOuts: JSON.parse(patch.mailOptOuts) } : {}),
+  });
+
+  res.json({
+    mailEnabled: clientMail.isMailEnabled(updated),
+    optOuts: clientMail.parseOptOuts(updated.mailOptOuts),
+  });
+}));
+
+/**
+ * Send the welcome email now, on purpose.
+ *
+ * The one message that has to be sendable by hand. Every other message in the
+ * app is triggered by something happening -- a payment, a ticket, a launch --
+ * so once a client's email is on, those arrive on their own. The welcome is
+ * triggered by the account being created, which for these clients happened
+ * months before they agreed to anything.
+ */
+router.post('/:id/welcome', requireCSRF, requireRole('admin'), handleAdmin(async (req, res) => {
+  const target = await db.find('users', req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role !== 'client') {
+    return res.status(400).json({ error: 'Only a client gets the welcome email.' });
+  }
+  if (!clientMail.isMailEnabled(target)) {
+    return res.status(409).json({
+      error: 'This client is not being emailed yet. Turn their email on first.',
+    });
+  }
+  if (target.welcomeEmailSentAt) {
+    return res.status(409).json({
+      error: `They were already welcomed on ${String(target.welcomeEmailSentAt).slice(0, 10)}.`,
+    });
+  }
+
+  const sent = await require('../utils/subscriptions').sendWelcome(target, { reason: 'signup' });
+  if (!sent) {
+    return res.status(502).json({ error: 'The welcome email could not be sent. Check the Mail page for why.' });
+  }
+  await audit(req.user.id, 'update', 'user', target.id, { welcomeEmail: 'sent' });
+  res.json({ ok: true });
+}));
+
 router.post('/:id/standing', requireCSRF, requireRole('admin'), sensitiveAdminLimiter, handleAdmin(async (req, res) => {
   if (!roles.canManageAdmins(req.user)) {
     return res.status(403).json({ error: 'Only a super admin can change admin standing.' });

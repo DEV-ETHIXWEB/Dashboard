@@ -119,9 +119,14 @@ function groupByRecipient(projects) {
 /** Whether this client already had this summary for this month. */
 async function alreadySent(template, clientId, period) {
   const entityId = `${clientId}:${period}`;
+  // A message this workspace held rather than sent is not a message anybody
+  // received, so it must not count as one. Without this, muting a client would
+  // not delay their announcements -- it would cancel them permanently, because
+  // the held row would answer "already sent?" with yes for ever. See
+  // utils/clientMail.js.
   const rows = await db.filter(
     'email_log',
-    (e) => e.template === template && e.entityId === entityId,
+    (e) => e.template === template && e.entityId === entityId && e.status !== 'held',
   );
   return rows.length > 0;
 }

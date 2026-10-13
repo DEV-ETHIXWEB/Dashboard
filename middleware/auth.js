@@ -131,6 +131,11 @@ function safeUser(user) {
   const roles = require('../utils/roles');
   rest.isSuperAdmin = roles.isSuperAdmin(user);
   rest.adminTrusted = roles.isTrustedAdmin(user);
+  // Whether this account may be emailed, resolved here so no caller has to
+  // know that a null column means yes. See utils/clientMail.js.
+  const clientMail = require('../utils/clientMail');
+  rest.mailEnabled = clientMail.isMailEnabled(user);
+  rest.mailOptOuts = clientMail.parseOptOuts(rest.mailOptOuts);
   return rest;
 }
 

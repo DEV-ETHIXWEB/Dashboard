@@ -4,7 +4,14 @@
 // been sent. It is what the Mail page shows for a message the outbound queue
 // is still carrying -- see utils/outbox.js. The same row becomes "sent" or
 // "failed" in place rather than a second row appearing beside it.
-export type EmailStatus = "queued" | "sent" | "failed" | "skipped";
+/**
+ * `skipped` and `held` are both "not sent", and they are not the same
+ * problem. Skipped means this deployment has no mail transport at all, which
+ * is a configuration job. Held means we chose not to write to this person --
+ * a client who has not agreed to a membership yet -- which is the system
+ * working. Collapsing the two would hide a broken install behind a feature.
+ */
+export type EmailStatus = "queued" | "sent" | "failed" | "skipped" | "held";
 
 export interface EmailLogEntry {
   id: string;

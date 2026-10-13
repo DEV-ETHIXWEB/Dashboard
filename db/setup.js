@@ -1013,8 +1013,19 @@ async function initPostgresSchema() {
     // what tells the mirror that an invoice and a charge are the same money and
     // must not both be counted. See utils/stripeSync.js.
     `ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_payment_intent TEXT`,
+    // The invoice a charge settled, where Stripe still reports it. A second
+    // exact join for the same question: older rows were mirrored before the
+    // payment intent was read off an invoice, so some pairs have no intent in
+    // common and this is the only thing left that links them.
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_invoice_id TEXT`,
     // The monthly password policy. Separate from password_expires_at, which is
     // when the account itself stops working -- see the note in db/schemas.js.
+    // The per-client email switch. Deliberately nullable with no default: NULL
+    // is "this account was here before the switch existed, keep mailing it",
+    // and a DEFAULT FALSE here would have muted every live client the moment
+    // this migration ran. New clients are written with an explicit value.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS mail_enabled BOOLEAN`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS mail_opt_outs TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at BIGINT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_required BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_at BIGINT`,

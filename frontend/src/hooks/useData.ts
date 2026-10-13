@@ -138,6 +138,12 @@ export function useCreateUser() {
       slackChannelName?: string | null;
       /** Defaults to true on the server: mail the credentials to the new user. */
       sendEmail?: boolean;
+      /**
+       * Whether this client may be emailed at all. Off unless this says
+       * otherwise, which is the point: an account is created here long before
+       * anybody has agreed to pay for a membership.
+       */
+      mailEnabled?: boolean;
     }) =>
       api<{
         user: UserRecord; temporaryPassword: string; emailed: boolean; emailConfigured: boolean;
@@ -150,6 +156,57 @@ export function useCreateUser() {
         body,
       ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+  });
+}
+
+/** One client's email settings, as the admin screen reads them. */
+export interface ClientMailSettings {
+  user: { id: string; name: string; email: string };
+  mailEnabled: boolean;
+  welcomeEmailSentAt: string | null;
+  optOuts: string[];
+  groups: {
+    heading: string;
+    templates: { key: string; label: string; description?: string; enabled: boolean }[];
+  }[];
+}
+
+/**
+ * What this client is sent, and whether they are sent anything.
+ *
+ * Fetched per client rather than listed with everyone, because the template
+ * list is sixty rows long and nobody is comparing two clients' settings side
+ * by side.
+ */
+export function useClientMail(clientId: string | null) {
+  return useQuery({
+    queryKey: ["client-mail", clientId],
+    queryFn: () => api<ClientMailSettings>("GET", `/users/${clientId}/mail`),
+    enabled: Boolean(clientId),
+  });
+}
+
+export function useSaveClientMail() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; mailEnabled?: boolean; optOuts?: string[] }) =>
+      api<{ mailEnabled: boolean; optOuts: string[] }>("PUT", `/users/${id}/mail`, body),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ["client-mail", vars.id] });
+      qc.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+}
+
+/** Send the welcome email on purpose. Turning email on never sends it. */
+export function useSendWelcome() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<{ ok: true }>("POST", `/users/${id}/welcome`),
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: ["client-mail", id] });
+      qc.invalidateQueries({ queryKey: ["users"] });
+    },
   });
 }
 

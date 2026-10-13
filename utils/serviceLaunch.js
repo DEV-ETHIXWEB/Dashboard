@@ -89,9 +89,14 @@ async function contextFor(project) {
 
 /** Whether this exact announcement has already gone out for this project. */
 async function alreadyAnnounced(template, projectId) {
+  // A message this workspace held rather than sent is not a message anybody
+  // received, so it must not count as one. Without this, muting a client would
+  // not delay their announcements -- it would cancel them permanently, because
+  // the held row would answer "already sent?" with yes for ever. See
+  // utils/clientMail.js.
   const rows = await db.filter(
     'email_log',
-    (e) => e.template === template && e.entityId === projectId,
+    (e) => e.template === template && e.entityId === projectId && e.status !== 'held',
   );
   return rows.length > 0;
 }

@@ -24,6 +24,14 @@ const SCHEMAS = {
     // request and must not start dragging images through it. Doubles as the
     // cache-buster on the avatar URL.
     'avatar_updated_at',
+    // Whether this client may be emailed at all yet, and which messages they
+    // are switched off. A client is created in here before they have agreed to
+    // pay for anything, and must hear nothing from us until an admin says so.
+    // NULL means "yes" -- every account that predates this field, which must
+    // keep receiving exactly what it receives today. See utils/clientMail.js.
+    'mail_enabled',
+    // JSON array of email template keys (see utils/emailMessages.js).
+    'mail_opt_outs',
     // JSON array of client page keys (see utils/clientPages.js). NULL = no restriction.
     'allowed_pages',
     // A super admin is an admin with two extra powers: they can appoint other
@@ -131,7 +139,8 @@ const SCHEMAS = {
   // keyed by its Stripe object id so a replayed webhook updates rather than
   // duplicates.
   payments: [
-    'id', 'client_id', 'stripe_customer_id', 'stripe_object_id', 'stripe_payment_intent', 'kind',
+    'id', 'client_id', 'stripe_customer_id', 'stripe_object_id', 'stripe_payment_intent',
+    'stripe_invoice_id', 'kind',
     'description', 'amount', 'currency', 'status', 'paid_at', 'period_start', 'period_end',
     'invoice_url', 'receipt_url', 'invoice_number', 'card_brand', 'card_last4',
     'failure_message', 'created_at',

@@ -577,6 +577,73 @@ async function updateLog(id, patch) {
 }
 
 /**
+ * Drop the recipients who are not to be emailed, and write down that we did.
+ *
+ * A client brought into the dashboard before they took a membership hears
+ * nothing from us until an admin says so -- see utils/clientMail.js for why.
+ * This is where that is enforced, because every message in the app passes
+ * through here, and a rule enforced at the door cannot be forgotten by the
+ * next feature somebody adds that sends mail.
+ *
+ * Held messages are written to the mail log rather than dropped in silence. An
+ * admin opening the Mail page should be able to see exactly what a muted
+ * client would have been sent and when -- both to check the rule is working,
+ * and because "we sent them nothing" is a claim worth having a record of.
+ *
+ * Takes an already-cleaned recipient list, so a malformed address costs no
+ * lookup and a duplicate is not written down twice. Returns the addresses that
+ * may still be written to, and how many were stopped -- the caller needs the
+ * second number to say *why* nothing was sent, which is a different answer
+ * from "that address was not valid".
+ */
+async function screenRecipients({ to, subject, html, template, entity, entityId, logId = null }) {
+  const gate = require('./clientMail');
+  let screened;
+  try {
+    screened = await gate.screen({ to, template });
+  } catch (err) {
+    // Failing open is the same behaviour as this gate not existing. Every
+    // email in the app stopping because one query timed out would be worse.
+    console.error(`[mail] Could not check who may be emailed: ${err.message}`);
+    return { allowed: Array.isArray(to) ? to : [to], held: [] };
+  }
+
+  // A queued message already has a log row, and completing that row is the
+  // honest record of what became of it. Anything else needs its own. The two
+  // cases are separated rather than decided per recipient, because writing the
+  // same row once per held address would leave it reporting only the last one.
+  const completesQueuedRow = Boolean(logId) && screened.allowed.length === 0 && screened.held.length > 0;
+
+  if (completesQueuedRow) {
+    await updateLog(logId, {
+      status: gate.HELD_STATUS,
+      transport: 'none',
+      error: screened.held.map((stop) => gate.explainHold(stop.reason, stop.name)).join(' '),
+    });
+    return screened;
+  }
+
+  for (const stop of screened.held) {
+    await logEmail({
+      to: [stop.address],
+      subject,
+      html,
+      template,
+      entity,
+      entityId,
+      status: gate.HELD_STATUS,
+      transport: 'none',
+      error: gate.explainHold(stop.reason, stop.name),
+    });
+  }
+
+  return screened;
+}
+
+/** What a send reports when the gate, rather than a bad address, stopped it. */
+const HELD_SKIP = 'held: this recipient is not being emailed';
+
+/**
  * Send a message. Never throws -- failures are logged and reported in the
  * return value so callers can stay on the happy path.
  *
@@ -652,8 +719,24 @@ const SENDERS = { smtp2go: sendViaSmtp2go, smtp: sendViaSmtp, webhook: sendViaWe
  * whether retrying this in a minute could possibly help.
  */
 async function sendNow({ to, subject, text, html, template, entity, entityId, logId = null }) {
-  const requested = cleanRecipients(to);
-  if (requested.length === 0) return { ok: false, skipped: 'no valid recipients', permanent: true };
+  // Cleaned first: screening is a database lookup per address, and an address
+  // that is not an address -- or the same one twice -- should cost neither a
+  // lookup nor a second row in the log.
+  const addressed = cleanRecipients(to);
+  if (addressed.length === 0) return { ok: false, skipped: 'no valid recipients', permanent: true };
+
+  // Both the inline path and the queue sweep land here, so a client muted
+  // between a message being queued and the sweep reaching it is still caught.
+  const screened = await screenRecipients({
+    to: addressed, subject, html, template, entity, entityId, logId,
+  });
+  const requested = screened.allowed;
+  if (requested.length === 0) {
+    // Said apart from "no valid recipients" on purpose. These two look the
+    // same from here and mean opposite things: one is an address to go and
+    // fix, the other is this workspace doing exactly what it was told.
+    return { ok: false, skipped: screened.held.length > 0 ? HELD_SKIP : 'no valid recipients', permanent: true };
+  }
 
   // A queued message already has its row; an inline one needs a new one each
   // time. `record` hides which case this is from the rest of the function.
@@ -765,10 +848,21 @@ async function sendMail({ to, subject, text, html, template, entity, entityId, q
     inline = true;
   }
 
+  // The inline path screens inside sendNow, which is the same check; doing it
+  // here as well would write the hold down twice.
   if (inline) return sendNow({ to, subject, text, html, template, entity, entityId });
 
-  const requested = cleanRecipients(to);
-  if (requested.length === 0) return { ok: false, skipped: 'no valid recipients' };
+  const addressed = cleanRecipients(to);
+  if (addressed.length === 0) return { ok: false, skipped: 'no valid recipients' };
+
+  // Screened before the queue rather than after it, so a message for a muted
+  // client is never a row waiting to be swept -- it is logged as held once,
+  // now, where an admin can see it.
+  const screened = await screenRecipients({ to: addressed, subject, html, template, entity, entityId });
+  const requested = screened.allowed;
+  if (requested.length === 0) {
+    return { ok: false, skipped: screened.held.length > 0 ? HELD_SKIP : 'no valid recipients' };
+  }
 
   try {
     // The Mail page's row exists from this moment, so a message that is

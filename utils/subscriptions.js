@@ -602,6 +602,12 @@ function emptyState() {
 async function sendWelcome(client, { reason = 'signup' } = {}) {
   if (!client || client.role !== 'client' || !client.email) return false;
   if (client.welcomeEmailSentAt) return false;
+  // Checked here rather than left to the mail door, because this stamps the
+  // account as welcomed straight after sending. A client who is not being
+  // emailed yet would have that stamp spent while the message was held, and
+  // would then never get a welcome at all once their email was turned on --
+  // the switch would have cancelled the message instead of delaying it.
+  if (!require('./clientMail').isMailEnabled(client)) return false;
 
   try {
     const firstName = String(client.name || '').trim().split(/\s+/)[0] || null;

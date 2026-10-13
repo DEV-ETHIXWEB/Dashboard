@@ -178,7 +178,7 @@ async function joinAssignedChannel(user) {
 async function createUserRecord({
   name, email, role, company = null, plaintextPassword,
   passwordExpiresAt = null, allowedPages = null,
-  slackChannelId = null, slackChannelName = null,
+  slackChannelId = null, slackChannelName = null, mailEnabled = null,
 }) {
   // Required lazily, the way utils/mailer.js does it, so importing this file
   // never opens a database connection on its own.
@@ -196,6 +196,12 @@ async function createUserRecord({
     ...policy.stampChange(),
     passwordExpiresAt: passwordExpiresAt != null ? Number(passwordExpiresAt) : null,
     allowedPages: allowedPages === undefined ? null : allowedPages,
+    // Whether this client may be emailed. Null for staff and for a caller that
+    // did not say, which reads as "yes" -- see utils/clientMail.js. A new
+    // client created through the dashboard is written as an explicit false
+    // unless an admin turned their email on.
+    mailEnabled: mailEnabled === undefined ? null : mailEnabled,
+    mailOptOuts: null,
     // Only a client has a channel; staff reach all of Slack through the
     // integrations page anyway.
     ...(role === 'client' ? { slackChannelId, slackChannelName } : {}),
@@ -216,6 +222,12 @@ async function createUserRecord({
  */
 async function welcomeNewClient(user) {
   if (!user || user.role !== 'client') return false;
+  // Asked here as well as at the mail door, so a muted client is not merely
+  // unsent the welcome but never marked as having been sent it. Otherwise the
+  // one-time stamp this sets would be spent while the message was being held,
+  // and the client would never get a welcome at all once their email is turned
+  // on. See the stamp in utils/subscriptions.js sendWelcome.
+  if (!require('./clientMail').isMailEnabled(user)) return false;
   return require('./subscriptions').sendWelcome(user, { reason: 'signup' });
 }
 

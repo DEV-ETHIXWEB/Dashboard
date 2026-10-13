@@ -13,6 +13,7 @@ import {
   CalendarClock,
   Building2,
   Mail,
+  MailX,
   Clock,
   AlertTriangle,
   Infinity as InfinityIcon,
@@ -22,6 +23,7 @@ import {
   Send,
 } from "lucide-react";
 import { useUsers, useCreateUser, useUpdateUser, useDeleteUser } from "@/hooks/useData";
+import { ClientMailDialog } from "@/components/clients/ClientMailDialog";
 import { api, ApiError } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
@@ -55,13 +57,20 @@ import { CLIENT_PAGES, CLIENT_PAGE_KEYS, describeAccess } from "@/lib/permission
 import { LINK_LIFETIMES } from "@/lib/types";
 import { useSlackChannels } from "@/hooks/useIntegrations";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { UserRecord } from "@/lib/entities";
 import type { ClientPageKey, CredentialDelivery, LoginLinkResponse } from "@/lib/types";
 
 const DAY_MS = 86_400_000;
 
-type Credential = { name: string; email: string; password: string; emailed: boolean };
+/**
+ * `muted` is why it was not emailed, which is a different answer from "the
+ * mail system is broken". A client who is not being emailed yet was never
+ * going to get this, and telling an admin to go and configure a transport
+ * would send them to fix something that is working.
+ */
+type Credential = { name: string; email: string; password: string; emailed: boolean; muted?: boolean };
 type SignInLink = { name: string; email: string; url: string; expiresAt: number };
 
 /**
@@ -257,6 +266,18 @@ export default function ClientAccess() {
   const [accessTarget, setAccessTarget] = useState<UserRecord | null>(null);
   const [accessDraft, setAccessDraft] = useState<ClientPageKey[]>([]);
 
+  const [mailTarget, setMailTarget] = useState<UserRecord | null>(null);
+  /**
+   * Whether a client created from this form may be emailed.
+   *
+   * Off every time the form opens, never remembered. The clients being added
+   * here are already live on our servers and have agreed to nothing, so the
+   * safe answer has to be the one you get by not thinking about it -- and a
+   * sticky toggle left on from the last client is exactly how somebody gets a
+   * welcome email they never asked for.
+   */
+  const [mailOn, setMailOn] = useState(false);
+
   const [deliveryTarget, setDeliveryTarget] = useState<UserRecord | null>(null);
   const [deliveryDraft, setDeliveryDraft] = useState<number | null>(null);
   const deliveryConfig = useCredentialDeliveries();
@@ -303,6 +324,7 @@ export default function ClientAccess() {
     setNoExpiry(false);
     setExpiresAt(toDateInput(Date.now() + 30 * DAY_MS));
     setPages([...CLIENT_PAGE_KEYS]);
+    setMailOn(false);
     setIssueOpen(true);
   }
 
@@ -328,11 +350,20 @@ export default function ClientAccess() {
         slackChannelName: slackChannelId
           ? (slackChannels ?? []).find((c) => c.id === slackChannelId)?.name ?? null
           : null,
+        mailEnabled: mailOn,
+        // No credentials email either while they are muted. The server would
+        // hold it anyway; saying so here keeps the request honest about what
+        // it is asking for.
+        sendEmail: mailOn,
       },
       {
         onSuccess: (data) => {
           setIssueOpen(false);
-          setCredential({ name, email, password: data.temporaryPassword, emailed: Boolean(data.emailed) });
+          setCredential({
+            name, email, password: data.temporaryPassword,
+            emailed: Boolean(data.emailed),
+            muted: !mailOn,
+          });
           // The bot adds itself to public channels; a private one needs a human.
           if (data.slackChannel && !data.slackChannel.joined) {
             toast.warning(data.slackChannel.message ?? "The bot could not join that channel.", { duration: 9000 });
@@ -611,17 +642,17 @@ export default function ClientAccess() {
                     <>
                       <Select
                         items={{
-                          "": "No channel — no Messages page",
+                          "": "No channel, no Messages page",
                           ...Object.fromEntries(slackChannels.map((c) => [c.id, `#${c.name}`])),
                         }}
                         value={slackChannelId}
                         onValueChange={(v: string | null) => setSlackChannelId(v ?? "")}
                       >
                         <SelectTrigger className="w-full border-border/60 bg-background/50">
-                          <SelectValue placeholder="No channel — no Messages page" />
+                          <SelectValue placeholder="No channel, no Messages page" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">No channel — no Messages page</SelectItem>
+                          <SelectItem value="">No channel, no Messages page</SelectItem>
                           {slackChannels.map((c) => (
                             <SelectItem key={c.id} value={c.id}>
                               #{c.name}
@@ -671,6 +702,46 @@ export default function ClientAccess() {
                       </p>
                     </>
                   )}
+                </div>
+
+                {/* Off unless somebody deliberately turns it on. A client is
+                    created in here before they have agreed to pay for
+                    anything -- a site already running on our servers gets a
+                    profile so there is something to hang it on -- and the one
+                    thing that must not happen is us emailing a person who
+                    never signed up for a dashboard. */}
+                <div
+                  className={cn(
+                    "space-y-2 rounded-xl border p-3 transition-colors",
+                    mailOn ? "border-primary/30 bg-primary/5" : "border-warning/40 bg-warning/5",
+                  )}
+                >
+                  <label className="flex cursor-pointer items-start gap-3 select-none">
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5 text-xs font-medium">
+                        {mailOn ? (
+                          <Mail className="size-3.5 shrink-0 text-primary" />
+                        ) : (
+                          <MailX className="size-3.5 shrink-0 text-warning" />
+                        )}
+                        Email this client
+                      </span>
+                      <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
+                        {mailOn
+                          ? "They get their password email now, and everything else as it happens."
+                          : "Nothing is sent to them at all: not the password, not a welcome, not any automatic update. Turn this on from their Emails button when they take a membership."}
+                      </span>
+                    </span>
+                    {/* The same control as the one on their profile, so the
+                        decision made here and the decision made later are
+                        visibly the same decision. */}
+                    <Switch
+                      checked={mailOn}
+                      onCheckedChange={(v: boolean) => setMailOn(v)}
+                      aria-label="Email this client"
+                      className="mt-0.5 shrink-0"
+                    />
+                  </label>
                 </div>
                 </div>
 
@@ -792,6 +863,16 @@ export default function ClientAccess() {
                           admin needs both. */}
                       <PasswordStatusBadge status={u.passwordStatus} />
                       <DeliveryBadge delivery={u.credentialDelivery} />
+                      {/* Said on the row rather than only inside the dialog:
+                          "why has this client heard nothing from us" is a
+                          question somebody will ask while looking at this
+                          list, and the answer should be on it. */}
+                      {u.mailEnabled === false && (
+                        <span className="inline-flex items-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                          <MailX className="size-3" />
+                          No emails
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
@@ -865,6 +946,22 @@ export default function ClientAccess() {
                   >
                     <CalendarClock className="size-3.5" />
                     Expiry
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => setMailTarget(u)}
+                    title="Whether this client is emailed at all, and which messages they get"
+                    className={cn(
+                      "h-8 text-xs gap-1.5",
+                      u.mailEnabled === false
+                        ? "text-warning hover:text-warning"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {u.mailEnabled === false ? <MailX className="size-3.5" /> : <Mail className="size-3.5" />}
+                    Emails
                   </Button>
                   <Button
                     variant="ghost"
@@ -996,7 +1093,7 @@ export default function ClientAccess() {
                 presets={DELIVERY_PRESETS}
               />
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                Your own time zone. The email carries a single-use link that expires on its own — no password
+                Your own time zone. The email carries a single-use link that expires on its own, and no password
                 is ever sent, and nobody here can see the one they choose.
               </p>
             </div>
@@ -1040,6 +1137,8 @@ export default function ClientAccess() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ClientMailDialog client={mailTarget} onClose={() => setMailTarget(null)} />
 
       <Dialog open={Boolean(accessTarget)} onOpenChange={(v) => !v && setAccessTarget(null)}>
         <DialogContent
@@ -1369,7 +1468,9 @@ export default function ClientAccess() {
                 <span>
                   {credential?.emailed
                     ? `Emailed to ${credential.email} with sign-in instructions.`
-                    : "Not emailed - no mail transport is configured, so hand this over yourself."}
+                    : credential?.muted
+                      ? "Not emailed - this client is not being emailed yet, so hand this over yourself or turn their email on."
+                      : "Not emailed - no mail transport is configured, so hand this over yourself."}
                 </span>
               </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
