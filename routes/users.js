@@ -1373,19 +1373,28 @@ router.get('/:id/mail', requireRole('admin'), handleAdmin(async (req, res) => {
   const groups = messages.listGroups()
     .map((group) => ({
       heading: group.heading,
+      // `essential` is what the screen uses to say "this one sends itself
+      // whatever the mode is". Derived here rather than hard-coded in the
+      // frontend, so the two cannot drift apart.
+      essential: clientMail.ESSENTIAL_GROUPS.has(group.heading),
       templates: group.templates
         .filter((t) => t.audience === 'client' || t.audience === 'both')
-        .map((t) => ({ ...t, enabled: !optOuts.includes(t.key) })),
+        .map((t) => ({ ...t, enabled: !optOuts.includes(t.key), essential: clientMail.isEssential(t.key) })),
     }))
     .filter((group) => group.templates.length > 0);
 
   res.json({
     user: { id: target.id, name: target.name, email: target.email },
     mailEnabled: clientMail.isMailEnabled(target),
+    mailAutomatic: clientMail.isAutomatic(target),
     // Whether they have ever been welcomed, so the screen can offer to do it
     // rather than leaving an admin wondering whether turning the switch on
     // sends anything by itself. It does not -- see the route below.
     welcomeEmailSentAt: target.welcomeEmailSentAt || null,
+    // When, if ever, they were told the dashboard exists. The screen needs it
+    // to decide between offering to send the announcement and reporting that
+    // it already went.
+    launchEmailSentAt: target.launchEmailSentAt || null,
     optOuts,
     groups,
   });
@@ -1407,7 +1416,7 @@ router.put('/:id/mail', requireCSRF, requireRole('admin'), handleAdmin(async (re
     return res.status(400).json({ error: 'Only a client account has email settings.' });
   }
 
-  const { mailEnabled, optOuts } = req.body || {};
+  const { mailEnabled, mailAutomatic, optOuts } = req.body || {};
   const patch = {};
 
   if (mailEnabled !== undefined) {
@@ -1415,6 +1424,13 @@ router.put('/:id/mail', requireCSRF, requireRole('admin'), handleAdmin(async (re
       return res.status(400).json({ error: 'mailEnabled must be true or false.' });
     }
     patch.mailEnabled = mailEnabled;
+  }
+
+  if (mailAutomatic !== undefined) {
+    if (typeof mailAutomatic !== 'boolean') {
+      return res.status(400).json({ error: 'mailAutomatic must be true or false.' });
+    }
+    patch.mailAutomatic = mailAutomatic;
   }
 
   if (optOuts !== undefined) {
@@ -1432,13 +1448,72 @@ router.put('/:id/mail', requireCSRF, requireRole('admin'), handleAdmin(async (re
   const updated = await db.update('users', target.id, patch);
   await audit(req.user.id, 'update', 'user', target.id, {
     mailEnabled: patch.mailEnabled,
+    mailAutomatic: patch.mailAutomatic,
     ...(patch.mailOptOuts ? { optOuts: JSON.parse(patch.mailOptOuts) } : {}),
   });
 
   res.json({
     mailEnabled: clientMail.isMailEnabled(updated),
+    mailAutomatic: clientMail.isAutomatic(updated),
     optOuts: clientMail.parseOptOuts(updated.mailOptOuts),
   });
+}));
+
+/**
+ * Send the dashboard announcement to one client, now, because somebody pressed
+ * a button.
+ *
+ * The only route in this application that writes to a client who is not being
+ * emailed yet, and the only one that ever should be. Three things hold it
+ * shut: it is admin-only, it is the single template utils/clientMail.js will
+ * release by hand, and it refuses once the client has already had it.
+ *
+ * Deliberately not wired to anything automatic. No cron, no hook, no "send to
+ * everyone" sweep. These go to people who have agreed to nothing, so each one
+ * is a decision an admin makes about a named client, and the stamp below is
+ * what makes a second press a refusal rather than a second email.
+ */
+router.post('/:id/announce', requireCSRF, requireRole('admin'), sensitiveAdminLimiter, handleAdmin(async (req, res) => {
+  const target = await db.find('users', req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role !== 'client') {
+    return res.status(400).json({ error: 'Only a client is sent the dashboard announcement.' });
+  }
+  if (!target.email) return res.status(400).json({ error: 'That account has no email address.' });
+  if (target.launchEmailSentAt) {
+    return res.status(409).json({
+      error: `They were sent this on ${String(target.launchEmailSentAt).slice(0, 10)}. `
+        + 'It is only ever sent once.',
+    });
+  }
+
+  const firstName = String(target.name || '').trim().split(/\s+/)[0] || null;
+  const result = await mailer.sendTemplate({
+    to: target.email,
+    message: messages.dashboardLaunch({ firstName }),
+    template: 'dashboard_launch',
+    entity: 'user',
+    entityId: target.id,
+    // What releases it past the gate. Paired with the template name, and
+    // meaningless without it -- see BY_HAND_TEMPLATES in utils/clientMail.js.
+    byHand: true,
+    // Two admins pressing at once produce one message, not two.
+    dedupeKey: `dashboard-launch:${target.id}`,
+  });
+
+  if (!result.ok) {
+    return res.status(502).json({
+      error: result.error || result.skipped || 'The announcement could not be sent. Check the Mail page.',
+    });
+  }
+
+  // Stamped only after the send was accepted. Stamping first would mean a
+  // failed send permanently blocked the retry.
+  const stampedAt = new Date().toISOString();
+  await db.update('users', target.id, { launchEmailSentAt: stampedAt });
+  await audit(req.user.id, 'update', 'user', target.id, { dashboardAnnouncement: 'sent' });
+
+  res.json({ ok: true, sentAt: stampedAt, to: target.email });
 }));
 
 /**

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Mail, MailX, Send, X } from "lucide-react";
-import { useClientMail, useSaveClientMail, useSendWelcome } from "@/hooks/useData";
+import { Hand, Loader2, Mail, MailX, Megaphone, Send, X, Zap } from "lucide-react";
+import { useClientMail, useSaveClientMail, useSendWelcome, useSendAnnouncement } from "@/hooks/useData";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { plainDate } from "@/lib/money";
 import type { UserRecord } from "@/lib/entities";
 
 /**
@@ -41,8 +42,20 @@ export function ClientMailDialog({
   const { data, isLoading } = useClientMail(client?.id ?? null);
   const save = useSaveClientMail();
   const welcome = useSendWelcome();
+  const announce = useSendAnnouncement();
+
+  /**
+   * Whether the Send button has been pressed once and is waiting to be meant.
+   *
+   * This message goes to somebody who has agreed to nothing and can never be
+   * taken back, so it does not go out on a single click. Reset whenever the
+   * dialog opens on a different client, or an armed button would carry over
+   * to the next person on the list.
+   */
+  const [armed, setArmed] = useState(false);
 
   const [enabled, setEnabled] = useState(false);
+  const [automatic, setAutomatic] = useState(true);
   const [optOuts, setOptOuts] = useState<string[]>([]);
 
   // Seeded from the server each time a client is opened, not held across two
@@ -50,11 +63,17 @@ export function ClientMailDialog({
   useEffect(() => {
     if (!data) return;
     setEnabled(data.mailEnabled);
+    setAutomatic(data.mailAutomatic);
     setOptOuts(data.optOuts);
   }, [data]);
 
+  useEffect(() => setArmed(false), [client?.id]);
+
   const dirty = Boolean(
-    data && (data.mailEnabled !== enabled || data.optOuts.join() !== [...optOuts].sort().join()),
+    data
+    && (data.mailEnabled !== enabled
+      || data.mailAutomatic !== automatic
+      || data.optOuts.join() !== [...optOuts].sort().join()),
   );
 
   function toggleTemplate(key: string, on: boolean) {
@@ -69,7 +88,7 @@ export function ClientMailDialog({
   function commit() {
     if (!client) return;
     save.mutate(
-      { id: client.id, mailEnabled: enabled, optOuts },
+      { id: client.id, mailEnabled: enabled, mailAutomatic: automatic, optOuts },
       {
         onSuccess: (r) => {
           toast.success(
@@ -146,7 +165,9 @@ export function ClientMailDialog({
                   </span>
                   <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
                     {enabled
-                      ? "Everything ticked below is sent as it happens."
+                      ? automatic
+                        ? "Everything ticked below is sent as it happens."
+                        : "Only the essentials go on their own. The rest waits for you."
                       : "Nothing at all reaches them: no welcome, no reminders, no automatic updates. Held messages are listed on the Mail page so you can see what they would have had."}
                   </span>
                 </span>
@@ -157,6 +178,132 @@ export function ClientMailDialog({
                   className="mt-0.5 shrink-0"
                 />
               </label>
+
+              {/*
+                  The announcement, and the only way it is ever sent.
+                  
+                  It sits above the switch's own copy because for a client who
+                  is not being emailed yet this is the whole screen: the one
+                  message they may receive, and the thing that has to happen
+                  before the switch below means anything.
+              */}
+              {!data.launchEmailSentAt ? (
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="flex items-center gap-1.5 text-sm font-medium">
+                    <Megaphone className="size-3.5 shrink-0 text-primary" />
+                    Tell them the dashboard exists
+                  </p>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                    One email, to {data.user.email}, explaining what the dashboard does and what we
+                    can take on. It sends even while their email is off, because it is the message
+                    that asks whether they want an account at all. Nothing else follows it.
+                  </p>
+
+                  {armed ? (
+                    <div className="mt-3 rounded-lg border border-warning/40 bg-warning/5 p-3">
+                      <p className="text-[11px] leading-relaxed text-warning">
+                        This sends immediately to {data.user.email} and cannot be taken back. It can
+                        only ever be sent once.
+                      </p>
+                      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          disabled={announce.isPending}
+                          onClick={() =>
+                            client &&
+                            announce.mutate(client.id, {
+                              onSuccess: (r) => {
+                                setArmed(false);
+                                toast.success(`Announcement sent to ${r.to}`);
+                              },
+                              onError: (err) =>
+                                toast.error(err instanceof Error ? err.message : "Could not send it"),
+                            })
+                          }
+                          className="h-8 gap-1.5 text-xs"
+                        >
+                          {announce.isPending ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Send className="size-3.5" />
+                          )}
+                          Yes, send it now
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={announce.isPending}
+                          onClick={() => setArmed(false)}
+                          className="h-8 text-xs text-muted-foreground"
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setArmed(true)}
+                      className="mt-3 h-8 gap-1.5 text-xs"
+                    >
+                      <Megaphone className="size-3.5" />
+                      Send the announcement
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                  <p className="flex items-center gap-1.5 text-sm font-medium">
+                    <Megaphone className="size-3.5 shrink-0 text-muted-foreground" />
+                    Announcement sent {plainDate(data.launchEmailSentAt)}
+                  </p>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                    {data.mailEnabled
+                      ? "They are being emailed, so everything ticked below reaches them as it happens."
+                      : "Nothing else has gone to them since. When they reply and ask for an account, turn their email on below."}
+                  </p>
+                </div>
+              )}
+
+              {/*
+                  The second decision, and only once the first one is yes:
+                  does their mail send itself, or wait for somebody.
+
+                  Nested inside the master switch rather than offered as three
+                  equal choices, because it is not a third option -- it only
+                  means anything for a client who is being emailed at all.
+              */}
+              {enabled && (
+                <label className="flex cursor-pointer items-start gap-4 rounded-xl border border-border/60 bg-muted/20 p-4 select-none">
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      {automatic ? (
+                        <Zap className="size-3.5 shrink-0 text-primary" />
+                      ) : (
+                        <Hand className="size-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      {automatic ? "Send automatically" : "Only when I send them"}
+                    </span>
+                    <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
+                      {automatic
+                        ? "Updates, launch announcements and digests go out as they happen."
+                        : "Updates, launch announcements and digests wait for you to send them by hand."}
+                      {" "}
+                      <span className="text-foreground/80">
+                        Receipts, sign-in codes, ticket replies and domain warnings always send
+                        either way.
+                      </span>
+                    </span>
+                  </span>
+                  <Switch
+                    checked={automatic}
+                    onCheckedChange={(v: boolean) => setAutomatic(v)}
+                    aria-label="Send this client's email automatically"
+                    className="mt-0.5 shrink-0"
+                  />
+                </label>
+              )}
 
               {/* Turning the switch on sends nothing by itself, so the one
                   message that is triggered by an account existing rather than
@@ -214,7 +361,17 @@ export function ClientMailDialog({
                               className="mt-0.5 size-3.5 shrink-0 accent-primary cursor-pointer"
                             />
                             <span className="min-w-0 flex-1">
-                              <span className="block text-xs font-medium">{template.label}</span>
+                              <span className="block text-xs font-medium">
+                                {template.label}
+                                {/* Said on the row, because a client set to
+                                    manual needs to know which of these will
+                                    still go out without them. */}
+                                {!automatic && template.essential && (
+                                  <span className="ml-1.5 rounded border border-primary/30 bg-primary/10 px-1 py-px text-[9px] font-medium tracking-wide text-primary uppercase">
+                                    Always sent
+                                  </span>
+                                )}
+                              </span>
                               {template.description && (
                                 <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
                                   {template.description}

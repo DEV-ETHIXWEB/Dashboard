@@ -1026,6 +1026,11 @@ async function initPostgresSchema() {
     // this migration ran. New clients are written with an explicit value.
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS mail_enabled BOOLEAN`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS mail_opt_outs TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS launch_email_sent_at TEXT`,
+    // Nullable with no default, for the same reason as mail_enabled: NULL is
+    // "this account predates the column, keep sending", and DEFAULT FALSE here
+    // would have put every live client on manual the moment it ran.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS mail_automatic BOOLEAN`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at BIGINT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_required BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_at BIGINT`,

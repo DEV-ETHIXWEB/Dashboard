@@ -36,9 +36,51 @@
 
 const userLookup = require('./userLookup');
 
+/**
+ * The messages an admin may send to a client who is not being emailed yet.
+ *
+ * Exactly one, and it is the announcement that asks whether they would like an
+ * account at all. A client who has agreed to nothing still has to be told the
+ * dashboard exists, or the switch below can never be turned on by anybody.
+ *
+ * Being on this list is not enough on its own. `screen` also requires the
+ * caller to say the send was started by a person -- see `byHand` -- so an
+ * automatic path that happens to use this template is still held. Two
+ * conditions rather than one, because a single flag anywhere in this file is
+ * the thing that eventually leaks.
+ */
+const BY_HAND_TEMPLATES = new Set(['dashboard_launch']);
+
+/**
+ * The messages that go out on their own even when a client is set to manual.
+ *
+ * The line is who decided to send it. A receipt, a failed payment, a sign-in
+ * code, a password reset, a reply to a ticket they raised, a domain about to
+ * expire -- the client caused those, or they are about their money or their
+ * way into the account, and holding one behind an admin's day off is how
+ * somebody cannot log in on a Sunday or never hears that their card was
+ * declined. Everything else is a message *we* chose to send, and that is what
+ * manual mode is for.
+ *
+ * Read from the template registry's own grouping rather than listed key by
+ * key, so a message added to Billing or to Accounts & access is treated as
+ * essential without anybody remembering this file. A template filed anywhere
+ * else is held in manual mode, which is the safe direction for something
+ * nobody has classified yet.
+ */
+const ESSENTIAL_GROUPS = new Set(['Tickets', 'Billing', 'Domains', 'Accounts & access']);
+
+/** Whether this message sends itself even for a client set to manual. */
+function isEssential(template) {
+  if (!template) return false;
+  const entry = require('./emailMessages').listTemplates().find((x) => x.key === template);
+  return Boolean(entry && ESSENTIAL_GROUPS.has(entry.group));
+}
+
 /** Why a message was held, in the words the mail log and the UI both use. */
 const HELD_MUTED = 'muted';
 const HELD_OPTED_OUT = 'opted_out';
+const HELD_MANUAL = 'manual';
 
 /** What the mail log records for a message this gate stopped. */
 const HELD_STATUS = 'held';
@@ -50,6 +92,20 @@ const HELD_STATUS = 'held';
  * this field existed. Only an explicit false mutes, so a column that failed to
  * migrate cannot silently stop a live client's mail.
  */
+/**
+ * Whether this client's non-essential mail sends itself.
+ *
+ * Null means yes, for the same reason the switch above does: it is every
+ * account that predates the column, and a migration must not quietly stop a
+ * live client's updates.
+ */
+function isAutomatic(user) {
+  if (!user) return true;
+  if (user.mailAutomatic === false) return false;
+  if (user.mailAutomatic === 'false' || user.mailAutomatic === 0 || user.mailAutomatic === '0') return false;
+  return true;
+}
+
 function isMailEnabled(user) {
   if (!user) return true;
   if (user.mailEnabled === false) return false;
@@ -107,10 +163,23 @@ function normalizeOptOuts(value) {
  * `template` is the registry key from utils/emailMessages.js -- the same string
  * the mail log stores and the Mail page lists.
  */
-function holdReasonFor(user, template) {
+function holdReasonFor(user, template, { byHand = false } = {}) {
   if (!user || user.role !== 'client') return null;
+
+  // The one exception to being muted, and it needs both halves: the right
+  // message *and* an admin who pressed something. Neither alone opens the door.
+  if (byHand && BY_HAND_TEMPLATES.has(template)) return null;
+
   if (!isMailEnabled(user)) return HELD_MUTED;
+
+  // Checked before manual mode: a message switched off is switched off, and an
+  // admin who wants to send it can untick it first. The checkbox has to mean
+  // what it says or it means nothing.
   if (template && parseOptOuts(user.mailOptOuts).includes(template)) return HELD_OPTED_OUT;
+
+  // Manual: we send nothing on our own except the things that cannot wait.
+  if (!isAutomatic(user) && !byHand && !isEssential(template)) return HELD_MANUAL;
+
   return null;
 }
 
@@ -122,6 +191,9 @@ function explainHold(reason, name) {
   }
   if (reason === HELD_OPTED_OUT) {
     return `${who} is switched off for this message.`;
+  }
+  if (reason === HELD_MANUAL) {
+    return `${who} is set to manual, so this was not sent on its own. Send it by hand if you want them to have it.`;
   }
   return `${who} is not being emailed.`;
 }
@@ -139,7 +211,7 @@ function explainHold(reason, name) {
  * existing, and that is a far smaller problem than every email in the app
  * stopping because one query timed out.
  */
-async function screen({ to, template }) {
+async function screen({ to, template, byHand = false }) {
   const list = (Array.isArray(to) ? to : [to]).filter(Boolean).map((a) => String(a).trim());
   const allowed = [];
   const held = [];
@@ -154,7 +226,7 @@ async function screen({ to, template }) {
       continue;
     }
 
-    const reason = holdReasonFor(user, template);
+    const reason = holdReasonFor(user, template, { byHand });
     if (reason) held.push({ address, userId: user.id, name: user.name || null, reason });
     else allowed.push(address);
   }
@@ -163,8 +235,13 @@ async function screen({ to, template }) {
 }
 
 module.exports = {
+  BY_HAND_TEMPLATES,
+  ESSENTIAL_GROUPS,
+  isEssential,
+  isAutomatic,
   HELD_MUTED,
   HELD_OPTED_OUT,
+  HELD_MANUAL,
   HELD_STATUS,
   isMailEnabled,
   parseOptOuts,

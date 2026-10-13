@@ -983,6 +983,11 @@ function renderEmail({
   secondaryCta = null,
   reason = null,
   links = null,
+  // The one message that goes out before a client has agreed to anything
+  // carries no footer: the links in it are an unsubscribe row and a set of
+  // account pages, and neither means anything to somebody who does not have
+  // an account yet. See the launch announcement in utils/emailMessages.js.
+  showFooter = true,
 }) {
   const b = brand();
   const defaultLinks = [
@@ -1091,7 +1096,7 @@ function renderEmail({
     '<tr><td class="ew-pad" style="padding:48px 40px 40px;">',
     body,
     '</td></tr></table>',
-    footer({ reason, links: links || defaultLinks, actor }),
+    showFooter ? footer({ reason, links: links || defaultLinks, actor }) : '',
     '</td></tr></table>',
     '</body></html>',
   ].join('\n');

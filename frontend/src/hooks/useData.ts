@@ -163,11 +163,23 @@ export function useCreateUser() {
 export interface ClientMailSettings {
   user: { id: string; name: string; email: string };
   mailEnabled: boolean;
+  /** Whether their non-essential mail sends itself, or waits for an admin. */
+  mailAutomatic: boolean;
   welcomeEmailSentAt: string | null;
+  /** When an admin sent the dashboard announcement, or null if never. */
+  launchEmailSentAt: string | null;
   optOuts: string[];
   groups: {
     heading: string;
-    templates: { key: string; label: string; description?: string; enabled: boolean }[];
+    essential: boolean;
+    templates: {
+      key: string;
+      label: string;
+      description?: string;
+      enabled: boolean;
+      /** Sends itself even on manual: money, access, and anything they caused. */
+      essential: boolean;
+    }[];
   }[];
 }
 
@@ -189,10 +201,32 @@ export function useClientMail(clientId: string | null) {
 export function useSaveClientMail() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...body }: { id: string; mailEnabled?: boolean; optOuts?: string[] }) =>
-      api<{ mailEnabled: boolean; optOuts: string[] }>("PUT", `/users/${id}/mail`, body),
+    mutationFn: ({ id, ...body }: {
+      id: string;
+      mailEnabled?: boolean;
+      mailAutomatic?: boolean;
+      optOuts?: string[];
+    }) =>
+      api<{ mailEnabled: boolean; mailAutomatic: boolean; optOuts: string[] }>("PUT", `/users/${id}/mail`, body),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ["client-mail", vars.id] });
+      qc.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+}
+
+/**
+ * Send the dashboard announcement to one client.
+ *
+ * The only message that reaches a client who is not being emailed yet, and it
+ * only ever goes because somebody pressed the button. Nothing schedules this.
+ */
+export function useSendAnnouncement() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<{ ok: true; sentAt: string; to: string }>("POST", `/users/${id}/announce`),
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: ["client-mail", id] });
       qc.invalidateQueries({ queryKey: ["users"] });
     },
   });

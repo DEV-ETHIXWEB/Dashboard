@@ -82,6 +82,11 @@ async function signIn(who, email, password) {
   return res;
 }
 
+/** Re-run the boot path, the way a fresh deployment does on its first request. */
+async function seedAgain() {
+  return require('../db/setup').seed();
+}
+
 async function main() {
   const server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
@@ -302,6 +307,93 @@ async function main() {
   }
 
   // ---------------------------------------------------------------------
+  section('The announcement, and only the announcement, may be sent by hand');
+
+  {
+    const toldEmail = 'told.client@example.com';
+    r = await admin.req('POST', '/api/users', {
+      name: 'Told Client', email: toldEmail, role: 'client', password: 'ToldClientPass#2026',
+    });
+    check('a muted client is created', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+    const toldId = r.data.user?.id;
+
+    check('they are muted', r.data.user?.mailEnabled === false);
+    check('and have not been told anything yet',
+      !(await db.find('users', toldId)).launchEmailSentAt);
+
+    /* The exception needs both halves. A template on the by-hand list sent by
+       something automatic is still held -- that is the whole point of needing
+       two conditions rather than one flag. */
+    await mailer.sendMail({
+      to: toldEmail, subject: 'Sneaky', text: 'x', html: '<p>x</p>',
+      template: 'dashboard_launch', queue: false,
+    });
+    check('the announcement sent without a person behind it is held',
+      (await sentFor(toldEmail)).length === 0,
+      JSON.stringify((await logFor(toldEmail)).map((e) => `${e.template}:${e.status}`)));
+
+    /* And the reverse: a person pressing something does not open the door to
+       any other message. */
+    await mailer.sendMail({
+      to: toldEmail, subject: 'Also sneaky', text: 'x', html: '<p>x</p>',
+      template: 'progress_digest', queue: false, byHand: true,
+    });
+    check('any other message by hand is still held',
+      (await sentFor(toldEmail)).length === 0,
+      JSON.stringify((await logFor(toldEmail)).map((e) => `${e.template}:${e.status}`)));
+
+    r = await admin.req('POST', `/api/users/${toldId}/announce`);
+    check('an admin can send the announcement to a muted client', r.status === 200,
+      `${r.status} ${r.text.slice(0, 200)}`);
+    const announced = (await sentFor(toldEmail)).filter((e) => e.template === 'dashboard_launch');
+    check('and it really goes', announced.length === 1, String(announced.length));
+    check('with the subject the template declares',
+      announced[0]?.subject === 'Your website, finally all in one place', announced[0]?.subject);
+
+    check('the send is stamped on the account',
+      Boolean((await db.find('users', toldId)).launchEmailSentAt));
+    r = await admin.req('POST', `/api/users/${toldId}/announce`);
+    check('sending it twice is refused', r.status === 409, `${r.status}`);
+    check('so there is still only one',
+      (await sentFor(toldEmail)).filter((e) => e.template === 'dashboard_launch').length === 1);
+
+    /* Sending it changes nothing about whether they are emailed. The reply is
+       what an admin acts on, and that is a decision, not a consequence. */
+    check('they are still muted afterwards',
+      clientMail.isMailEnabled(await db.find('users', toldId)) === false);
+    await mailer.sendMail({
+      to: toldEmail, subject: 'After', text: 'x', html: '<p>x</p>',
+      template: 'payment_received', queue: false,
+    });
+    check('and nothing else reaches them',
+      (await sentFor(toldEmail)).filter((e) => e.template !== 'dashboard_launch').length === 0);
+
+    r = await admin.req('POST', '/api/users/u-pm/announce');
+    check('staff are never sent it', r.status === 400, `${r.status}`);
+
+    const clientSide = makeClient(base);
+    r = await signIn(clientSide, mutedEmail, 'MutedClientPass#2026');
+    if (r.status === 200) {
+      r = await clientSide.req('POST', `/api/users/${toldId}/announce`);
+      check('a client cannot send it', r.status === 403, `${r.status}`);
+    } else {
+      check('a client cannot send it', false, `could not sign in: ${r.status}`);
+    }
+
+    /* The message itself: no footer, and no link to a dashboard they cannot
+       open yet. */
+    const messages = require('../utils/emailMessages');
+    const built = messages.dashboardLaunch({ firstName: 'David' });
+    check('the announcement carries no footer',
+      !built.html.includes('class="ew-card ew-foot"'));
+    check('and no unsubscribe or preferences row',
+      !/unsubscribe|email preferences/i.test(built.html));
+    check('it has a plain-text twin', built.text.length > 400, String(built.text.length));
+    check('it is on the Mail page like every other template',
+      messages.listTemplates().some((x) => x.key === 'dashboard_launch'));
+  }
+
+  // ---------------------------------------------------------------------
   section('Turning the switch on sends no backlog');
 
   r = await admin.req('PUT', `/api/users/${mutedId}/mail`, { mailEnabled: true });
@@ -355,6 +447,161 @@ async function main() {
     r.status === 200 && r.data.optOuts.length === 0, `${r.status} ${r.text.slice(0, 160)}`);
   r = await admin.req('PUT', `/api/users/${mutedId}/mail`, { optOuts: 'progress_digest' });
   check('and a value that is not a list is refused', r.status === 400, `${r.status}`);
+
+  // ---------------------------------------------------------------------
+  section('Manual: we send nothing on our own except what cannot wait');
+
+  {
+    const manualEmail = 'manual.client@example.com';
+    r = await admin.req('POST', '/api/users', {
+      name: 'Manual Client', email: manualEmail, role: 'client',
+      password: 'ManualClientPass#2026', mailEnabled: true,
+    });
+    check('a client being emailed is created', r.status === 201, `${r.status} ${r.text.slice(0, 160)}`);
+    const manualId = r.data.user?.id;
+
+    r = await admin.req('PUT', `/api/users/${manualId}/mail`, { mailAutomatic: false });
+    check('they can be put on manual', r.status === 200 && r.data.mailAutomatic === false,
+      `${r.status} ${r.text.slice(0, 160)}`);
+
+    const sentCount = async (template) => (await sentFor(manualEmail)).filter((e) => e.template === template).length;
+    const heldCount = async (template) => (await heldFor(manualEmail)).filter((e) => e.template === template).length;
+
+    /* The things the client caused, or that are about their money or their way
+       into the account, still go. Holding one of these behind an admin's day
+       off is how somebody cannot sign in on a Sunday. */
+    for (const essential of ['payment_received', 'login_code', 'ticket_status', 'domain_expiring']) {
+      await mailer.sendMail({
+        to: manualEmail, subject: `Essential ${essential}`, text: 'x', html: '<p>x</p>',
+        template: essential, queue: false,
+      });
+      check(`${essential} still sends itself`, (await sentCount(essential)) === 1,
+        JSON.stringify((await logFor(manualEmail)).filter((e) => e.template === essential).map((e) => e.status)));
+    }
+
+    /* The things we decided to send wait. */
+    for (const chosen of ['progress_digest', 'update_seo_ranking', 'service_seo_live']) {
+      await mailer.sendMail({
+        to: manualEmail, subject: `Chosen ${chosen}`, text: 'x', html: '<p>x</p>',
+        template: chosen, queue: false,
+      });
+      check(`${chosen} waits`, (await heldCount(chosen)) === 1 && (await sentCount(chosen)) === 0,
+        JSON.stringify((await logFor(manualEmail)).filter((e) => e.template === chosen).map((e) => e.status)));
+    }
+
+    check('and the hold says it is the mode, not a mistake',
+      /set to manual/i.test((await heldFor(manualEmail))[0]?.error || ''),
+      (await heldFor(manualEmail))[0]?.error);
+
+    /* An admin pressing something is exactly what manual mode is waiting for. */
+    await mailer.sendMail({
+      to: manualEmail, subject: 'By hand', text: 'x', html: '<p>x</p>',
+      template: 'progress_digest', queue: false, byHand: true,
+    });
+    check('but an admin can send it by hand', (await sentCount('progress_digest')) === 1,
+      String(await sentCount('progress_digest')));
+
+    /* A message switched off stays off: the checkbox has to mean what it says
+       whichever mode the client is in. */
+    await admin.req('PUT', `/api/users/${manualId}/mail`, { optOuts: ['payment_received'] });
+    await mailer.sendMail({
+      to: manualEmail, subject: 'Opted out', text: 'x', html: '<p>x</p>',
+      template: 'payment_received', queue: false,
+    });
+    check('an opted-out message is held even though it is essential',
+      (await sentCount('payment_received')) === 1, String(await sentCount('payment_received')));
+
+    /* Switching back restores ordinary behaviour. */
+    await admin.req('PUT', `/api/users/${manualId}/mail`, { mailAutomatic: true, optOuts: [] });
+    await mailer.sendMail({
+      to: manualEmail, subject: 'Back to normal', text: 'x', html: '<p>x</p>',
+      template: 'update_seo_ranking', queue: false,
+    });
+    check('turning automatic back on sends on its own again',
+      (await sentCount('update_seo_ranking')) === 1, String(await sentCount('update_seo_ranking')));
+
+    r = await admin.req('PUT', `/api/users/${manualId}/mail`, { mailAutomatic: 'sometimes' });
+    check('the mode only takes a boolean', r.status === 400, `${r.status}`);
+
+    /* A client who predates the column keeps sending, like the switch above. */
+    const legacy2 = await db.insert('users', {
+      name: 'Legacy Two', email: 'legacy.two@example.com', role: 'client', password: 'x',
+    });
+    check('an older account reads as automatic',
+      clientMail.isAutomatic(await db.find('users', legacy2.id)) === true);
+
+    /* The classification itself, so renaming a group breaks loudly here rather
+       than quietly changing who gets what. */
+    check('money is essential', clientMail.isEssential('payment_failed'));
+    check('access is essential', clientMail.isEssential('password_reset'));
+    check('a reply to their own ticket is essential', clientMail.isEssential('ticket_comment'));
+    check('a domain about to expire is essential', clientMail.isEssential('domain_expiring'));
+    check('a monthly update is not', !clientMail.isEssential('update_ads_performance'));
+    check('nor is a launch announcement', !clientMail.isEssential('service_seo_live'));
+    check('an unknown template is not essential, which is the safe direction',
+      !clientMail.isEssential('not_a_real_template'));
+
+    r = await admin.req('GET', `/api/users/${manualId}/mail`);
+    check('the screen is told which messages ignore the mode',
+      r.data.groups.some((g) => g.templates.some((x) => x.key === 'payment_received' && x.essential === true))
+      && r.data.groups.some((g) => g.templates.some((x) => x.key === 'progress_digest' && x.essential === false)),
+      `${r.status}`);
+  }
+
+  // ---------------------------------------------------------------------
+  section('Shipping this to a live workspace sends nobody anything');
+
+  /* The question this answers is the one asked before the deploy: does merely
+     releasing this code write to a single existing client? Every row below is
+     shaped the way a production row is the moment the migration has run --
+     the new columns exist and are NULL, because `ALTER TABLE ADD COLUMN` adds
+     them empty. Nothing may go out until somebody presses something. */
+  {
+    const livingEmail = 'already.live@example.com';
+    const living = await db.insert('users', {
+      name: 'Already Live', email: livingEmail, role: 'client', password: 'x',
+    });
+
+    const row = await db.find('users', living.id);
+    check('the new columns are empty on an existing account',
+      row.mailAutomatic == null && row.launchEmailSentAt == null,
+      JSON.stringify({ mailAutomatic: row.mailAutomatic, launchEmailSentAt: row.launchEmailSentAt }));
+    check('which still reads as being emailed, exactly as before',
+      clientMail.isMailEnabled(row) === true && clientMail.isAutomatic(row) === true);
+
+    const before = (await logFor(livingEmail)).length;
+
+    /* Everything the deployment itself runs: the boot path, and every sweep a
+       cron would reach on the first morning after. */
+    await seedAgain();
+    await require('../utils/roles').ensureSuperAdmin();
+    await require('../utils/outbox').runSweep();
+    await require('../utils/domainWatch').runSweep();
+    await require('../utils/serviceDigest').runSweep();
+    await require('../utils/subscriptions').sendRenewalReminders();
+
+    check('booting and sweeping writes nothing to them',
+      (await logFor(livingEmail)).length === before,
+      `${(await logFor(livingEmail)).length} vs ${before}`);
+
+    /* The announcement in particular. It is the one message that can reach a
+       client who has agreed to nothing, so it is the one worth naming. */
+    const anyAnnouncement = (await db.all('email_log'))
+      .filter((e) => e.template === 'dashboard_launch');
+    check('and no announcement was sent to anybody at all',
+      anyAnnouncement.every((e) => ['told.client@example.com'].some((x) => String(e.toEmails).includes(x))),
+      JSON.stringify(anyAnnouncement.map((e) => e.toEmails)));
+
+    check('nobody is stamped as having been announced to by the deploy',
+      !(await db.find('users', living.id)).launchEmailSentAt);
+
+    /* And the only thing that does send it is the button. */
+    r = await admin.req('POST', `/api/users/${living.id}/announce`);
+    check('pressing it is what sends it', r.status === 200, `${r.status} ${r.text.slice(0, 160)}`);
+    check('and only then does anything reach them',
+      (await logFor(livingEmail)).length === before + 1,
+      `${(await logFor(livingEmail)).length} vs ${before}`);
+  }
 
   // ---------------------------------------------------------------------
   section('Only an admin, and only for a client');

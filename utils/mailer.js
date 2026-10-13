@@ -596,11 +596,11 @@ async function updateLog(id, patch) {
  * second number to say *why* nothing was sent, which is a different answer
  * from "that address was not valid".
  */
-async function screenRecipients({ to, subject, html, template, entity, entityId, logId = null }) {
+async function screenRecipients({ to, subject, html, template, entity, entityId, logId = null, byHand = false }) {
   const gate = require('./clientMail');
   let screened;
   try {
-    screened = await gate.screen({ to, template });
+    screened = await gate.screen({ to, template, byHand });
   } catch (err) {
     // Failing open is the same behaviour as this gate not existing. Every
     // email in the app stopping because one query timed out would be worse.
@@ -718,7 +718,7 @@ const SENDERS = { smtp2go: sendViaSmtp2go, smtp: sendViaSmtp, webhook: sendViaWe
  * `permanent` on a failed result is what utils/outbox.js reads to decide
  * whether retrying this in a minute could possibly help.
  */
-async function sendNow({ to, subject, text, html, template, entity, entityId, logId = null }) {
+async function sendNow({ to, subject, text, html, template, entity, entityId, logId = null, byHand = false }) {
   // Cleaned first: screening is a database lookup per address, and an address
   // that is not an address -- or the same one twice -- should cost neither a
   // lookup nor a second row in the log.
@@ -728,7 +728,7 @@ async function sendNow({ to, subject, text, html, template, entity, entityId, lo
   // Both the inline path and the queue sweep land here, so a client muted
   // between a message being queued and the sweep reaching it is still caught.
   const screened = await screenRecipients({
-    to: addressed, subject, html, template, entity, entityId, logId,
+    to: addressed, subject, html, template, entity, entityId, logId, byHand,
   });
   const requested = screened.allowed;
   if (requested.length === 0) {
@@ -830,7 +830,14 @@ async function sendNow({ to, subject, text, html, template, entity, entityId, lo
  *
  * `template`, `entity`, and `entityId` are metadata for the Mail page only.
  */
-async function sendMail({ to, subject, text, html, template, entity, entityId, queue = true, dedupeKey = null }) {
+/**
+ * `byHand` says a person pressed something to start this send, and it is the
+ * only thing that lets a message reach a client who is not being emailed yet.
+ * It is useless on its own: utils/clientMail.js also requires the template to
+ * be one of the handful an admin is allowed to send that way. Never set it
+ * from a sweep, a webhook or a hook -- those are not a person.
+ */
+async function sendMail({ to, subject, text, html, template, entity, entityId, queue = true, dedupeKey = null, byHand = false }) {
   let inline = queue === false || NEVER_QUEUED.has(template);
 
   // NEVER_QUEUED is a list somebody has to remember to add to, and the cost of
@@ -850,7 +857,7 @@ async function sendMail({ to, subject, text, html, template, entity, entityId, q
 
   // The inline path screens inside sendNow, which is the same check; doing it
   // here as well would write the hold down twice.
-  if (inline) return sendNow({ to, subject, text, html, template, entity, entityId });
+  if (inline) return sendNow({ to, subject, text, html, template, entity, entityId, byHand });
 
   const addressed = cleanRecipients(to);
   if (addressed.length === 0) return { ok: false, skipped: 'no valid recipients' };
@@ -858,7 +865,7 @@ async function sendMail({ to, subject, text, html, template, entity, entityId, q
   // Screened before the queue rather than after it, so a message for a muted
   // client is never a row waiting to be swept -- it is logged as held once,
   // now, where an admin can see it.
-  const screened = await screenRecipients({ to: addressed, subject, html, template, entity, entityId });
+  const screened = await screenRecipients({ to: addressed, subject, html, template, entity, entityId, byHand });
   const requested = screened.allowed;
   if (requested.length === 0) {
     return { ok: false, skipped: screened.held.length > 0 ? HELD_SKIP : 'no valid recipients' };
@@ -876,7 +883,10 @@ async function sendMail({ to, subject, text, html, template, entity, entityId, q
 
     const row = await require('./outbox').enqueue({
       channel: 'email',
-      payload: { to: requested, subject, text, html, template, entity, entityId, logId },
+      // `byHand` travels with the queued message. Without it the sweep would
+      // screen the same send again a minute later with no knowledge that a
+      // person started it, and hold the one message that was allowed through.
+      payload: { to: requested, subject, text, html, template, entity, entityId, logId, byHand },
       dedupeKey,
       entity,
       entityId,
@@ -897,7 +907,7 @@ async function sendMail({ to, subject, text, html, template, entity, entityId, q
  * `message` is the `{ subject, html, text }` a template returned, so the call
  * site reads as "render this, send it to these people".
  */
-async function sendTemplate({ to, message, template, entity, entityId, queue = true, dedupeKey = null }) {
+async function sendTemplate({ to, message, template, entity, entityId, queue = true, dedupeKey = null, byHand = false }) {
   if (!message || !message.subject) return { ok: false, skipped: 'no message' };
   return sendMail({
     to,
@@ -909,6 +919,7 @@ async function sendTemplate({ to, message, template, entity, entityId, queue = t
     entityId,
     queue,
     dedupeKey,
+    byHand,
   });
 }
 

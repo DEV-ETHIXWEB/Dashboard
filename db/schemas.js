@@ -30,6 +30,15 @@ const SCHEMAS = {
     // NULL means "yes" -- every account that predates this field, which must
     // keep receiving exactly what it receives today. See utils/clientMail.js.
     'mail_enabled',
+    // Whether their non-essential mail sends itself, or waits for an admin.
+    // NULL means yes, like the switch above. Receipts, sign-in codes, ticket
+    // replies and the like ignore this -- see ESSENTIAL_GROUPS.
+    'mail_automatic',
+    // When an admin sent the dashboard announcement by hand. Its own stamp
+    // rather than reusing the welcome's: they are different messages sent at
+    // different moments to people in different situations, and one timestamp
+    // answering both questions would make neither answerable.
+    'launch_email_sent_at',
     // JSON array of email template keys (see utils/emailMessages.js).
     'mail_opt_outs',
     // JSON array of client page keys (see utils/clientPages.js). NULL = no restriction.

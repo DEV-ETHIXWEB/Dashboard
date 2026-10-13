@@ -26,6 +26,8 @@ export interface UserRecord {
   mailEnabled?: boolean;
   /** Email template keys this client is switched off, while email is on. */
   mailOptOuts?: string[];
+  /** Whether their non-essential mail sends itself, or waits for an admin. */
+  mailAutomatic?: boolean;
 }
 
 export interface Project {

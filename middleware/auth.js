@@ -135,6 +135,7 @@ function safeUser(user) {
   // know that a null column means yes. See utils/clientMail.js.
   const clientMail = require('../utils/clientMail');
   rest.mailEnabled = clientMail.isMailEnabled(user);
+  rest.mailAutomatic = clientMail.isAutomatic(user);
   rest.mailOptOuts = clientMail.parseOptOuts(rest.mailOptOuts);
   return rest;
 }

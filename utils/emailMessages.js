@@ -860,6 +860,236 @@ function perkGrid(perks, { columns: cols = 2 } = {}) {
     + `style="margin:0 0 18px;">${rows.join('')}</table>`;
 }
 
+/* ---- the dashboard announcement ----------------------------------------
+ *
+ * The one message a client may be sent before they have agreed to anything,
+ * and the only one an admin sends by pressing a button rather than by
+ * something happening. Everything about it follows from that.
+ *
+ * No footer: its links are an unsubscribe row and a set of account pages, and
+ * neither means anything to somebody who has no account yet.
+ *
+ * No login link either. They cannot sign in -- the sign-in code is an email,
+ * and their email is switched off -- so a button offering a dashboard they
+ * cannot open would be the first thing we ever told them, and it would not be
+ * true. The call to action is a reply, which is also the signal an admin waits
+ * for before turning their email on.
+ *
+ * Type is larger and darker than the rest of these templates, 17px near-black
+ * rather than 15px grey. This goes to somebody who did not ask to hear from
+ * us, and it has to be effortless to read on a phone.
+ */
+
+/** One icon per tier, so the three read as a ladder rather than three logos. */
+const PLAN_BADGE = { basic: 'badge-website', managed: 'badge-shield', unlimited: 'badge-people' };
+
+/**
+ * What each tier is for, in four words.
+ *
+ * This sits where a price would. The announcement deliberately quotes no
+ * figures -- the conversation about money happens on the reply, not in a
+ * message to somebody who never asked to hear from us -- and a card needs one
+ * thing the eye lands on after the icon, or three bullet lists blur into one.
+ */
+const PLAN_PROMISE = {
+  unlimited: 'We handle everything',
+  managed: 'We keep it healthy',
+  basic: 'We keep it online',
+};
+
+/** What changes for the reader, rather than what we happened to build. */
+const LAUNCH_FEATURES = [
+  ['See the work, not just the invoice', 'Every job we have on for you, and exactly how far along it is.'],
+  ['Watch it happen live', 'The real task board. What we are doing today, not a summary next month.'],
+  ['Ask for a change in ten seconds', 'Raise it, we get it instantly, and you follow it through to done.'],
+  ['Talk to the people doing the work', 'A direct line to your team. No ticket queue, no switchboard.'],
+  ['Never miss a renewal again', 'Domain, hosting and SSL dates in front of you before they expire.'],
+  ['Every report in one place', 'All the documents we produce for you, kept where you can find them.'],
+  ['Know where the money went', 'Your ad and project spend, broken down month by month.'],
+  ['No surprises on the bill', 'Your plan, your invoices and every payment, straight from Stripe.'],
+];
+
+function launchLead(text) {
+  return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+    + `<tr><td align="left" style="font-family:${t.TOKENS.font};font-size:19px;line-height:1.55;`
+    + `font-weight:500;color:${t.TOKENS.text};padding:0 0 16px;">${t.escapeHtml(text)}</td></tr></table>`;
+}
+
+function launchBody(text, { muted = false } = {}) {
+  return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+    + `<tr><td align="left" style="font-family:${t.TOKENS.font};font-size:17px;line-height:1.62;`
+    + `color:${muted ? t.TOKENS.soft : t.TOKENS.text};padding:0 0 14px;">${t.escapeHtml(text)}</td></tr></table>`;
+}
+
+function launchLabel(text) {
+  return `<div style="font-family:${t.TOKENS.font};font-size:12px;font-weight:700;letter-spacing:.11em;`
+    + `text-transform:uppercase;color:${t.TOKENS.brand};margin:8px 0 18px;">${t.escapeHtml(text)}</div>`;
+}
+
+function launchFeatureGrid() {
+  const cell = ([title, text]) => [
+    `<div style="margin:0 0 20px;font-family:${t.TOKENS.font};">`,
+    `<div style="font-size:16px;font-weight:600;line-height:1.4;color:${t.TOKENS.text};padding-bottom:5px;">${t.escapeHtml(title)}</div>`,
+    `<div style="font-size:15px;line-height:1.55;color:${t.TOKENS.soft};">${t.escapeHtml(text)}</div>`,
+    '</div>',
+  ].join('');
+
+  const rows = [];
+  for (let i = 0; i < LAUNCH_FEATURES.length; i += 2) {
+    rows.push(t.columns([cell(LAUNCH_FEATURES[i]), LAUNCH_FEATURES[i + 1] && cell(LAUNCH_FEATURES[i + 1])].filter(Boolean)));
+  }
+  return rows.join('');
+}
+
+/**
+ * A tier card with no price on it.
+ *
+ * Separate from `planCard` above, which is price-led and belongs to the
+ * welcome email. Merging the two behind a flag would leave one function
+ * answering to two different briefs.
+ */
+function promiseCard(plan, mostHighlights, { featured = false } = {}) {
+  const tint = featured ? t.TOKENS.brandSoft : t.TOKENS.panel;
+  const edge = featured ? t.TOKENS.brand : t.TOKENS.border;
+
+  // The badge and the blank that stands in for it declare the same
+  // line-height on purpose. Left to its default the badge drew about 12px and
+  // the spacer 18px, so the one card without a badge started six pixels higher
+  // than the others and the row read as misaligned rather than as designed.
+  const badge = plan.badge
+    ? `<div style="font-family:${t.TOKENS.font};font-size:10px;line-height:18px;font-weight:700;letter-spacing:.09em;`
+      + `text-transform:uppercase;color:${featured ? t.TOKENS.brand : t.TOKENS.muted};padding:0 0 10px;">`
+      + `${t.escapeHtml(plan.badge)}</div>`
+    : '<div style="font-size:10px;line-height:18px;padding:0 0 10px;">&nbsp;</div>';
+
+  const bullet = (label) => [
+    '<tr>',
+    `<td valign="top" width="10" style="width:10px;padding:0 7px 7px 0;font-family:${t.TOKENS.font};`
+      + `font-size:14px;line-height:1.5;color:${label ? t.TOKENS.brand : 'transparent'};">&bull;</td>`,
+    `<td valign="top" style="padding:0 0 7px;font-family:${t.TOKENS.font};font-size:14px;`
+      + `line-height:1.5;color:${t.TOKENS.text};">${label ? t.escapeHtml(label) : '&nbsp;'}</td>`,
+    '</tr>',
+  ].join('');
+
+  // Padded to the longest list so the bullets sit on the same baselines in all
+  // three cards; the blanks are invisible rather than absent.
+  const labels = plan.highlights.map((h) => h.label);
+  while (labels.length < mostHighlights) labels.push(null);
+
+  return [
+    // `height:100%` rather than a pixel figure. The three cards sit in one
+    // table row, so the row is already as tall as the tallest of them and they
+    // only needed to fill it. A fixed height is *added* to the content in a
+    // table rather than acting as a floor, which left dead space under every
+    // card and would have had to be re-measured every time the copy changed.
+    `<table role="presentation" width="100%" height="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${tint}" `
+      + `style="background:${tint};border:1px solid ${edge};border-radius:14px;height:100%;">`,
+    '<tr><td align="center" valign="top" style="padding:26px 16px 24px;">',
+    `<div style="padding:0 0 14px;">${t.iconTile({ size: 58, icon: PLAN_BADGE[plan.key] || 'badge-website' })}</div>`,
+    badge,
+    `<div style="font-family:${t.TOKENS.font};font-size:20px;font-weight:700;letter-spacing:-.01em;`
+      + `color:${t.TOKENS.text};">${t.escapeHtml(plan.name)}</div>`,
+    `<div style="font-family:${t.TOKENS.font};font-size:14px;line-height:1.5;color:${t.TOKENS.soft};`
+      + `padding:7px 0 16px;">${t.escapeHtml(PLAN_PROMISE[plan.key] || '')}</div>`,
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto;text-align:left;">'
+      + `${labels.map(bullet).join('')}</table>`,
+    '</td></tr></table>',
+  ].join('');
+}
+
+function promiseCards(catalogue) {
+  const most = Math.max(...catalogue.plans.map((p) => p.highlights.length));
+  const cells = [];
+  catalogue.plans.forEach((plan, i) => {
+    if (i > 0) cells.push('<td class="ew-col" width="2%" style="width:2%;font-size:0;line-height:0;">&nbsp;</td>');
+    cells.push('<td class="ew-col" width="32%" valign="top" style="width:32%;height:100%;">'
+      + `${promiseCard(plan, most, { featured: plan.key === 'unlimited' })}</td>`);
+  });
+  return [
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+      + 'style="table-layout:fixed;width:100%;margin:0 0 20px;">',
+    `<tr>${cells.join('')}</tr>`,
+    '</table>',
+  ].join('');
+}
+
+/**
+ * Tell a client the dashboard exists, and what we could do for them.
+ *
+ * `replyTo` is where the call to action points. It falls back to the support
+ * address, because a reply button with no address behind it is worse than no
+ * button at all -- without one, the button is simply not drawn.
+ */
+function dashboardLaunch({ firstName = null, replyTo = null } = {}) {
+  const address = replyTo || process.env.MAIL_REPLY_TO || process.env.MAIL_SUPPORT_EMAIL || null;
+
+  const greeting = firstName
+    ? `Hi ${firstName}. We look after your website.`
+    : 'We look after your website.';
+
+  return {
+    subject: 'Your website, finally all in one place',
+    html: t.renderEmail({
+      preheader: 'See the work, ask for changes, and know what you are paying. All in one screen.',
+      eyebrow: 'Something we built for you',
+      // A gauge, not the generic tick: this is a dashboard, and `badge-welcome`
+      // is the same tick thirty other messages already open with.
+      hero: 'badge-gauge',
+      title: 'Your website, finally all in one place',
+      showFooter: false,
+      blocks: [
+        launchLead(`${greeting} Until today, finding out what that actually meant involved `
+          + 'emailing us and waiting for someone to get back to you.'),
+        launchBody('So we built you a dashboard. It answers every one of those questions on one '
+          + 'screen, the moment you log in.'),
+        t.divider(),
+        launchLabel('What changes for you'),
+        launchFeatureGrid(),
+        t.divider(),
+        launchLabel('Choose how much we take on'),
+        launchBody('Your site is already on our servers. A membership is what keeps it updated, '
+          + 'backed up and watched over, and it is what opens the dashboard for you.'),
+        promiseCards(plansConfig.describeAll()),
+        launchBody('Not sure which one fits? Reply and we will tell you honestly, including if '
+          + 'the smallest one is all you need. Change or stop whenever you like.', { muted: true }),
+        t.callout({
+          tone: 'info',
+          title: 'This is the only email we will send you',
+          body: 'Nothing else goes out until you tell us you want an account. No updates, no '
+            + 'reminders, no newsletters. You will not hear from us again unless you ask.',
+        }),
+        launchBody('Just hit reply and tell us which plan suits. We will have you set up the '
+          + 'same day.'),
+        launchBody('- The Ethixweb team', { muted: true }),
+      ],
+      cta: address ? { label: 'Reply and get set up', url: `mailto:${address}` } : null,
+    }),
+    text: t.renderText([
+      `${greeting} Until today, finding out what that actually meant involved emailing us`,
+      'and waiting for someone to get back to you.',
+      '',
+      'So we built you a dashboard. It answers every one of those questions on one screen.',
+      '',
+      'WHAT CHANGES FOR YOU',
+      ...LAUNCH_FEATURES.map(([title, text]) => `- ${title}: ${text}`),
+      '',
+      'CHOOSE HOW MUCH WE TAKE ON',
+      'Your site is already on our servers. A membership is what keeps it updated, backed up',
+      'and watched over, and it is what opens the dashboard for you.',
+      ...plansConfig.describeAll().plans.map(
+        (p) => `- ${p.name}: ${PLAN_PROMISE[p.key]} (${p.highlights.map((h) => h.label).join(', ')})`,
+      ),
+      '',
+      'THIS IS THE ONLY EMAIL WE WILL SEND YOU. Nothing else goes out until you tell us you',
+      'want an account. You will not hear from us again unless you ask.',
+      '',
+      'Just hit reply and tell us which plan suits.',
+      '',
+      '- The Ethixweb team',
+    ]),
+  };
+}
+
 /**
  * The first thing a new client reads, and the one that asks them to pick.
  *
@@ -2534,6 +2764,15 @@ const TEMPLATES = {
   // means touching serviceEmails.js and nothing else.
   ...service.SERVICE_TEMPLATES,
 
+  dashboard_launch: {
+    audience: 'client',
+    group: 'Welcome & onboarding',
+    label: 'Dashboard announcement',
+    description: 'The one message a client is sent before they have agreed to anything. '
+      + 'Never automatic: an admin sends it by hand from the client\'s Emails screen.',
+    render: () => dashboardLaunch({ firstName: 'David' }),
+  },
+
   test: {
     audience: 'team',
     group: 'Diagnostics',
@@ -2669,6 +2908,7 @@ module.exports = {
   adminRosterChanged,
   progressDigest,
   welcomeWithPlans,
+  dashboardLaunch,
   confirmEmailChange,
   emailChangeRequested,
   emailChanged,
